@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.venv/
+.env
+
+# UV
+uv.lock
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Pyright
+pyrightconfig.json
+
+# Compiled editor assets (checked in for distribution)
+# packages/starlette-editor/starlette_editor/static/*.js
+# packages/starlette-editor/starlette_editor/static/*.css
+
+# Databases (examples only)
+*.db
