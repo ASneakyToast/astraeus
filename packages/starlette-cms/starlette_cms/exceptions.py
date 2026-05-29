@@ -8,3 +8,7 @@ class BlockNotFound(Exception):
 
 class BlockRegistrationError(Exception):
     """Raised when a block type name collision occurs during registration."""
+
+
+class DocumentNotFound(Exception):
+    """Raised when a document ID is not found in the database."""

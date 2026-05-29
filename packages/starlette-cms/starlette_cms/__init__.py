@@ -26,19 +26,19 @@ Quickstart::
 """
 
 from starlette_cms.app import CMS
-from starlette_cms.registry import block
-from starlette_cms.fields import (
-    TextField,
-    RichTextField,
-    ImageField,
-    ListField,
-    BlockField,
-)
 from starlette_cms.exceptions import (
-    CMSSchemaMismatch,
     BlockNotFound,
     BlockRegistrationError,
+    CMSSchemaMismatch,
 )
+from starlette_cms.fields import (
+    BlockField,
+    ImageField,
+    ListField,
+    RichTextField,
+    TextField,
+)
+from starlette_cms.registry import block
 
 __version__ = "0.4.0"
 

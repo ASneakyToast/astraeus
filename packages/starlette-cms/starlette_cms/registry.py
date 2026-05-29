@@ -8,9 +8,10 @@ Supports two registration patterns:
 
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from starlette_cms.exceptions import BlockNotFound, BlockRegistrationError
+from starlette_cms.model_builder import build_block_model
 
 T = TypeVar("T")
 
@@ -27,9 +28,11 @@ def block(name: str):
         # Later, in application code:
         cms.register_block(GalleryBlock)
     """
+
     def decorator(cls: type[T]) -> type[T]:
         cls.__block_type__ = name  # type: ignore[attr-defined]
         return cls
+
     return decorator
 
 
@@ -44,7 +47,7 @@ class BlockRegistry:
         self._blocks: dict[str, type] = {}
 
     def register_block(self, block_cls: type, *, override: bool = False) -> None:
-        """Register a single block class."""
+        """Register a single block class, converting it to a Pydantic model if needed."""
         name = getattr(block_cls, "__block_type__", None)
         if name is None:
             raise BlockRegistrationError(
@@ -55,6 +58,11 @@ class BlockRegistry:
                 f'Block type "{name}" is already registered. '
                 f"Use override=True to replace it explicitly."
             )
+        # Convert to Pydantic model if not already one
+        import pydantic
+
+        if not (isinstance(block_cls, type) and issubclass(block_cls, pydantic.BaseModel)):
+            block_cls = build_block_model(name, block_cls)
         self._blocks[name] = block_cls
 
     def register_blocks(self, block_classes: list[type], *, override: bool = False) -> None:

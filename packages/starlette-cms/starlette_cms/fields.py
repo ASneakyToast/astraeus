@@ -21,13 +21,17 @@ class _BaseField:
     group: str | None = None
 
     def field_meta(self) -> dict[str, Any]:
-        return {k: v for k, v in {
-            "label": self.label,
-            "placeholder": self.placeholder,
-            "help_text": self.help_text,
-            "display_order": self.display_order,
-            "group": self.group,
-        }.items() if v is not None}
+        return {
+            k: v
+            for k, v in {
+                "label": self.label,
+                "placeholder": self.placeholder,
+                "help_text": self.help_text,
+                "display_order": self.display_order,
+                "group": self.group,
+            }.items()
+            if v is not None
+        }
 
 
 @dataclass
@@ -39,12 +43,14 @@ class TextField(_BaseField):
 @dataclass
 class RichTextField(_BaseField):
     """Stores ProseMirror document JSON."""
+
     pass
 
 
 @dataclass
 class ImageField(_BaseField):
     """Stores a media reference — URL string or Mediakit asset key."""
+
     pass
 
 
@@ -59,6 +65,7 @@ class ListField(_BaseField):
         cards: list = ListField(CardBlock)
         body: list = ListField(blocks=[HeroBlock, CardSectionBlock])
     """
+
     item_type: Any = None
     blocks: list[Any] = field(default_factory=list)
 
@@ -75,4 +82,5 @@ class ListField(_BaseField):
 @dataclass
 class BlockField(_BaseField):
     """A single nested block."""
+
     block_type: Any = None

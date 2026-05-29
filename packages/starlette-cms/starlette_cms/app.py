@@ -20,7 +20,8 @@ from typing import Any
 from starlette.applications import Starlette
 from starlette.routing import Route
 
-from starlette_cms.registry import BlockRegistry, block
+from starlette_cms.model_builder import build_document_model
+from starlette_cms.registry import BlockRegistry
 
 
 class CMS:
@@ -56,6 +57,7 @@ class CMS:
         self._extension_routes: list[dict[str, Any]] = []
         self._migrations: list[dict[str, Any]] = []
         self._app: Starlette | None = None  # built lazily on first access
+        self._db: Any = None  # CMSDatabase instance, set in lifespan
 
         if discover_blocks:
             self._discover_blocks()
@@ -71,11 +73,18 @@ class CMS:
             @cms.block("hero")
             class HeroBlock:
                 title: str = TextField(required=True)
+
+        The class is converted to a Pydantic model before registration. The
+        *decorated name* is rebound to the generated model so later references
+        (e.g. inside ListField) pick up the Pydantic class.
         """
+
         def decorator(cls):
             cls.__block_type__ = name
             self.registry.register_block(cls)
-            return cls
+            # Return the Pydantic model so the decorated name is the model
+            return self.registry.get(name)
+
         return decorator
 
     def register_block(self, block_cls: type, *, override: bool = False) -> None:
@@ -96,11 +105,16 @@ class CMS:
                 title: str = TextField(required=True)
                 slug: str = TextField(required=True)
                 body: list = ListField(blocks=[HeroBlock])
+
+        The class is converted to a Pydantic model before storage.
         """
+
         def decorator(cls):
             cls.__document_type__ = name
-            self._document_types[name] = cls
-            return cls
+            model = build_document_model(name, cls)
+            self._document_types[name] = model
+            return model
+
         return decorator
 
     # ------------------------------------------------------------------
@@ -123,12 +137,14 @@ class CMS:
             raise RuntimeError(
                 "register_extension_route() must be called before cms.app is first accessed."
             )
-        self._extension_routes.append({
-            "path": path,
-            "endpoint": endpoint,
-            "methods": methods,
-            "name": name,
-        })
+        self._extension_routes.append(
+            {
+                "path": path,
+                "endpoint": endpoint,
+                "methods": methods,
+                "name": name,
+            }
+        )
 
     # ------------------------------------------------------------------
     # Migrations
@@ -136,13 +152,17 @@ class CMS:
 
     def migration(self, *, from_version: str, to_version: str):
         """Register an application migration function."""
+
         def decorator(fn):
-            self._migrations.append({
-                "from_version": from_version,
-                "to_version": to_version,
-                "fn": fn,
-            })
+            self._migrations.append(
+                {
+                    "from_version": from_version,
+                    "to_version": to_version,
+                    "fn": fn,
+                }
+            )
             return fn
+
         return decorator
 
     # ------------------------------------------------------------------
@@ -180,9 +200,20 @@ class CMS:
     @asynccontextmanager
     async def lifespan_context(self, app) -> AsyncGenerator[None, None]:
         """Composable lifespan context manager."""
-        # TODO: initialise database connection, run startup checks
-        yield
+        from starlette_cms import __version__
+        from starlette_cms.db import CMSDatabase
 
+        self._db = CMSDatabase(
+            database_url=self.database_url,
+            schema_version=__version__,
+        )
+        await self._db.init()
+        try:
+            yield
+        finally:
+            await self._db.close()
+
+    @asynccontextmanager
     async def lifespan(self, app) -> AsyncGenerator[None, None]:
         """Standalone lifespan — use when CMS is the only plugin."""
         async with self.lifespan_context(app):
@@ -195,6 +226,7 @@ class CMS:
     def _discover_blocks(self) -> None:
         """Auto-discover blocks via importlib entry points."""
         from importlib.metadata import entry_points
+
         eps = entry_points(group="starlette_cms.blocks")
         for ep in eps:
             cls = ep.load()

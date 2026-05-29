@@ -10,6 +10,6 @@ if TYPE_CHECKING:
     from starlette_cms.app import CMS
 
 
-def make_webhook_routes(cms: "CMS") -> list[Route]:
+def make_webhook_routes(cms: CMS) -> list[Route]:
     # TODO: implement webhook endpoints
     return []

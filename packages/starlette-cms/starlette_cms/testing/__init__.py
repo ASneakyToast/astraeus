@@ -6,6 +6,6 @@ Usage::
     from starlette_cms.testing import BlockTestCase, RegistryTestCase, validate_block
 """
 
-from starlette_cms.testing.helpers import validate_block, BlockTestCase, RegistryTestCase
+from starlette_cms.testing.helpers import BlockTestCase, RegistryTestCase, validate_block
 
 __all__ = ["validate_block", "BlockTestCase", "RegistryTestCase"]

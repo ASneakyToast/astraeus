@@ -17,7 +17,7 @@ class ProseMirrorBridge:
     Activated by starlette-editor at init time.
     """
 
-    def __init__(self, registry: "BlockRegistry") -> None:
+    def __init__(self, registry: BlockRegistry) -> None:
         self.registry = registry
 
     def generate_schema(self) -> dict:
