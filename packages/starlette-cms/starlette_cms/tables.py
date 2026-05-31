@@ -34,3 +34,13 @@ class CMSMeta(Table):
 
     key = Varchar(length=255, unique=True)
     value = Text()
+
+
+class CMSWebhook(Table):
+    """Registered webhook endpoint."""
+
+    id = Varchar(length=36, primary_key=True)
+    url = Text()
+    events = JSON()  # ["document.published", ...]
+    created_at = Timestamptz()
+    active = Boolean(default=True)

@@ -26,7 +26,7 @@ import warnings
 from urllib.parse import urlparse
 
 from starlette_cms.exceptions import CMSSchemaMismatch
-from starlette_cms.tables import CMSDocument, CMSMeta
+from starlette_cms.tables import CMSDocument, CMSMeta, CMSWebhook
 
 
 class CMSDatabase:
@@ -51,9 +51,10 @@ class CMSDatabase:
         engine = self._build_engine(self.database_url)
         self._engine = engine
 
-        # Assign to both table classes
+        # Assign to all table classes
         CMSDocument._meta.db = engine
         CMSMeta._meta.db = engine
+        CMSWebhook._meta.db = engine
 
         # SQLite: start connection pool (no-op for SQLite — piccolo emits a
         # warning which we suppress; the call is safe to make)
@@ -67,6 +68,7 @@ class CMSDatabase:
         # Create tables
         await CMSDocument.create_table(if_not_exists=True)
         await CMSMeta.create_table(if_not_exists=True)
+        await CMSWebhook.create_table(if_not_exists=True)
 
         # Enable WAL mode for SQLite (improves concurrent read performance)
         if engine.engine_type == "sqlite":

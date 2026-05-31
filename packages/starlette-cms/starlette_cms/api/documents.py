@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -12,6 +13,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from starlette_cms.api.webhooks import fire_event
 from starlette_cms.auth import require_auth
 from starlette_cms.tables import CMSDocument
 
@@ -136,6 +138,18 @@ def make_document_routes(cms: CMS) -> list[Route]:
                 status_code=422,
             )
 
+        # Validate ImageField values against the configured media backend
+        if cms.media_backend is not None:
+            image_fields = getattr(doc_model, "__image_fields__", [])
+            validated_dump = validated.model_dump()
+            for fname in image_fields:
+                val = validated_dump.get(fname)
+                if val and not await cms.media_backend.confirm_exists(val):
+                    return JSONResponse(
+                        {"error": "Image key not found", "field": fname},
+                        status_code=422,
+                    )
+
         from nanoid import generate
 
         doc_id = generate(size=21)
@@ -157,6 +171,10 @@ def make_document_routes(cms: CMS) -> list[Route]:
         ).run()
 
         rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
+
+        loop = asyncio.get_running_loop()
+        loop.create_task(fire_event(cms, "document.created", doc_id, doc_type, slug))
+
         return JSONResponse(_row_to_dict(rows[0]), status_code=201)
 
     async def get_document(request: Request) -> JSONResponse:
@@ -210,6 +228,17 @@ def make_document_routes(cms: CMS) -> list[Route]:
                     status_code=422,
                 )
 
+            # Validate ImageField values against the configured media backend
+            if cms.media_backend is not None:
+                image_fields = getattr(doc_model, "__image_fields__", [])
+                for fname in image_fields:
+                    val = merged_body.get(fname)
+                    if val and not await cms.media_backend.confirm_exists(val):
+                        return JSONResponse(
+                            {"error": "Image key not found", "field": fname},
+                            status_code=422,
+                        )
+
         update_kwargs: dict[Column | str, Any] = {
             CMSDocument.body: json.dumps(merged_body),
             CMSDocument.updated_at: datetime.now(UTC),
@@ -231,7 +260,14 @@ def make_document_routes(cms: CMS) -> list[Route]:
         await CMSDocument.update(update_kwargs).where(CMSDocument.id == doc_id).run()
 
         updated_rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
-        return JSONResponse(_row_to_dict(updated_rows[0]))
+        updated_row = updated_rows[0]
+
+        loop = asyncio.get_running_loop()
+        loop.create_task(
+            fire_event(cms, "document.updated", doc_id, doc_type, updated_row.get("slug", ""))
+        )
+
+        return JSONResponse(_row_to_dict(updated_row))
 
     async def delete_document(request: Request) -> Response:
         if (err := await require_auth(request, cms)) is not None:
@@ -242,7 +278,15 @@ def make_document_routes(cms: CMS) -> list[Route]:
         if not rows:
             return JSONResponse({"error": "Document not found"}, status_code=404)
 
+        row = rows[0]
+        doc_type = row["doc_type"]
+        slug = row.get("slug", "")
+
         await CMSDocument.delete().where(CMSDocument.id == doc_id).run()
+
+        loop = asyncio.get_running_loop()
+        loop.create_task(fire_event(cms, "document.deleted", doc_id, doc_type, slug))
+
         return Response(status_code=204)
 
     async def publish_document(request: Request) -> JSONResponse:
@@ -268,7 +312,20 @@ def make_document_routes(cms: CMS) -> list[Route]:
         )
 
         updated_rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
-        return JSONResponse(_row_to_dict(updated_rows[0]))
+        updated_row = updated_rows[0]
+
+        loop = asyncio.get_running_loop()
+        loop.create_task(
+            fire_event(
+                cms,
+                "document.published",
+                doc_id,
+                updated_row["doc_type"],
+                updated_row.get("slug", ""),
+            )
+        )
+
+        return JSONResponse(_row_to_dict(updated_row))
 
     async def unpublish_document(request: Request) -> JSONResponse:
         if (err := await require_auth(request, cms)) is not None:
@@ -292,7 +349,20 @@ def make_document_routes(cms: CMS) -> list[Route]:
         )
 
         updated_rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
-        return JSONResponse(_row_to_dict(updated_rows[0]))
+        updated_row = updated_rows[0]
+
+        loop = asyncio.get_running_loop()
+        loop.create_task(
+            fire_event(
+                cms,
+                "document.unpublished",
+                doc_id,
+                updated_row["doc_type"],
+                updated_row.get("slug", ""),
+            )
+        )
+
+        return JSONResponse(_row_to_dict(updated_row))
 
     return [
         Route("/api/documents", endpoint=list_documents, methods=["GET"]),

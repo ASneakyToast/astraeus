@@ -20,6 +20,7 @@ from typing import Any
 from starlette.applications import Starlette
 from starlette.routing import Route
 
+from starlette_cms.media import MediaBackend
 from starlette_cms.model_builder import build_document_model
 from starlette_cms.registry import BlockRegistry
 
@@ -34,6 +35,9 @@ class CMS:
     :param read_auth: If True, protect GET endpoints with auth too.
     :param mount_path: The path this CMS is mounted at (used for self-links).
     :param discover_blocks: If True, auto-discover blocks via entry points.
+    :param media_backend: Optional :class:`~starlette_cms.media.MediaBackend`
+        implementation.  When set, ``ImageField`` values are validated against
+        the backend on document create/patch.
     """
 
     def __init__(
@@ -45,12 +49,14 @@ class CMS:
         read_auth: bool = False,
         mount_path: str = "/cms",
         discover_blocks: bool = False,
+        media_backend: MediaBackend | None = None,
     ) -> None:
         self.database_url = database_url
         self.auth = auth
         self.api_key = api_key
         self.read_auth = read_auth
         self.mount_path = mount_path
+        self.media_backend = media_backend
 
         self.registry = BlockRegistry()
         self._document_types: dict[str, type] = {}

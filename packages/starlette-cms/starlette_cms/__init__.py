@@ -38,6 +38,7 @@ from starlette_cms.fields import (
     RichTextField,
     TextField,
 )
+from starlette_cms.media import MediaBackend
 from starlette_cms.registry import block
 
 __version__ = "0.4.0"
@@ -50,6 +51,7 @@ __all__ = [
     "ImageField",
     "ListField",
     "BlockField",
+    "MediaBackend",
     "CMSSchemaMismatch",
     "BlockNotFound",
     "BlockRegistrationError",

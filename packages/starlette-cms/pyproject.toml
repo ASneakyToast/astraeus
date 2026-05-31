@@ -21,12 +21,13 @@ dependencies = [
     "nanoid>=2.0",
     "anyio",
     "click>=8.0",
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.0"]
 postgres = ["asyncpg>=0.29"]
-dev = ["starlette-cms[mcp,postgres]", "uvicorn>=0.30", "httpx>=0.27"]
+dev = ["starlette-cms[mcp,postgres]", "uvicorn>=0.30"]
 
 [project.scripts]
 cms = "starlette_cms.cli:main"

@@ -198,5 +198,13 @@ def build_document_model(name: str, cls: type) -> type[pydantic.BaseModel]:
 
     model = create_model(cls.__name__, **field_defs)  # type: ignore[call-overload]
     model.__document_type__ = name  # type: ignore[attr-defined]
+
+    # Collect the names of all ImageField attributes so documents.py can
+    # validate image keys against an optional MediaBackend without re-inspecting
+    # the original class.
+    model.__image_fields__ = [  # type: ignore[attr-defined]
+        attr for attr, val in vars(cls).items() if isinstance(val, ImageField)
+    ]
+
     model.model_rebuild()
     return model
