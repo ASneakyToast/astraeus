@@ -25,6 +25,7 @@ from __future__ import annotations
 import warnings
 from urllib.parse import urlparse
 
+from starlette_cms.exceptions import CMSSchemaMismatch
 from starlette_cms.tables import CMSDocument, CMSMeta
 
 
@@ -74,11 +75,20 @@ class CMSDatabase:
             except Exception:
                 pass  # Ignore failures on read-only or in-memory databases
 
-        # Seed schema_version
+        # Schema version check
         if self.schema_version:
-            existing = await CMSMeta.select().where(CMSMeta.key == "schema_version").run()
-            if not existing:
+            rows = await CMSMeta.select().where(CMSMeta.key == "schema_version").run()
+            if not rows:
+                # Fresh database — seed the version and continue
                 await CMSMeta.insert(CMSMeta(key="schema_version", value=self.schema_version)).run()
+            else:
+                stored = rows[0]["value"]
+                if stored != self.schema_version:
+                    raise CMSSchemaMismatch(
+                        f"Database schema version {stored!r} does not match "
+                        f"package version {self.schema_version!r}. "
+                        f"Run `cms migrate` to apply pending migrations."
+                    )
 
     async def close(self) -> None:
         """Close the engine connection pool."""

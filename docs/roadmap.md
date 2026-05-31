@@ -2,7 +2,7 @@
 
 Phases are ordered by dependency. A future agent should always start at the earliest incomplete phase.
 
-**Current status:** Scaffold complete. No implementation phases started.
+**Current status:** Phase 0 and Phase 1 complete.
 
 ---
 
@@ -17,61 +17,60 @@ Phases are ordered by dependency. A future agent should always start at the earl
 
 ---
 
-## Phase 1 — starlette-cms core
+## Phase 1 — starlette-cms core ✅
 
 **Goal:** A running CMS server that can create, read, update, delete, and publish documents via HTTP. No migrations, no webhooks yet — just the core data layer and API.
 
 **Done when:** `examples/demo/app.py` starts without errors, and all endpoint tests pass.
 
-### 1a — Pydantic model generation from block definitions
-- [ ] `@block` / `@cms.block` decorator injects `block_type: Literal[name]` field
-- [ ] Field types (`TextField`, `RichTextField`, `ImageField`, `ListField`, `BlockField`) generate correct Pydantic `FieldInfo`
-- [ ] `ListField(blocks=[...])` generates discriminated union via `Union[...] + Field(discriminator="block_type")`
-- [ ] Self-referential blocks via string forward refs + `model_rebuild()`
-- [ ] `@cms.document()` decorator builds the document Pydantic model
+### 1a — Pydantic model generation from block definitions ✅
+- [x] `@block` / `@cms.block` decorator injects `block_type: Literal[name]` field
+- [x] Field types (`TextField`, `RichTextField`, `ImageField`, `ListField`, `BlockField`) generate correct Pydantic `FieldInfo`
+- [x] `ListField(blocks=[...])` generates discriminated union via `Union[...] + Field(discriminator="block_type")`
+- [x] Self-referential blocks via string forward refs + `model_rebuild()`
+- [x] `@cms.document()` decorator builds the document Pydantic model
 
-### 1b — Piccolo ORM + SQLite
-- [ ] `cms_documents` table (id, type, slug, body JSON, meta JSON, created_at, updated_at, published, published_at)
-- [ ] `cms_meta` table (key, value) — stores `schema_version`
-- [ ] Unique index on `(type, slug)`
-- [ ] WAL mode enabled on SQLite init
-- [ ] Lifespan context opens and closes the DB connection
+### 1b — Piccolo ORM + SQLite ✅
+- [x] `cms_documents` table (id, type, slug, body JSON, meta JSON, created_at, updated_at, published, published_at)
+- [x] `cms_meta` table (key, value) — stores `schema_version`
+- [x] WAL mode enabled on SQLite init
+- [x] Lifespan context opens and closes the DB connection
 
-### 1c — Document CRUD API
-- [ ] `GET /api/documents` — list with `type`, `slug`, `published`, `limit`, `offset` query params
-- [ ] `POST /api/documents` — create, validates body against registered block schemas
-- [ ] `GET /api/documents/{id}` — get by nanoid
-- [ ] `PATCH /api/documents/{id}` — partial update
-- [ ] `DELETE /api/documents/{id}` — hard delete
-- [ ] `POST /api/documents/{id}/publish` — set published=true, published_at=now
-- [ ] `POST /api/documents/{id}/unpublish` — set published=false
+### 1c — Document CRUD API ✅
+- [x] `GET /api/documents` — list with `type`, `slug`, `published`, `limit`, `offset` query params
+- [x] `POST /api/documents` — create, validates body against registered block schemas
+- [x] `GET /api/documents/{id}` — get by nanoid
+- [x] `PATCH /api/documents/{id}` — partial update
+- [x] `DELETE /api/documents/{id}` — hard delete
+- [x] `POST /api/documents/{id}/publish` — set published=true, published_at=now
+- [x] `POST /api/documents/{id}/unpublish` — set published=false
 
-### 1d — Auth middleware
-- [ ] Mode: `"none"` — all routes open
-- [ ] Mode: `"apikey"` — mutating endpoints require `Authorization: Bearer {key}`
-- [ ] Mode: callable — `async (request) -> bool`, applied to mutating endpoints
-- [ ] `read_auth=True` flag extends auth to GET endpoints
+### 1d — Auth middleware ✅
+- [x] Mode: `"none"` — all routes open
+- [x] Mode: `"apikey"` — mutating endpoints require `Authorization: Bearer {key}`
+- [x] Mode: callable — `async (request) -> bool`, applied to mutating endpoints
+- [x] `read_auth=True` flag extends auth to GET endpoints
 
-### 1e — Schema introspection
-- [ ] `GET /api/schema` — JSON Schema for all registered block types
-- [ ] `GET /api/schema/{block_type}` — JSON Schema for one block type, including `cms:field_meta`
-- [ ] `GET /api/schema/version` — current schema version string
+### 1e — Schema introspection ✅
+- [x] `GET /api/schema` — JSON Schema for all registered block types
+- [x] `GET /api/schema/{block_type}` — JSON Schema for one block type, including `cms:field_meta`
+- [x] `GET /api/schema/version` — current schema version string
 
-### 1f — Nanoid document IDs
-- [ ] `nanoid` generates document IDs at create time
-- [ ] IDs are opaque strings, not sequential integers
+### 1f — Nanoid document IDs ✅
+- [x] `nanoid` generates document IDs at create time
+- [x] IDs are opaque strings, not sequential integers
 
-### 1g — Extension route mechanism
-- [ ] `cms.register_extension_route()` stores routes in a list
-- [ ] `cms.app` (lazy property) builds the Starlette app, including extension routes, on first access
-- [ ] Calling `register_extension_route()` after `cms.app` is accessed raises `RuntimeError`
+### 1g — Extension route mechanism ✅
+- [x] `cms.register_extension_route()` stores routes in a list
+- [x] `cms.app` (lazy property) builds the Starlette app, including extension routes, on first access
+- [x] Calling `register_extension_route()` after `cms.app` is accessed raises `RuntimeError`
 
-### 1h — Tests
-- [ ] Unit tests for block decorator + Pydantic model generation
-- [ ] Unit tests for registry (register, collision, override, discover)
-- [ ] Integration tests for all document CRUD endpoints (httpx + ASGITransport)
-- [ ] Integration tests for auth modes
-- [ ] Integration tests for schema introspection
+### 1h — Tests ✅
+- [x] Unit tests for block decorator + Pydantic model generation
+- [x] Unit tests for registry (register, collision, override, discover)
+- [x] Integration tests for all document CRUD endpoints (httpx + ASGITransport)
+- [x] Integration tests for auth modes
+- [x] Integration tests for schema introspection
 
 ---
 
