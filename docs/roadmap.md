@@ -2,7 +2,7 @@
 
 Phases are ordered by dependency. A future agent should always start at the earliest incomplete phase.
 
-**Current status:** Phase 0 and Phase 1 complete.
+**Current status:** Phases 0–3 complete.
 
 ---
 
@@ -74,36 +74,36 @@ Phases are ordered by dependency. A future agent should always start at the earl
 
 ---
 
-## Phase 2 — starlette-cms schema versioning
+## Phase 2 — starlette-cms schema versioning ✅
 
 **Goal:** The CMS detects version mismatches on startup and refuses to run until migrations are applied.
 
 **Done when:** `cms migrate` CLI works end-to-end and the startup check correctly blocks on mismatch.
 
-- [ ] `cms_meta` stores `schema_version = "{package_version}"`
-- [ ] On startup: read `schema_version`, compare to package version, raise `CMSSchemaMismatch` on mismatch
-- [ ] `@cms.migration(from_version, to_version)` decorator registers migration functions
-- [ ] Migration chain runner — executes functions in order, updates `schema_version` after each
-- [ ] `cms migrate status` — shows pending migrations
-- [ ] `cms migrate --dry-run` — shows what would run
-- [ ] `cms migrate` — applies pending migrations
-- [ ] `cms validate` — checks all stored documents validate against current block schemas
+- [x] `cms_meta` stores `schema_version = "{package_version}"`
+- [x] On startup: read `schema_version`, compare to package version, raise `CMSSchemaMismatch` on mismatch
+- [x] `@cms.migration(from_version, to_version)` decorator registers migration functions
+- [x] Migration chain runner — executes functions in order, updates `schema_version` after each
+- [x] `cms migrate status` — shows pending migrations
+- [x] `cms migrate --dry-run` — shows what would run
+- [x] `cms migrate` — applies pending migrations
+- [x] `cms validate` — checks all stored documents validate against current block schemas
 
 ---
 
-## Phase 3 — starlette-cms webhooks + polish
+## Phase 3 — starlette-cms webhooks + polish ✅
 
 **Goal:** Publish events trigger registered webhook URLs. The core CMS is production-ready.
 
 **Done when:** Publishing a document fires registered webhooks, and `examples/demo` works end-to-end including Netlify rebuild trigger.
 
-- [ ] `GET /api/webhooks` — list registered webhooks
-- [ ] `POST /api/webhooks` — register a URL + event list
-- [ ] `DELETE /api/webhooks/{id}` — remove a webhook
-- [ ] Webhook delivery on: `document.created`, `document.updated`, `document.deleted`, `document.published`, `document.unpublished`
-- [ ] Webhook payload: `{ event, document_id, document_type, slug, timestamp }`
-- [ ] Fire-and-forget delivery (v1 — no retry queue)
-- [ ] `ImageField` + `MediaBackend` protocol — if configured, validate image keys on save
+- [x] `GET /api/webhooks` — list registered webhooks
+- [x] `POST /api/webhooks` — register a URL + event list
+- [x] `DELETE /api/webhooks/{id}` — remove a webhook
+- [x] Webhook delivery on: `document.created`, `document.updated`, `document.deleted`, `document.published`, `document.unpublished`
+- [x] Webhook payload: `{ event, document_id, document_type, slug, timestamp }`
+- [x] Fire-and-forget delivery (v1 — no retry queue)
+- [x] `ImageField` + `MediaBackend` protocol — if configured, validate image keys on save
 
 ---
 
