@@ -1,5 +1,13 @@
 # Astraeus — Architecture
 
+Astraeus is a governed data platform for Python/Starlette developers. It provides the
+primitives — blocks, documents, singletons, references, webhooks — that make any structured
+data artifact auditable, versioned, and agent-accessible.
+
+The canonical use case is editorial content (see `docs/use-cases/personal-site-joellithgow.md`),
+but the same stack works for intake forms, rule configuration, AI pipeline prompts, eval
+datasets, and curated test cases (see `docs/use-cases/`).
+
 ## The full stack
 
 ```
@@ -9,14 +17,14 @@
 │  app.mount("/cms",    app=cms.app)    ← starlette-cms               │
 │  app.mount("/editor", app=editor.app) ← starlette-editor            │
 │  app.mount("/media",  app=media)      ← mediakit                    │
-└───────────────────────────┬─────────────────────────────────────────┘
-                            │ webhooks on document.published
-                            ▼
-                  Netlify / Vercel build hook
-                            │
-                            ▼
-               Astro (or any static frontend)
-                  fetches from /cms/api at build time
+└──────────┬────────────────────────────────────────┬─────────────────┘
+           │ webhooks on document.published          │ MCP tools
+           ▼                                         ▼
+ Netlify / Vercel build hook              Claude Code / Claude Desktop
+           │                               (create, edit, publish docs
+           ▼                                via starlette-cms MCP)
+Astro (or any static frontend)
+  fetches from /cms/api at build time
 ```
 
 ---

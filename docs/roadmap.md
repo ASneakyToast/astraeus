@@ -4,6 +4,20 @@ Phases are ordered by dependency. A future agent should always start at the earl
 
 **Current status:** Phases 0–3 complete.
 
+**Use cases:** See `docs/use-cases/` for worked examples of Astraeus applied to real projects. These inform roadmap priorities and surface new primitives.
+
+**Primary (original design driver):**
+- [`personal-site-joellithgow.md`](use-cases/personal-site-joellithgow.md) — agent-driven publishing for joellithgow.com; drives MCP server (Phase 5), editor auto-generation (Phase 10), and the webhook→build trigger architecture
+
+**Extended (discovered through real-world application):**
+- [`vpp-underwriting-intake.md`](use-cases/vpp-underwriting-intake.md) — structured intake forms as governed documents; drives `NumberField`, `SelectField`, `BoolField`, `URLField` and validates schema API for external consumers
+- [`vpp-rule-governance.md`](use-cases/vpp-rule-governance.md) — actuarial rule parameters as singleton governed config; drives singleton pattern (ADR 009) and compliance/audit narrative
+- [`vpp-eval-dataset.md`](use-cases/vpp-eval-dataset.md) — human-scored AI runs as documents; introduces `DocumentRef` (ADR 010) and closes the governed feedback loop
+- [`vpp-test-case-library.md`](use-cases/vpp-test-case-library.md) — curated test scenarios as authored fixtures; drives `JSONField` and webhook-triggered CI pattern
+- [`vpp-prompt-versioning.md`](use-cases/vpp-prompt-versioning.md) — AI pipeline prompts as singleton governed config; extends ADR 009 and positions Astraeus for production AI use cases
+
+Together these establish Astraeus as a **governed data platform** — not just a headless CMS. The personal site is the original use case and remains the primary one; the VPP use cases extend the same primitives into AI system governance territory.
+
 ---
 
 ## Phase 0 — Scaffold ✅

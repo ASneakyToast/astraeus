@@ -6,15 +6,17 @@ This is the Astraeus monorepo. Read this file before doing anything else.
 
 ## What this repo is
 
-**Astraeus** is an open-source content stack for Python/Starlette developers. Three packages:
+**Astraeus** is a governed data platform for Python/Starlette developers. Three packages:
 
 - **`starlette-cms`** — headless CMS (block registry, document API, webhooks, schema versioning)
 - **`starlette-editor`** — visual editing UI (ProseMirror-based, auto-generated from block schema)
 - **`mediakit`** — media management (S3-compatible storage, IIIF Image API, presigned uploads)
 
-Each package is independently installable from PyPI. Together they form a full content management stack.
+Each package is independently installable from PyPI. Together they form a full content management and data governance stack.
 
 **Why it exists:** Joel needed an agentic content backend for his personal site (joellithgow.com) and future client work. He wanted something he could use across projects — not a one-off backend. The agentic layer (MCP servers) is a first-class design goal, not a bolt-on.
+
+**What it turned out to be:** Through real-world use, Astraeus has proven useful well beyond editorial content. Any structured data artifact that needs version history, authorship, approval workflow, and audit trail is a natural fit — intake forms, actuarial rule tables, AI pipeline prompts, eval datasets, curated test cases. The same primitives (blocks, documents, singletons, references, webhooks) serve all of these. See `docs/use-cases/` for worked examples.
 
 ---
 
@@ -100,7 +102,7 @@ uv run ruff format packages/
 
 See `docs/roadmap.md` for the full phased plan and current progress.
 
-**Short version:** Scaffold is complete. No implementation has started. `starlette-cms` Phase 1 is the correct next step — it unblocks everything else.
+**Short version:** Phases 0–3 complete. starlette-cms core, schema versioning, and webhooks are all working. Phase 4 (testing utilities + new field types) is next.
 
 ---
 
@@ -118,13 +120,19 @@ See `docs/decisions/` for the full rationale on each.
 
 ---
 
-## Joel's personal site
+## Use cases
 
-The first real consumer of these packages is `github.com/ASneakyToast/joellithgow` — an Astro.js site currently using MDX files for content. The migration path is:
+See `docs/use-cases/` for the full set of worked examples. These are not just illustrations — they
+directly inform roadmap priorities and surface new primitives.
 
-1. Deploy a starlette-cms + mediakit backend
-2. Update the Astro site to fetch from the CMS at build time
-3. Register a Netlify webhook so publish events trigger rebuilds
-4. Configure the MCP servers so Joel can update content via Claude Code
+**Primary (original design driver):**
+- [`personal-site-joellithgow.md`](docs/use-cases/personal-site-joellithgow.md) — agent-driven publishing for joellithgow.com; drives MCP server, webhook→build trigger, editor auto-generation
 
-The personal site lives in its own repo and is **not** in this monorepo. During development, it points at the local workspace packages via `[tool.uv.sources]`.
+**Extended (discovered through real-world application):**
+- [`vpp-underwriting-intake.md`](docs/use-cases/vpp-underwriting-intake.md) — structured intake forms as governed documents
+- [`vpp-rule-governance.md`](docs/use-cases/vpp-rule-governance.md) — actuarial rule tables as singleton governed config
+- [`vpp-eval-dataset.md`](docs/use-cases/vpp-eval-dataset.md) — human-scored AI runs as documents with references
+- [`vpp-test-case-library.md`](docs/use-cases/vpp-test-case-library.md) — curated test scenarios as authored fixtures
+- [`vpp-prompt-versioning.md`](docs/use-cases/vpp-prompt-versioning.md) — AI pipeline prompts as versioned governed config
+
+**Joel's personal site** (`github.com/ASneakyToast/joellithgow`) lives in its own repo and is **not** in this monorepo. During development it points at local workspace packages via `[tool.uv.sources]`.
