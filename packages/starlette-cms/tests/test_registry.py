@@ -150,3 +150,67 @@ def test_register_blocks_batch():
     registry.register_blocks([AA, BB])
     assert "aa" in registry
     assert "bb" in registry
+
+
+# ---------------------------------------------------------------------------
+# Singleton flag
+# ---------------------------------------------------------------------------
+
+
+def test_singleton_flag_stored():
+    """registry.is_singleton() returns True for singleton blocks."""
+    registry = BlockRegistry()
+
+    @block("storage_rates", singleton=True)
+    class StorageRates:
+        rate: float = TextField(required=True)
+
+    registry.register_block(StorageRates)
+    assert registry.is_singleton("storage_rates") is True
+
+
+def test_non_singleton_flag_false():
+    """registry.is_singleton() returns False for regular blocks."""
+    registry = BlockRegistry()
+
+    @block("jewelry_item")
+    class JewelryItem:
+        name: str = TextField(required=True)
+
+    registry.register_block(JewelryItem)
+    assert registry.is_singleton("jewelry_item") is False
+
+
+def test_singleton_get_returns_model():
+    """registry.get() still returns the Pydantic model class for singletons."""
+    import pydantic
+
+    registry = BlockRegistry()
+
+    @block("config_block", singleton=True)
+    class ConfigBlock:
+        value: str = TextField(required=True)
+
+    registry.register_block(ConfigBlock)
+    model = registry.get("config_block")
+    assert issubclass(model, pydantic.BaseModel)
+    assert model.__block_type__ == "config_block"  # type: ignore[attr-defined]
+
+
+def test_singleton_via_register_block_kwarg():
+    """singleton=True can be passed directly to register_block()."""
+    registry = BlockRegistry()
+
+    @block("rates_block")
+    class RatesBlock:
+        rate: str = TextField(required=True)
+
+    registry.register_block(RatesBlock, singleton=True)
+    assert registry.is_singleton("rates_block") is True
+
+
+def test_is_singleton_raises_for_unknown_block():
+    """is_singleton() raises BlockNotFound for unregistered types."""
+    registry = BlockRegistry()
+    with pytest.raises(BlockNotFound):
+        registry.is_singleton("nonexistent")

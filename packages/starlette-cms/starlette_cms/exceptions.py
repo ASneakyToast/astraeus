@@ -12,3 +12,15 @@ class BlockRegistrationError(Exception):
 
 class DocumentNotFound(Exception):
     """Raised when a document ID is not found in the database."""
+
+
+class SingletonConflict(Exception):
+    """Raised when a singleton publish violates the one-active constraint."""
+
+
+class BlockTypeMismatch(Exception):
+    """Raised when a DocumentRef target has an unexpected block_type."""
+
+
+class ReferencedDocumentError(Exception):
+    """Raised when a delete is blocked by referential integrity (on_delete='block')."""

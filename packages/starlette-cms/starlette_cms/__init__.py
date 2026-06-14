@@ -29,14 +29,22 @@ from starlette_cms.app import CMS
 from starlette_cms.exceptions import (
     BlockNotFound,
     BlockRegistrationError,
+    BlockTypeMismatch,
     CMSSchemaMismatch,
+    ReferencedDocumentError,
 )
 from starlette_cms.fields import (
     BlockField,
+    BoolField,
+    DocumentRef,
     ImageField,
+    JSONField,
     ListField,
+    NumberField,
     RichTextField,
+    SelectField,
     TextField,
+    URLField,
 )
 from starlette_cms.media import MediaBackend
 from starlette_cms.registry import block
@@ -51,8 +59,16 @@ __all__ = [
     "ImageField",
     "ListField",
     "BlockField",
+    "NumberField",
+    "SelectField",
+    "BoolField",
+    "URLField",
+    "JSONField",
+    "DocumentRef",
     "MediaBackend",
     "CMSSchemaMismatch",
     "BlockNotFound",
     "BlockRegistrationError",
+    "BlockTypeMismatch",
+    "ReferencedDocumentError",
 ]

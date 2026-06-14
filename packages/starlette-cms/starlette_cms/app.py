@@ -72,13 +72,19 @@ class CMS:
     # Block registration
     # ------------------------------------------------------------------
 
-    def block(self, name: str):
+    def block(self, name: str, *, singleton: bool = False, override: bool = False):
         """
         First-party block decorator — defines and immediately registers a block::
 
             @cms.block("hero")
             class HeroBlock:
                 title: str = TextField(required=True)
+
+        Pass ``singleton=True`` for singleton (governed config) blocks::
+
+            @cms.block("storage_rates", singleton=True)
+            class StorageRates:
+                rate: float = NumberField(default=0.005)
 
         The class is converted to a Pydantic model before registration. The
         *decorated name* is rebound to the generated model so later references
@@ -87,11 +93,17 @@ class CMS:
 
         def decorator(cls):
             cls.__block_type__ = name
-            self.registry.register_block(cls)
+            cls.__singleton__ = singleton
+            self.registry.register_block(cls, override=override, singleton=singleton)
             # Return the Pydantic model so the decorated name is the model
             return self.registry.get(name)
 
         return decorator
+
+    @property
+    def documents(self) -> CMSDocuments:
+        """Python accessor for document operations (e.g. ``get_singleton``)."""
+        return CMSDocuments(self)
 
     def register_block(self, block_cls: type, *, override: bool = False) -> None:
         self.registry.register_block(block_cls, override=override)
@@ -237,3 +249,79 @@ class CMS:
         for ep in eps:
             cls = ep.load()
             self.registry.register_block(cls)
+
+
+class CMSDocuments:
+    """
+    Python accessor for document operations attached to a CMS instance.
+
+    Available via ``cms.documents``::
+
+        rates = await cms.documents.get_singleton("storage_rates")
+        rate  = rates["body"]["bank_vault"]
+    """
+
+    def __init__(self, cms: CMS) -> None:
+        self._cms = cms
+
+    async def get_singleton(self, block_type: str) -> dict:
+        """
+        Return the currently active singleton document for *block_type*.
+
+        Raises :exc:`~starlette_cms.exceptions.DocumentNotFound` if no
+        published singleton exists yet.
+        """
+        from starlette_cms.api.documents import _row_to_dict
+        from starlette_cms.exceptions import DocumentNotFound
+        from starlette_cms.tables import CMSDocument
+
+        rows = await (
+            CMSDocument.select()
+            .where(
+                CMSDocument.doc_type == block_type,
+                CMSDocument.singleton_status == "active",
+            )
+            .limit(1)
+            .run()
+        )
+        if not rows:
+            raise DocumentNotFound(f"No published singleton for {block_type!r}")
+        return _row_to_dict(rows[0])
+
+    async def list(
+        self,
+        block_type: str,
+        *,
+        filters: dict[str, Any] | None = None,
+        published: bool | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict]:
+        """
+        List documents of a given block type with optional body filters.
+
+        Example::
+
+            scenarios = await cms.documents.list(
+                "test_scenario",
+                filters={"active": True, "category": "jewelry"},
+                published=True,
+            )
+        """
+        from starlette_cms.api.documents import _matches_filters, _row_to_dict
+        from starlette_cms.tables import CMSDocument
+
+        query = CMSDocument.select().where(CMSDocument.doc_type == block_type)
+
+        if published is not None:
+            query = query.where(CMSDocument.published == published)
+
+        query = query.order_by(CMSDocument.created_at, ascending=False)
+
+        all_rows = await query.run()
+        all_docs = [_row_to_dict(r) for r in all_rows]
+
+        if filters:
+            all_docs = [d for d in all_docs if _matches_filters(d, filters)]
+
+        return all_docs[offset : offset + limit]

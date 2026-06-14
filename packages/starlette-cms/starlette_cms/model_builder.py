@@ -28,10 +28,16 @@ from pydantic_core import PydanticUndefined
 
 from starlette_cms.fields import (
     BlockField,
+    BoolField,
+    DocumentRef,
     ImageField,
+    JSONField,
     ListField,
+    NumberField,
     RichTextField,
+    SelectField,
     TextField,
+    URLField,
     _BaseField,
 )
 
@@ -99,6 +105,55 @@ def _make_field(
             return (block_cls | None, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value, operator]
         return (block_cls, Field(..., json_schema_extra=extra))  # type: ignore[return-value]
 
+    if isinstance(default, NumberField):
+        validators: dict[str, Any] = {}
+        if default.min_value is not None:
+            validators["ge"] = default.min_value
+        if default.max_value is not None:
+            validators["le"] = default.max_value
+        if default.default is not None:
+            field_default: Any = default.default
+        else:
+            field_default = None if optional else ...
+        float_type: Any = float | None if optional else float
+        return (float_type, Field(default=field_default, json_schema_extra=extra, **validators))  # type: ignore[return-value]
+
+    if isinstance(default, SelectField):
+        import warnings
+        from typing import Literal
+
+        if default.choices:
+            lit_type: Any = Literal[tuple(default.choices)]  # type: ignore[valid-type]
+        else:
+            warnings.warn(
+                "SelectField has no choices — falling back to str",
+                stacklevel=4,
+            )
+            lit_type = str
+        if optional:
+            return (lit_type | None, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value]
+        return (lit_type, Field(..., json_schema_extra=extra))  # type: ignore[return-value]
+
+    if isinstance(default, BoolField):
+        return (bool, Field(default=default.default, json_schema_extra=extra))  # type: ignore[return-value]
+
+    if isinstance(default, URLField):
+        if optional:
+            return (str | None, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value]
+        return (str, Field(..., json_schema_extra=extra))  # type: ignore[return-value]
+
+    if isinstance(default, JSONField):
+        json_type: Any = dict | list | None
+        if not optional:
+            json_type = dict | list
+            return (json_type, Field(..., json_schema_extra=extra))  # type: ignore[return-value]
+        return (json_type, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value]
+
+    if isinstance(default, DocumentRef):
+        if optional:
+            return (str | None, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value]
+        return (str, Field(..., json_schema_extra=extra))  # type: ignore[return-value]
+
     # Fallback: use annotation as-is
     fallback_type: Any = annotation if annotation is not None else Any
     if optional:
@@ -155,6 +210,15 @@ def _collect_field_defs(cls: type) -> dict[str, tuple[Any, FieldInfo]]:
     return field_defs
 
 
+def get_immutable_fields(cls: type) -> list[str]:
+    """Return the list of field names that are marked ``immutable=True``."""
+    result = []
+    for attr_name, value in vars(cls).items():
+        if isinstance(value, _BaseField) and value.immutable:
+            result.append(attr_name)
+    return result
+
+
 def build_block_model(name: str, cls: type) -> type[pydantic.BaseModel]:
     """
     Convert a plain annotated class into a Pydantic BaseModel for use as a block.
@@ -179,6 +243,10 @@ def build_block_model(name: str, cls: type) -> type[pydantic.BaseModel]:
 
     model = create_model(cls.__name__, **field_defs)  # type: ignore[call-overload]
     model.__block_type__ = name  # type: ignore[attr-defined]
+    model.__immutable_fields__ = get_immutable_fields(cls)  # type: ignore[attr-defined]
+    model.__ref_fields__ = {  # type: ignore[attr-defined]
+        attr: value for attr, value in vars(cls).items() if isinstance(value, DocumentRef)
+    }
     model.model_rebuild()
     return model
 
@@ -205,6 +273,11 @@ def build_document_model(name: str, cls: type) -> type[pydantic.BaseModel]:
     model.__image_fields__ = [  # type: ignore[attr-defined]
         attr for attr, val in vars(cls).items() if isinstance(val, ImageField)
     ]
+
+    model.__immutable_fields__ = get_immutable_fields(cls)  # type: ignore[attr-defined]
+    model.__ref_fields__ = {  # type: ignore[attr-defined]
+        attr: value for attr, value in vars(cls).items() if isinstance(value, DocumentRef)
+    }
 
     model.model_rebuild()
     return model

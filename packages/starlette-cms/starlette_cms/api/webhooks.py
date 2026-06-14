@@ -43,6 +43,8 @@ async def fire_event(
     doc_id: str,
     doc_type: str,
     slug: str,
+    *,
+    extra: dict[str, Any] | None = None,
 ) -> None:
     """
     Dispatch *event* to all matching active webhooks as fire-and-forget tasks.
@@ -55,6 +57,8 @@ async def fire_event(
     :param doc_id: The document's nanoid.
     :param doc_type: The registered document type name.
     :param slug: The document's slug.
+    :param extra: Optional extra fields merged into the webhook payload
+        (e.g. ``{"singleton": True}``).
     """
     rows = await CMSWebhook.select().where(CMSWebhook.active == True).run()  # noqa: E712
 
@@ -65,6 +69,8 @@ async def fire_event(
         "slug": slug,
         "timestamp": datetime.now(UTC).isoformat(),
     }
+    if extra:
+        payload.update(extra)
 
     loop = asyncio.get_running_loop()
     for row in rows:

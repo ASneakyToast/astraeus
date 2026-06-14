@@ -27,6 +27,11 @@ class CMSDocument(Table):
     updated_at = Timestamptz()
     published = Boolean(default=False)
     published_at = Timestamptz(null=True, required=False)
+    singleton_status = Varchar(length=16, default="")
+    # singleton_status values:
+    #   ""         — regular (non-singleton) document, unchanged semantics
+    #   "active"   — current published singleton version
+    #   "archived" — superseded singleton version
 
 
 class CMSMeta(Table):
