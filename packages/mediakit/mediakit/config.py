@@ -11,7 +11,8 @@ from pydantic_settings import BaseSettings
 class MediakitConfig(BaseModel):
     # Storage
     bucket: str
-    endpoint_url: str | None = None        # None for AWS S3; set for GCS, R2
+    provider: str = "s3"                   # "s3" (AWS S3, R2, MinIO) or "gcs"
+    endpoint_url: str | None = None        # None for AWS S3; set for R2 or any S3-compatible endpoint
     aws_access_key_id: str | None = None   # falls back to AWS_ACCESS_KEY_ID env var
     aws_secret_access_key: str | None = None
     region_name: str = "auto"
