@@ -1,0 +1,65 @@
+site_name: Astraeus
+site_description: Governed data platform for Python/Starlette developers
+site_url: https://asneakytoast.github.io/astraeus/
+repo_url: https://github.com/ASneakyToast/astraeus
+repo_name: ASneakyToast/astraeus
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - content.code.annotate
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Guides:
+    - Field Types: guides/field-types.md
+    - Singleton Documents: guides/singletons.md
+    - Document References: guides/document-references.md
+    - List Filtering & Ordering: guides/filtering.md
+    - Testing Your Blocks: guides/testing.md
+    - Webhooks: guides/webhooks.md
+    - Schema Versioning & Migrations: guides/migrations.md
+    - Media Integration: guides/media.md
+  - API Reference:
+    - CMS Class: api/cms.md
+    - Field Types: api/fields.md
+    - HTTP Endpoints: api/endpoints.md
+    - Exceptions: api/exceptions.md
+    - Testing Utilities: api/testing.md
+  - Architecture: architecture.md

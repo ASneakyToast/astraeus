@@ -33,3 +33,9 @@ pyrightconfig.json
 
 # Databases (examples only)
 *.db
+
+# MkDocs build output
+site/
+
+# Claude Code worktrees
+.claude/worktrees/

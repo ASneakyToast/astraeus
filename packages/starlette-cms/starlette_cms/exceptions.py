@@ -24,3 +24,11 @@ class BlockTypeMismatch(Exception):
 
 class ReferencedDocumentError(Exception):
     """Raised when a delete is blocked by referential integrity (on_delete='block')."""
+
+
+class ImmutableDocumentError(Exception):
+    """
+    Raised when a PATCH or DELETE is attempted on an append_only document (ADR 014).
+
+    Corresponds to HTTP 405 Method Not Allowed on the API layer.
+    """

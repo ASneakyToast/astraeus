@@ -102,7 +102,7 @@ uv run ruff format packages/
 
 See `docs/roadmap.md` for the full phased plan and current progress.
 
-**Short version:** Phases 0–3 complete. starlette-cms core, schema versioning, and webhooks are all working. Phase 4 (testing utilities + new field types) is next.
+**Short version:** Phases 0–4 complete (including EPIC-001 VPP MVP primitives). starlette-cms core, schema versioning, webhooks, testing utilities, new field types, singletons, immutable fields, DocumentRef, and list filters are all working. Phase 5 (MCP server) is next.
 
 ---
 

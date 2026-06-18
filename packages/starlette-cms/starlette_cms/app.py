@@ -72,7 +72,14 @@ class CMS:
     # Block registration
     # ------------------------------------------------------------------
 
-    def block(self, name: str, *, singleton: bool = False, override: bool = False):
+    def block(
+        self,
+        name: str,
+        *,
+        singleton: bool = False,
+        append_only: bool = False,
+        override: bool = False,
+    ):
         """
         First-party block decorator — defines and immediately registers a block::
 
@@ -86,6 +93,14 @@ class CMS:
             class StorageRates:
                 rate: float = NumberField(default=0.005)
 
+        Pass ``append_only=True`` for machine-written audit records that are
+        immutable once created (ADR 014).  Documents of this type are
+        auto-published on creation; PATCH and DELETE return 405::
+
+            @cms.block("job_audit", append_only=True)
+            class JobAudit:
+                job_id: str = TextField(required=True, immutable=True)
+
         The class is converted to a Pydantic model before registration. The
         *decorated name* is rebound to the generated model so later references
         (e.g. inside ListField) pick up the Pydantic class.
@@ -94,7 +109,10 @@ class CMS:
         def decorator(cls):
             cls.__block_type__ = name
             cls.__singleton__ = singleton
-            self.registry.register_block(cls, override=override, singleton=singleton)
+            cls.__append_only__ = append_only
+            self.registry.register_block(
+                cls, override=override, singleton=singleton, append_only=append_only
+            )
             # Return the Pydantic model so the decorated name is the model
             return self.registry.get(name)
 
@@ -106,9 +124,11 @@ class CMS:
         return CMSDocuments(self)
 
     def register_block(self, block_cls: type, *, override: bool = False) -> None:
+        """Register a pre-decorated block class. The class must have ``__block_type__`` set."""
         self.registry.register_block(block_cls, override=override)
 
     def register_blocks(self, block_classes: list[type], *, override: bool = False) -> None:
+        """Register multiple pre-decorated block classes at once."""
         self.registry.register_blocks(block_classes, override=override)
 
     # ------------------------------------------------------------------

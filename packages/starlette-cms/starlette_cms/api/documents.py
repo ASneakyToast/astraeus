@@ -339,12 +339,17 @@ def make_document_routes(cms: CMS) -> list[Route]:
         if not doc_type:
             return JSONResponse({"error": "doc_type is required"}, status_code=422)
 
+        # Look up the model — check document types first, then block registry as
+        # fallback (used for @cms.block(append_only=True) and singleton types).
         doc_model = cms._document_types.get(doc_type)
         if doc_model is None:
-            return JSONResponse(
-                {"error": f"Unknown document type: {doc_type!r}"},
-                status_code=422,
-            )
+            if doc_type in cms.registry:
+                doc_model = cms.registry.get(doc_type)
+            else:
+                return JSONResponse(
+                    {"error": f"Unknown document type: {doc_type!r}"},
+                    status_code=422,
+                )
 
         body_data = data.get("body", {})
         try:
@@ -376,25 +381,51 @@ def make_document_routes(cms: CMS) -> list[Route]:
         doc_id = generate(size=21)
         slug = data.get("slug", "")
         doc_meta = data.get("meta", {})
+        now = datetime.now(UTC)
 
-        await CMSDocument.insert(
-            CMSDocument(
-                id=doc_id,
-                doc_type=doc_type,
-                slug=slug,
-                body=json.dumps(validated.model_dump()),
-                meta=json.dumps(doc_meta),
-                created_at=datetime.now(UTC),
-                updated_at=datetime.now(UTC),
-                published=False,
-                published_at=None,
-            )
-        ).run()
+        # append_only=True: create and publish atomically (ADR 014)
+        is_append_only = False
+        try:
+            is_append_only = cms.registry.is_append_only(doc_type)
+        except Exception:
+            pass
+
+        if is_append_only:
+            await CMSDocument.insert(
+                CMSDocument(
+                    id=doc_id,
+                    doc_type=doc_type,
+                    slug=slug,
+                    body=json.dumps(validated.model_dump()),
+                    meta=json.dumps(doc_meta),
+                    created_at=now,
+                    updated_at=now,
+                    published=True,
+                    published_at=now,
+                )
+            ).run()
+        else:
+            await CMSDocument.insert(
+                CMSDocument(
+                    id=doc_id,
+                    doc_type=doc_type,
+                    slug=slug,
+                    body=json.dumps(validated.model_dump()),
+                    meta=json.dumps(doc_meta),
+                    created_at=now,
+                    updated_at=now,
+                    published=False,
+                    published_at=None,
+                )
+            ).run()
 
         rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
 
         loop = asyncio.get_running_loop()
-        loop.create_task(fire_event(cms, "document.created", doc_id, doc_type, slug))
+        extra: dict[str, Any] = {}
+        if is_append_only:
+            extra["append_only"] = True
+        loop.create_task(fire_event(cms, "document.created", doc_id, doc_type, slug, extra=extra))
 
         return JSONResponse(_row_to_dict(rows[0]), status_code=201)
 
@@ -418,14 +449,26 @@ def make_document_routes(cms: CMS) -> list[Route]:
         if not rows:
             return JSONResponse({"error": "Document not found"}, status_code=404)
 
+        row = rows[0]
+        doc_type = row["doc_type"]
+
+        # append_only=True: PATCH is not allowed (ADR 014)
+        try:
+            if cms.registry.is_append_only(doc_type):
+                return JSONResponse(
+                    {"error": "append_only documents cannot be modified"},
+                    status_code=405,
+                )
+        except Exception:
+            pass
+
         try:
             patch_data = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
-
-        row = rows[0]
-        doc_type = row["doc_type"]
         doc_model = cms._document_types.get(doc_type)
+        if doc_model is None and doc_type in cms.registry:
+            doc_model = cms.registry.get(doc_type)
 
         # Merge body
         existing_body = row.get("body", "{}")
@@ -512,6 +555,16 @@ def make_document_routes(cms: CMS) -> list[Route]:
         row = rows[0]
         doc_type = row["doc_type"]
         slug = row.get("slug", "")
+
+        # append_only=True: DELETE is not allowed (ADR 014)
+        try:
+            if cms.registry.is_append_only(doc_type):
+                return JSONResponse(
+                    {"error": "append_only documents cannot be deleted"},
+                    status_code=405,
+                )
+        except Exception:
+            pass
 
         # Enforce referential integrity (on_delete="block" → 409; "nullify" → set to None)
         if (err := await _check_ref_integrity(cms, doc_id, doc_type)) is not None:

@@ -9,6 +9,7 @@ dev-dependencies = [
     "respx>=0.20",
     "ruff>=0.6",
     "pyright>=1.1",
+    "mkdocs-material>=9.5",
 ]
 
 [tool.ruff]

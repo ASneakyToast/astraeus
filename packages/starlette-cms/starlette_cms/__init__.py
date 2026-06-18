@@ -31,7 +31,10 @@ from starlette_cms.exceptions import (
     BlockRegistrationError,
     BlockTypeMismatch,
     CMSSchemaMismatch,
+    DocumentNotFound,
+    ImmutableDocumentError,
     ReferencedDocumentError,
+    SingletonConflict,
 )
 from starlette_cms.fields import (
     BlockField,
@@ -71,4 +74,7 @@ __all__ = [
     "BlockRegistrationError",
     "BlockTypeMismatch",
     "ReferencedDocumentError",
+    "DocumentNotFound",
+    "SingletonConflict",
+    "ImmutableDocumentError",
 ]

@@ -40,6 +40,14 @@ class _BaseField:
 
 @dataclass
 class TextField(_BaseField):
+    """Short text input — the most common field type.
+
+    Examples::
+
+        title: str = TextField(required=True, label="Title", max_length=200)
+        slug: str = TextField(required=True, unique_per_type=True)
+    """
+
     max_length: int | None = None
     unique_per_type: bool = False
 

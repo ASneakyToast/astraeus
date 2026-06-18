@@ -2,7 +2,7 @@
 
 Phases are ordered by dependency. A future agent should always start at the earliest incomplete phase.
 
-**Current status:** Phases 0–3 complete.
+**Current status:** Phases 0–4 complete (including EPIC-001 VPP MVP primitives).
 
 **Use cases:** See `docs/use-cases/` for worked examples of Astraeus applied to real projects. These inform roadmap priorities and surface new primitives.
 
@@ -121,28 +121,87 @@ Together these establish Astraeus as a **governed data platform** — not just a
 
 ---
 
-## Phase 4 — starlette-cms testing utilities
+## Phase 4 — starlette-cms testing utilities + VPP MVP primitives (EPIC-001) ✅
 
-**Goal:** `BlockTestCase` and `RegistryTestCase` are fully implemented and block package authors can use them.
+**Goal:** Testing utilities for block authors, plus all primitives needed for the VPP underwriting MVP.
 
-- [ ] `validate_block(block_cls, data)` — validates dict against block, returns model or raises `ValidationError`
-- [ ] `BlockTestCase.assert_valid/invalid/fields/field_label/field_required/field_optional/roundtrip`
-- [ ] `RegistryTestCase` — fresh CMS per test, `assert_registered`, `assert_no_collision`
-- [ ] `contrib/blocks/basic.py` blocks are tested using `BlockTestCase`
+**Done when:** All six EPIC-001 stories pass, acceptance smoke test green (241 tests).
+
+### 4a — Testing utilities (STORY-006) ✅
+- [x] `validate_block(block_cls, data)` — validates dict against block, returns model or raises `ValidationError`
+- [x] `BlockTestCase.assert_valid/invalid/fields/field_label/field_required/field_optional/roundtrip`
+- [x] `RegistryTestCase` — fresh CMS per test, `assert_registered`, `assert_no_collision`
+- [x] `contrib/blocks/basic.py` blocks are tested using `BlockTestCase`
+
+### 4b — New field types (STORY-001) ✅
+- [x] `NumberField` — float with optional `min_value`, `max_value`, `precision`
+- [x] `SelectField` — string constrained to a `choices` list (Pydantic `Literal` enum)
+- [x] `BoolField` — boolean with configurable default
+- [x] `URLField` — string with `format: url` in `cms:field_meta`
+- [x] `JSONField` — arbitrary dict/list, maps to `Any` in Pydantic
+
+### 4c — Singleton documents (STORY-002) ✅
+- [x] `@cms.block("name", singleton=True)` marks a block as singleton
+- [x] `singleton_status` column (`active` / `archived`) on `cms_documents`
+- [x] Archive-then-activate publish semantics (only one active at a time)
+- [x] `GET /api/singletons/{block_type}` — fetch active singleton
+- [x] `POST /api/singletons/{block_type}/publish` — publish new version
+- [x] `GET /api/singletons/{block_type}/history` — version history
+- [x] `cms.documents.get_singleton(block_type)` Python accessor
+
+### 4d — Immutable fields (STORY-003) ✅
+- [x] `immutable=True` flag on any `_BaseField` subclass
+- [x] `__immutable_fields__` set on generated Pydantic models
+- [x] PATCH endpoint strips immutable fields from update payload
+- [x] `immutable: true` in `cms:field_meta` schema output
+
+### 4e — DocumentRef (STORY-004) ✅
+- [x] `DocumentRef(block_type=..., on_delete="block"|"nullify"|"cascade")` field type
+- [x] `__ref_fields__` mapping on generated models
+- [x] `_validate_refs()` — checks referenced doc exists and has correct block_type on create/patch
+- [x] `_check_ref_integrity()` — enforces `on_delete` semantics on delete
+- [x] `_bulk_resolve_refs()` — O(1)-per-field inline resolution in list responses
+- [x] `resolve_refs` query param on `GET /api/documents`
+
+### 4f — List filters (STORY-005) ✅
+- [x] `filters=` JSON query param for body-field filtering
+- [x] `filter[key]=value` bracket syntax alternative
+- [x] `order_by` and `order` (asc/desc) query params
+- [x] `_coerce_filter_value()` — URL string to bool/int/float/str
+- [x] `_matches_filters()` — Python-level body field matching (v1)
+- [x] `cms.documents.list(block_type, filters=...)` Python accessor
+- [x] `filters_applied` in list response metadata
 
 ---
 
-## Phase 5 — starlette-cms MCP server
+## Phase 5 — starlette-cms MCP server ✅
 
 **Goal:** An agent (Claude Code, Claude Desktop) can create, edit, and publish documents using tools.
 
 **Done when:** Running `starlette-cms mcp serve --url ... --api-key ...` registers tools that a connected agent can call successfully against a live CMS.
 
-- [ ] `pip install starlette-cms[mcp]` installs `mcp` dependency
-- [ ] `starlette-cms mcp serve --url {base_url} --api-key {key}` starts MCP server
-- [ ] Tools: `list_documents`, `get_document`, `create_document`, `update_document`, `delete_document`, `publish_document`, `unpublish_document`, `list_block_types`, `get_block_schema`
-- [ ] Tool descriptions are agent-legible (explain what each arg does, what gets returned)
-- [ ] Auth passed as `Authorization: Bearer {key}` header on every request
+- [x] `pip install starlette-cms[mcp]` installs `mcp` dependency
+- [x] `starlette-cms mcp serve --url {base_url} --api-key {key}` starts MCP server
+- [x] Tools: `list_documents`, `get_document`, `create_document`, `update_document`, `delete_document`, `publish_document`, `unpublish_document`, `list_block_types`, `get_block_schema`
+- [x] Tool descriptions are agent-legible (explain what each arg does, what gets returned)
+- [x] Auth passed as `Authorization: Bearer {key}` header on every request
+
+---
+
+## ADR 014 — append_only=True documents ✅
+
+**Goal:** Machine-written audit records with structural immutability — auto-published on creation, frozen body, cannot be deleted.
+
+**Done when:** POST creates and publishes in one call; PATCH and DELETE return 405; read endpoints unaffected.
+
+- [x] `append_only: bool` on `BlockRegistration`, `@block()`, and `@cms.block()`
+- [x] `BlockRegistry.is_append_only()` introspection method
+- [x] `POST /api/documents` with append_only block type → auto-publishes atomically
+- [x] `PATCH /api/documents/{id}` on append_only document → 405 Method Not Allowed
+- [x] `DELETE /api/documents/{id}` on append_only document → 405 Method Not Allowed
+- [x] `ImmutableDocumentError` exception exported from `starlette_cms`
+- [x] Webhook for append_only creation carries `append_only: true` in extra payload
+- [x] `POST /api/documents` falls back to block registry for append_only / singleton types
 
 ---
 

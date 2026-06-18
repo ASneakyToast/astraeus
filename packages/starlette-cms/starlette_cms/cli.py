@@ -199,6 +199,63 @@ def migrate_run(dry_run: bool, app_spec: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# mcp group
+# ---------------------------------------------------------------------------
+
+
+@main.group()
+def mcp():
+    """MCP server commands (requires starlette-cms[mcp])."""
+
+
+@mcp.command("serve")
+@click.option(
+    "--url",
+    required=True,
+    help="Base URL of the starlette-cms instance (e.g. https://mysite.com/cms).",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    envvar="CMS_API_KEY",
+    show_default="CMS_API_KEY env var",
+    help="API key for Authorization: Bearer header on mutating requests.",
+)
+@click.option(
+    "--transport",
+    default="stdio",
+    type=click.Choice(["stdio", "sse", "streamable-http"]),
+    show_default=True,
+    help="MCP transport protocol.",
+)
+def mcp_serve(url: str, api_key: str | None, transport: str) -> None:
+    """
+    Start the starlette-cms MCP server.
+
+    Connects to the CMS at --url and exposes its document API as agent-callable
+    tools.  Run locally; point at a deployed CMS instance over HTTP.
+
+    Examples::
+
+        # Connect to a local dev server
+        starlette-cms mcp serve --url http://localhost:8000/cms
+
+        # Connect to production with an API key
+        starlette-cms mcp serve --url https://mysite.com/cms --api-key secret
+    """
+    try:
+        from starlette_cms.mcp.server import build_mcp_server
+    except ImportError:
+        raise click.ClickException(
+            "MCP server requires the 'mcp' extra. "
+            "Install with: pip install starlette-cms[mcp]"
+        )
+
+    server = build_mcp_server(base_url=url.rstrip("/"), api_key=api_key)
+    server.run(transport=transport)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
 # validate command
 # ---------------------------------------------------------------------------
 
