@@ -21,6 +21,7 @@ dependencies = [
     "aiosqlite>=0.20",
     "pydantic>=2.0",
     "anyio",
+    "click>=8.0",
 ]
 
 [project.optional-dependencies]

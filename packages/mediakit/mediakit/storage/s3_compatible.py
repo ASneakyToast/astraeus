@@ -6,7 +6,6 @@ See ADR 011 for the rationale for choosing obstore over boto3.
 
 from __future__ import annotations
 
-from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from mediakit.config import MediakitConfig
@@ -59,13 +58,24 @@ class S3CompatibleBackend:
         Returns ``{ "upload_url": str, "key": str, "expires_at": str }``.
         The browser PUTs directly to ``upload_url`` — mediakit never sees the bytes.
         """
-        # TODO: implement — obstore.sign_async(store, "PUT", key, timedelta(seconds=expires_in))
-        raise NotImplementedError
+        from datetime import UTC, datetime, timedelta
+
+        import obstore
+
+        store = self._get_store()
+        url = await obstore.sign_async(store, "PUT", key, timedelta(seconds=expires_in))
+        expires_at = (datetime.now(UTC) + timedelta(seconds=expires_in)).isoformat()
+        return {"upload_url": url, "key": key, "expires_at": expires_at}
 
     async def confirm_exists(self, key: str) -> bool:
         """Return True if the object exists in the bucket."""
-        # TODO: implement — obstore.head_async(store, key)
-        raise NotImplementedError
+        import obstore
+
+        try:
+            await obstore.head_async(self._get_store(), key)
+            return True
+        except Exception:
+            return False
 
     async def get_url(self, key: str, expires_in: int = 3600) -> str:
         """Return a presigned GET URL (or public URL if bucket is public-read).
@@ -73,14 +83,22 @@ class S3CompatibleBackend:
         Used by the IIIF endpoint to issue a 302 redirect — the response bytes
         never flow through the application server.
         """
-        # TODO: implement — obstore.sign_async(store, "GET", key, timedelta(seconds=expires_in))
-        #                    or public URL construction when config.public_read is True
-        raise NotImplementedError
+        if self.config.public_read:
+            # Construct public URL — no signing needed
+            base = self.config.endpoint_url or f"https://{self.config.bucket}.s3.amazonaws.com"
+            return f"{base.rstrip('/')}/{key}"
+
+        from datetime import timedelta
+
+        import obstore
+
+        return await obstore.sign_async(self._get_store(), "GET", key, timedelta(seconds=expires_in))
 
     async def delete(self, key: str) -> None:
         """Delete the object from the bucket."""
-        # TODO: implement — obstore.delete_async(store, key)
-        raise NotImplementedError
+        import obstore
+
+        await obstore.delete_async(self._get_store(), [key])
 
     async def list_objects(self, prefix: str = "", max_keys: int = 1000) -> list[dict]:
         """List objects under the given prefix.
@@ -88,5 +106,16 @@ class S3CompatibleBackend:
         Returns ``[{ "key": str, "size": int, "last_modified": str }, ...]``.
         Used by ``mediakit sync`` and ``mediakit gc``.
         """
-        # TODO: implement — obstore.list_async(store, prefix=prefix)
-        raise NotImplementedError
+        import obstore
+
+        results: list[dict] = []
+        async for batch in obstore.list(self._get_store(), prefix=prefix or None):
+            for obj in batch:
+                results.append({
+                    "key": obj["path"],
+                    "size": obj.get("size", 0),
+                    "last_modified": str(obj.get("last_modified", "")),
+                })
+                if len(results) >= max_keys:
+                    return results
+        return results

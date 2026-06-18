@@ -1,14 +1,25 @@
-"""Starlette adapter — create_media_mount()"""
+"""Starlette adapter — backwards-compatible ``create_media_mount()`` factory.
+
+New code should use :class:`mediakit.MediaKit` directly::
+
+    from mediakit import MediaKit, MediakitConfig
+
+    mk = MediaKit(config=MediakitConfig(bucket="...", ...))
+    app = Starlette(..., lifespan=mk.lifespan)
+    app.mount("/media", app=mk.app)
+
+The ``create_media_mount()`` helper remains for convenience::
+
+    media = create_media_mount(bucket="my-bucket", ...)
+    app.mount("/media", app=media)
+"""
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-
 from starlette.applications import Starlette
 
-from mediakit.catalog import Catalog
+from mediakit.app import MediaKit
 from mediakit.config import MediakitConfig
-from mediakit.storage.s3_compatible import S3CompatibleBackend
 
 
 def create_media_mount(
@@ -22,13 +33,16 @@ def create_media_mount(
     """
     Returns a Starlette ASGI app suitable for mounting at any path.
 
-    Exposes lifespan_context(app) for composition with other plugin lifespans::
+    Exposes ``lifespan_context(app)`` for composition with other plugin lifespans::
 
         @asynccontextmanager
         async def lifespan(app):
             async with cms.lifespan_context(app):
                 async with media.lifespan_context(app):
                     yield
+
+    .. deprecated::
+        Prefer ``MediaKit(config=MediakitConfig(...))`` directly.
     """
     config = MediakitConfig(
         bucket=bucket,
@@ -37,17 +51,8 @@ def create_media_mount(
         auth=auth,
         **kwargs,
     )
-
-    @asynccontextmanager
-    async def lifespan(app):
-        app.state.storage = S3CompatibleBackend(config)
-        app.state.catalog = Catalog(config.catalog_path)
-        await app.state.catalog.initialize()
-        app.state.config = config
-        yield
-        await app.state.catalog.close()
-
-    # TODO: wire up routes
-    app = Starlette(routes=[], lifespan=lifespan)
-    app.lifespan_context = lifespan  # expose for external composition
+    mk = MediaKit(config=config)
+    # Expose lifespan_context at the app level for external composition
+    app = mk.app
+    app.lifespan_context = mk.lifespan_context  # type: ignore[attr-defined]
     return app

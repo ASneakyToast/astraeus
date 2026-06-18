@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from pydantic import BaseModel, Field
-from pydantic_settings import BaseSettings
+from pydantic import BaseModel
 
 
 class MediakitConfig(BaseModel):
