@@ -147,9 +147,9 @@ function setState(patch, rerender = true) {
    ===================================================================== */
 
 /**
- * Dynamically load ProseMirror UMD bundles from jsDelivr.
- * Bundles expose globals: ProseMirrorState, ProseMirrorView,
- * ProseMirrorSchemaBasic, ProseMirrorExampleSetup.
+ * Dynamically load ProseMirror via esm.sh (ESM dynamic import).
+ * esm.sh re-bundles npm packages as browser-native ES modules — no UMD needed.
+ * Resolved modules are stored on window.PM for use by the rest of the file.
  *
  * TODO (next step): Wire up a proper Markdown ↔ ProseMirror serialiser.
  *   The recommended approach is prosemirror-markdown (markdownit-based).
@@ -163,36 +163,11 @@ function setState(patch, rerender = true) {
 function loadProseMirror() {
   if (pmLoadPromise) return pmLoadPromise;
 
-  const CDN = 'https://cdn.jsdelivr.net/npm';
+  const ESM = 'https://esm.sh';
 
-  const scripts = [
-    `${CDN}/prosemirror-model@1/dist/index.umd.min.js`,
-    `${CDN}/prosemirror-state@1/dist/index.umd.min.js`,
-    `${CDN}/prosemirror-view@1/dist/index.umd.min.js`,
-    `${CDN}/prosemirror-transform@1/dist/index.umd.min.js`,
-    `${CDN}/prosemirror-commands@1/dist/index.umd.min.js`,
-    `${CDN}/prosemirror-history@1/dist/index.umd.min.js`,
-    `${CDN}/prosemirror-keymap@1/dist/index.umd.min.js`,
-    `${CDN}/prosemirror-inputrules@1/dist/index.umd.min.js`,
-    `${CDN}/prosemirror-schema-basic@1/dist/index.umd.min.js`,
-    `${CDN}/prosemirror-schema-list@1/dist/index.umd.min.js`,
-    `${CDN}/prosemirror-example-setup@1/dist/index.umd.min.js`,
-  ];
-
-  function loadScript(src) {
-    return new Promise((resolve, reject) => {
-      if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
-      const s = document.createElement('script');
-      s.src = src;
-      s.onload = resolve;
-      s.onerror = () => reject(new Error(`Failed to load ${src}`));
-      document.head.appendChild(s);
-    });
-  }
-
-  // Also load ProseMirror's default CSS
+  // Also inject ProseMirror's default CSS once
   function loadPmCss() {
-    const href = `${CDN}/prosemirror-view@1/style/prosemirror.css`;
+    const href = `${ESM}/prosemirror-view/style/prosemirror.css`;
     if (!document.querySelector(`link[href="${href}"]`)) {
       const link = document.createElement('link');
       link.rel = 'stylesheet';
@@ -201,13 +176,22 @@ function loadProseMirror() {
     }
   }
 
-  // Load sequentially — each package may depend on the previous globals
-  pmLoadPromise = scripts.reduce(
-    (chain, src) => chain.then(() => loadScript(src)),
-    Promise.resolve()
-  ).then(() => {
+  pmLoadPromise = Promise.all([
+    import(`${ESM}/prosemirror-model`),
+    import(`${ESM}/prosemirror-state`),
+    import(`${ESM}/prosemirror-view`),
+    import(`${ESM}/prosemirror-schema-basic`),
+    import(`${ESM}/prosemirror-schema-list`),
+    import(`${ESM}/prosemirror-commands`),
+    import(`${ESM}/prosemirror-history`),
+    import(`${ESM}/prosemirror-keymap`),
+    import(`${ESM}/prosemirror-inputrules`),
+    import(`${ESM}/prosemirror-example-setup`),
+  ]).then(([model, state, view, schemaBasic, schemaList, commands, history, keymap, inputrules, exampleSetup]) => {
+    // Stash on window.PM so the rest of the file can access them
+    window.PM = { model, state, view, schemaBasic, schemaList, commands, history, keymap, inputrules, exampleSetup };
     loadPmCss();
-    return window.prosemirrorExampleSetup && window.prosemirrorSchemaBasic;
+    return true;
   });
 
   return pmLoadPromise;
@@ -838,17 +822,13 @@ async function mountProseMirrorEditors(fields) {
     return;
   }
 
-  const {
-    EditorState,
-    Plugin,
-    PluginKey,
-  } = window.prosemirrorState;
-  const { EditorView, Decoration, DecorationSet } = window.prosemirrorView;
-  const { schema: basicSchema } = window.prosemirrorSchemaBasic;
-  const { exampleSetup } = window.prosemirrorExampleSetup;
-  const { toggleMark, setBlockType, wrapIn } = window.prosemirrorCommands;
-  const { addListNodes } = window.prosemirrorSchemaList;
-  const { Schema, DOMParser: PmDOMParser } = window.prosemirrorModel;
+  const { EditorState, Plugin, PluginKey } = window.PM.state;
+  const { EditorView } = window.PM.view;
+  const { schema: basicSchema } = window.PM.schemaBasic;
+  const { Schema } = window.PM.model;
+  const { exampleSetup } = window.PM.exampleSetup;
+  const { toggleMark, setBlockType, wrapIn } = window.PM.commands;
+  const { addListNodes } = window.PM.schemaList;
 
   // Build a schema that includes list nodes
   const schemaWithLists = new Schema({
