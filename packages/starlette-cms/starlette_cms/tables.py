@@ -32,6 +32,12 @@ class CMSDocument(Table):
     #   ""         — regular (non-singleton) document, unchanged semantics
     #   "active"   — current published singleton version
     #   "archived" — superseded singleton version
+    import_ref = Varchar(length=256, null=True, required=False, index=True)
+    # import_ref — stable external ID for gateway-synced documents.
+    # Format: "{service}:{subtype}:{external_id}", e.g. "spotify:liked:abc123".
+    # NULL for human-authored documents.  Unique per (doc_type, import_ref) pair
+    # enforced at the application layer (409 on collision) so that NULL values
+    # (authored documents) are permitted without compound-key complexity.
 
 
 class CMSMeta(Table):

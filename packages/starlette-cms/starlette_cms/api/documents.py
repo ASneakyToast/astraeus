@@ -249,6 +249,7 @@ def make_document_routes(cms: CMS) -> list[Route]:
         params = request.query_params
         doc_type = params.get("type")
         slug = params.get("slug")
+        import_ref = params.get("import_ref")
         published_param = params.get("published")
         resolve_refs_param = params.get("resolve_refs")
         try:
@@ -287,6 +288,8 @@ def make_document_routes(cms: CMS) -> list[Route]:
             query = query.where(CMSDocument.doc_type == doc_type)
         if slug:
             query = query.where(CMSDocument.slug == slug)
+        if import_ref is not None:
+            query = query.where(CMSDocument.import_ref == import_ref)
         if published_param is not None:
             published = published_param.lower() in ("true", "1", "yes")
             query = query.where(CMSDocument.published == published)
@@ -306,6 +309,8 @@ def make_document_routes(cms: CMS) -> list[Route]:
                 count_query = count_query.where(CMSDocument.doc_type == doc_type)
             if slug:
                 count_query = count_query.where(CMSDocument.slug == slug)
+            if import_ref is not None:
+                count_query = count_query.where(CMSDocument.import_ref == import_ref)
             if published_param is not None:
                 count_query = count_query.where(CMSDocument.published == published)  # type: ignore[possibly-undefined]
 
@@ -380,8 +385,33 @@ def make_document_routes(cms: CMS) -> list[Route]:
 
         doc_id = generate(size=21)
         slug = data.get("slug", "")
+        import_ref: str | None = data.get("import_ref") or None
         doc_meta = data.get("meta", {})
         now = datetime.now(UTC)
+
+        # 409 on duplicate (doc_type, import_ref) — NULL import_refs are never deduplicated
+        if import_ref is not None:
+            existing = (
+                await CMSDocument.select(CMSDocument.id)
+                .where(
+                    CMSDocument.doc_type == doc_type,
+                    CMSDocument.import_ref == import_ref,
+                )
+                .limit(1)
+                .run()
+            )
+            if existing:
+                return JSONResponse(
+                    {
+                        "error": "Duplicate import_ref",
+                        "detail": (
+                            f"A document of type {doc_type!r} with "
+                            f"import_ref {import_ref!r} already exists."
+                        ),
+                        "existing_id": existing[0]["id"],
+                    },
+                    status_code=409,
+                )
 
         # append_only=True: create and publish atomically (ADR 014)
         is_append_only = False
@@ -402,6 +432,7 @@ def make_document_routes(cms: CMS) -> list[Route]:
                     updated_at=now,
                     published=True,
                     published_at=now,
+                    import_ref=import_ref,
                 )
             ).run()
         else:
@@ -416,6 +447,7 @@ def make_document_routes(cms: CMS) -> list[Route]:
                     updated_at=now,
                     published=False,
                     published_at=None,
+                    import_ref=import_ref,
                 )
             ).run()
 
@@ -520,6 +552,10 @@ def make_document_routes(cms: CMS) -> list[Route]:
 
         if "slug" in patch_data:
             update_kwargs[CMSDocument.slug] = patch_data["slug"]
+
+        if "import_ref" in patch_data:
+            new_import_ref: str | None = patch_data["import_ref"] or None
+            update_kwargs[CMSDocument.import_ref] = new_import_ref
 
         if "meta" in patch_data:
             existing_meta = row.get("meta", "{}")

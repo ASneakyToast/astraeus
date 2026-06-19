@@ -295,11 +295,17 @@ function getOrderedFields(typeInfo) {
   const props = typeInfo?.schema?.properties || {};
   const fieldMeta = typeInfo?.field_meta || {};
 
-  const entries = Object.entries(props).map(([name, prop]) => ({
-    name,
-    prop,
-    meta: fieldMeta[name] || {},
-  }));
+  // slug is managed by the top-level CMS slug field (buildSlugField);
+  // block_type is an injected discriminator — neither should appear in the body form.
+  const EXCLUDED = new Set(['slug', 'block_type']);
+
+  const entries = Object.entries(props)
+    .filter(([name]) => !EXCLUDED.has(name))
+    .map(([name, prop]) => ({
+      name,
+      prop,
+      meta: fieldMeta[name] || {},
+    }));
 
   // Sort by display_order if present, then by natural order
   entries.sort((a, b) => {
