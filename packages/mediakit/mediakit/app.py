@@ -65,12 +65,22 @@ class MediaKit:
         from mediakit.api.upload import make_upload_routes
         from mediakit.routes.iiif import make_iiif_routes
 
-        routes = [
+        from starlette.routing import BaseRoute
+
+        routes: list[BaseRoute] = [
             *make_upload_routes(self),
             *make_asset_routes(self),
             *make_reference_routes(self),
             *make_iiif_routes(self),
         ]
+
+        try:
+            from mediakit.admin import make_admin_routes
+
+            routes.extend(make_admin_routes(self))
+        except ImportError:
+            pass  # jinja2/python-multipart not installed — admin UI not available
+
         return Starlette(routes=routes, lifespan=self.lifespan)
 
     # ------------------------------------------------------------------

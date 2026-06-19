@@ -39,6 +39,9 @@ mediakit = "mediakit.cli:main"
 Homepage = "https://github.com/ASneakyToast/astraeus"
 Repository = "https://github.com/ASneakyToast/astraeus"
 
+[tool.hatch.build.targets.wheel]
+packages = ["mediakit"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
