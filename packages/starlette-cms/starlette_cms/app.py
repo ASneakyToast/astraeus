@@ -151,6 +151,9 @@ class CMS:
             cls.__document_type__ = name
             model = build_document_model(name, cls)
             self._document_types[name] = model
+            # Also register in the block registry so /api/schema includes document types
+            model.__block_type__ = name
+            self.registry.register_block(model, override=True)
             return model
 
         return decorator
