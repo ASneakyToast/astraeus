@@ -68,7 +68,7 @@ async function fetchSchema() {
 }
 
 async function fetchDocuments(docType, { limit = 50, offset = 0 } = {}) {
-  const params = new URLSearchParams({ doc_type: docType, limit, offset });
+  const params = new URLSearchParams({ type: docType, limit, offset });
   const res = await apiFetch(`/api/documents?${params}`);
   if (!res.ok) throw new Error(`Documents fetch failed: ${res.status}`);
   return res.json();
