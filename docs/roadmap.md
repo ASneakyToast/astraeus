@@ -284,19 +284,19 @@ Together these establish Astraeus as a **governed data platform** — not just a
 
 ---
 
-## Phase 10 — starlette-editor Phase 1 (foundation)
+## Phase 10 — starlette-editor Phase 1 (foundation) ✅
 
 **Prerequisite:** starlette-cms Phase 1 complete.
 
 **Goal:** The ProseMirror bridge works and `<se-block-editor>` renders a live editor for a `RichTextField`.
 
-- [ ] `ProseMirrorBridge.generate_schema()` — derives ProseMirror schema from BlockRegistry
-- [ ] `/api/editor-schema` endpoint (registered on CMS via extension route)
-- [ ] esbuild pipeline for TypeScript editor source
-- [ ] `EditorState` (load, save, publish, field mutations)
-- [ ] `<se-block-editor>` web component — ProseMirror instance for a single `RichTextField`
-- [ ] `<se-field-input>` for TextField and RichTextField
-- [ ] Pre-compiled static assets shipped in `starlette_editor/static/`
+- [x] `ProseMirrorBridge.generate_schema()` — derives ProseMirror schema + `blockTypes` metadata from BlockRegistry
+- [x] `/api/editor-schema` endpoint (registered on CMS via extension route)
+- [x] `RichTextField.field_meta()` emits `"field_type": "rich_text"`; `ImageField` emits `"field_type": "image"`
+- [x] `fieldWidget()` in `editor.js` driven by `field_type` from `cms:field_meta` (heuristics kept as fallback)
+- [x] PM doc init/save: `RichTextField` round-trips as ProseMirror JSON (not markdown)
+- [x] Editor SPA (`editor.js`) already ships as working vanilla JS; no esbuild/TypeScript pipeline needed at this phase
+- [x] Tests: `test_prosemirror_bridge.py` (13), `test_rich_text_field_meta.py` (3), `test_editor_schema_integration.py` (4)
 
 ---
 

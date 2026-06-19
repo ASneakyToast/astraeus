@@ -56,14 +56,20 @@ class TextField(_BaseField):
 class RichTextField(_BaseField):
     """Stores ProseMirror document JSON."""
 
-    pass
+    def field_meta(self) -> dict[str, Any]:
+        m = super().field_meta()
+        m["field_type"] = "rich_text"
+        return m
 
 
 @dataclass
 class ImageField(_BaseField):
     """Stores a media reference — URL string or Mediakit asset key."""
 
-    pass
+    def field_meta(self) -> dict[str, Any]:
+        m = super().field_meta()
+        m["field_type"] = "image"
+        return m
 
 
 @dataclass

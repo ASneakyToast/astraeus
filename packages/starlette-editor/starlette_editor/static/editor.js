@@ -315,9 +315,24 @@ function getOrderedFields(typeInfo) {
  * Determine what kind of UI widget to use for a field.
  * Returns one of: 'prosemirror' | 'textarea' | 'input' | 'number'
  *                 | 'boolean' | 'select' | 'json'
+ *
+ * Explicit ``field_type`` from cms:field_meta takes precedence over all
+ * heuristics.  Heuristic fallbacks are kept for schemas that pre-date the
+ * field_type tag or for fields with no explicit type annotation.
  */
 function fieldWidget(name, prop, meta) {
-  // Explicit ProseMirror fields
+  // --- Authoritative field_type from cms:field_meta (set by Python field classes) ---
+  const ft = meta?.field_type;
+  if (ft === 'rich_text')    return 'prosemirror';
+  if (ft === 'select')       return 'select';
+  if (ft === 'number')       return 'number';
+  if (ft === 'boolean')      return 'boolean';
+  if (ft === 'json')         return 'json';
+  // image, url, document_ref, text → fall through to heuristics below
+  // (image/url/document_ref all render as text input for now)
+
+  // --- Legacy heuristics (backwards compat for fields without field_type) ---
+  // Explicit ProseMirror fields by name convention
   if (name === 'body_markdown' || name.includes('markdown')) return 'prosemirror';
 
   const type = prop.type;
@@ -846,8 +861,20 @@ async function mountProseMirrorEditors(fields) {
     const mountEl = document.getElementById(`pm-mount-${name}`);
     if (!mountEl) continue;
 
-    const markdownSource = state.formData[name] || '';
-    const doc = markdownToPmDoc(markdownSource, schemaWithLists);
+    const rawValue = state.formData[name];
+    // If the stored value is already a ProseMirror JSON doc object (RichTextField),
+    // restore it directly; otherwise fall back to the plain-text markdown path.
+    let doc;
+    if (rawValue && typeof rawValue === 'object' && rawValue.type === 'doc') {
+      try {
+        doc = PM.model.Node.fromJSON(schemaWithLists, rawValue);
+      } catch (e) {
+        console.warn('[editor] Failed to restore PM doc from JSON, falling back to markdown:', e);
+        doc = markdownToPmDoc('', schemaWithLists);
+      }
+    } else {
+      doc = markdownToPmDoc(rawValue || '', schemaWithLists);
+    }
 
     const pmState = EditorState.create({
       doc,
@@ -860,8 +887,13 @@ async function mountProseMirrorEditors(fields) {
         const newState = view.state.apply(transaction);
         view.updateState(newState);
         if (transaction.docChanged) {
-          const md = pmDocToMarkdown(newState.doc);
-          onFieldChange(name, md);
+          // Store as PM JSON when this field is a RichTextField (field_type === 'rich_text'),
+          // otherwise serialise to markdown for backwards compatibility.
+          const fieldMeta = (state.schema?.[state.activeType]?.field_meta || {})[name] || {};
+          const value = fieldMeta.field_type === 'rich_text'
+            ? newState.doc.toJSON()
+            : pmDocToMarkdown(newState.doc);
+          onFieldChange(name, value);
         }
       },
     });
