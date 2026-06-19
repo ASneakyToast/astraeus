@@ -205,7 +205,7 @@ Together these establish Astraeus as a **governed data platform** — not just a
 
 ---
 
-## Phase 6 — mediakit core
+## Phase 6 — mediakit core ✅
 
 **Goal:** A running Mediakit server that can accept uploads, serve IIIF derivatives, and maintain the catalog.
 
@@ -213,43 +213,43 @@ Together these establish Astraeus as a **governed data platform** — not just a
 
 **Done when:** The upload flow works end-to-end against a real S3-compatible bucket, IIIF derivatives are generated and cached, and the catalog accurately reflects the bucket state.
 
-### 6a — Storage backend
-- [ ] `S3CompatibleBackend`: `prepare_upload`, `confirm_exists`, `get_url`, `delete`, `list_objects`
-- [ ] Presigned PUT URL generation (boto3)
-- [ ] Presigned GET URL generation
-- [ ] Public URL mode (`public_read=True`)
-- [ ] Works against GCS, Cloudflare R2, AWS S3 (endpoint_url configuration)
+### 6a — Storage backend ✅
+- [x] `S3CompatibleBackend`: `prepare_upload`, `confirm_exists`, `get_url`, `delete`, `list_objects`
+- [x] Presigned PUT URL generation (obstore)
+- [x] Presigned GET URL generation
+- [x] Public URL mode (`public_read=True`)
+- [x] Works against GCS, Cloudflare R2, AWS S3 (endpoint_url configuration)
 
-### 6b — Upload flow
-- [ ] `POST /upload/prepare` — validates request, generates presigned PUT URL, returns `{ upload_url, key, expires_at }`
-- [ ] `POST /upload/confirm` — verifies object exists, runs processing pipeline, inserts into catalog
-- [ ] Processing pipeline: EXIF strip, WebP conversion, max dimension cap (Pillow)
-- [ ] Content-addressed key generation: `originals/{sha256_prefix}/{filename}`
+### 6b — Upload flow ✅
+- [x] `POST /upload/prepare` — validates request, generates presigned PUT URL, returns `{ upload_url, key, expires_at }`
+- [x] `POST /upload/confirm` — verifies object exists, runs processing pipeline, inserts into catalog
+- [x] Processing pipeline: EXIF strip, WebP conversion, max dimension cap (Pillow) — `mediakit/processing/pipeline.py`
+- [x] Content-addressed key generation: `originals/{sha256_prefix}/{filename}`
 
-### 6c — Catalog
-- [ ] `Catalog.insert_asset`, `get_asset`, `list_assets`, `update_asset`, `delete_asset`
-- [ ] `get_or_create_derivative`, `insert_derivative`
-- [ ] `set_references` (upsert-and-replace), `remove_references`
-- [ ] `find_orphans`, `export_csv`
+### 6c — Catalog ✅
+- [x] `Catalog.insert_asset`, `get_asset`, `list_assets`, `update_asset`, `delete_asset`
+- [x] `get_or_create_derivative`, `insert_derivative`
+- [x] `set_references` (upsert-and-replace), `remove_references`
+- [x] `find_orphans`, `export_csv`
 
-### 6d — IIIF Image API
-- [ ] IIIF URL parsing and parameter validation
-- [ ] Level 1 compliance: `full/square/x,y,w,h` region; `full/max/w,/,h/w,h/!w,h` size; `0/90/180/270` rotation; `default/color/gray` quality; `jpg/webp/png` format
-- [ ] `GET /iiif/{key}/info.json`
-- [ ] `GET /iiif/{key}/{region}/{size}/{rotation}/{quality}.{format}` — 302 redirect to cached derivative (or generate + cache)
+### 6d — IIIF Image API ✅
+- [x] IIIF URL parsing and parameter validation — `mediakit/routes/iiif.py`
+- [x] Level 1 compliance: `full/square/x,y,w,h` region; `full/max/w,/,h/w,h/!w,h` size; `0/90/180/270` rotation; `default/color/gray` quality; `jpg/webp/png` format
+- [x] `GET /iiif/{key}/info.json`
+- [x] `GET /iiif/{key}/{region}/{size}/{rotation}/{quality}.{format}` — 302 redirect to cached derivative (or generate + cache)
 
-### 6e — Asset routes
-- [ ] `GET /assets` — paginated, filterable
-- [ ] `GET /assets/{key}` — metadata + URL
-- [ ] `PATCH /assets/{key}` — update alt_text, tags
-- [ ] `DELETE /assets/{key}` — removes from bucket, catalog, and all references
+### 6e — Asset routes ✅
+- [x] `GET /assets` — paginated, filterable
+- [x] `GET /assets/{key}` — metadata + URL
+- [x] `PATCH /assets/{key}` — update alt_text, tags
+- [x] `DELETE /assets/{key}` — removes from bucket, catalog, and all references
 
-### 6f — References route
-- [ ] `POST /references` — upsert-and-replace for a content record
-- [ ] `DELETE /references` — remove all references for a content record
+### 6f — References route ✅
+- [x] `POST /references` — upsert-and-replace for a content record
+- [x] `DELETE /references` — remove all references for a content record
 
-### 6g — Auth
-- [ ] Same three modes as starlette-cms: none, apikey, callable
+### 6g — Auth ✅
+- [x] Same three modes as starlette-cms: none, apikey, callable
 
 ---
 

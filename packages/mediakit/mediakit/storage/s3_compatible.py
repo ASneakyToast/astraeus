@@ -92,7 +92,9 @@ class S3CompatibleBackend:
 
         import obstore
 
-        return await obstore.sign_async(self._get_store(), "GET", key, timedelta(seconds=expires_in))
+        return await obstore.sign_async(
+            self._get_store(), "GET", key, timedelta(seconds=expires_in)
+        )
 
     async def delete(self, key: str) -> None:
         """Delete the object from the bucket."""
@@ -111,11 +113,13 @@ class S3CompatibleBackend:
         results: list[dict] = []
         async for batch in obstore.list(self._get_store(), prefix=prefix or None):
             for obj in batch:
-                results.append({
-                    "key": obj["path"],
-                    "size": obj.get("size", 0),
-                    "last_modified": str(obj.get("last_modified", "")),
-                })
+                results.append(
+                    {
+                        "key": obj["path"],
+                        "size": obj.get("size", 0),
+                        "last_modified": str(obj.get("last_modified", "")),
+                    }
+                )
                 if len(results) >= max_keys:
                     return results
         return results

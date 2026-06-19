@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-
 from mediakit.config import MediakitConfig
 from mediakit.storage.s3_compatible import S3CompatibleBackend
 

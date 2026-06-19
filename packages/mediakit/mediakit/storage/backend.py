@@ -7,7 +7,6 @@ from typing import Protocol, runtime_checkable
 
 @runtime_checkable
 class StorageBackend(Protocol):
-
     async def prepare_upload(
         self,
         key: str,

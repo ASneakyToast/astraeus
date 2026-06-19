@@ -6,7 +6,6 @@ import json as _json
 
 import pytest
 from httpx import AsyncClient
-
 from mediakit.app import MediaKit
 
 
@@ -23,6 +22,7 @@ AUTH = {"Authorization": "Bearer test-secret"}
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 async def _seed_asset(mk: MediaKit, key: str = "originals/abc12345/photo.webp") -> dict:
     return await mk.catalog.insert_asset(
         key=key,
@@ -37,6 +37,7 @@ async def _seed_asset(mk: MediaKit, key: str = "originals/abc12345/photo.webp") 
 # ---------------------------------------------------------------------------
 # POST /references
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_set_references_success(client: AsyncClient, mk: MediaKit) -> None:
@@ -132,6 +133,7 @@ async def test_set_references_invalid_asset_keys_type(client: AsyncClient) -> No
 # DELETE /references
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_remove_references_success(client: AsyncClient, mk: MediaKit) -> None:
     await _seed_asset(mk)
@@ -147,7 +149,8 @@ async def test_remove_references_success(client: AsyncClient, mk: MediaKit) -> N
     )
     # Now remove
     resp = await _delete_with_body(
-        client, "/references",
+        client,
+        "/references",
         body={"host_model": "BlogPost", "host_id": "post-3"},
         headers=AUTH,
     )
@@ -162,7 +165,8 @@ async def test_remove_references_success(client: AsyncClient, mk: MediaKit) -> N
 async def test_remove_references_idempotent(client: AsyncClient) -> None:
     """Removing refs for a non-existent host silently succeeds."""
     resp = await _delete_with_body(
-        client, "/references",
+        client,
+        "/references",
         body={"host_model": "Never", "host_id": "existed"},
         headers=AUTH,
     )
@@ -172,7 +176,8 @@ async def test_remove_references_idempotent(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_remove_references_unauthorized(client: AsyncClient) -> None:
     resp = await _delete_with_body(
-        client, "/references",
+        client,
+        "/references",
         body={"host_model": "M", "host_id": "1"},
     )
     assert resp.status_code == 401
@@ -181,7 +186,8 @@ async def test_remove_references_unauthorized(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_remove_references_missing_fields(client: AsyncClient) -> None:
     resp = await _delete_with_body(
-        client, "/references",
+        client,
+        "/references",
         body={"host_model": "M"},
         headers=AUTH,
     )

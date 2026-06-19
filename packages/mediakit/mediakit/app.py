@@ -63,11 +63,13 @@ class MediaKit:
         from mediakit.api.assets import make_asset_routes
         from mediakit.api.references import make_reference_routes
         from mediakit.api.upload import make_upload_routes
+        from mediakit.routes.iiif import make_iiif_routes
 
         routes = [
             *make_upload_routes(self),
             *make_asset_routes(self),
             *make_reference_routes(self),
+            *make_iiif_routes(self),
         ]
         return Starlette(routes=routes, lifespan=self.lifespan)
 

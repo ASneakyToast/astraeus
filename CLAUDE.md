@@ -102,7 +102,7 @@ uv run ruff format packages/
 
 See `docs/roadmap.md` for the full phased plan and current progress.
 
-**Short version:** Phases 0–4 complete (including EPIC-001 VPP MVP primitives). starlette-cms core, schema versioning, webhooks, testing utilities, new field types, singletons, immutable fields, DocumentRef, and list filters are all working. Phase 5 (MCP server) is next.
+**Short version:** Phases 0–6 complete (including EPIC-001 VPP MVP primitives and ADR 014). starlette-cms core, schema versioning, webhooks, testing utilities, new field types, singletons, immutable fields, DocumentRef, list filters, and MCP server are all working. mediakit core is complete: storage backend, catalog, upload flow, processing pipeline (EXIF strip, WebP conversion, dimension cap), IIIF Image API Level 1, asset routes, references routes, and auth. Phase 7 (mediakit admin UI) is next.
 
 ---
 

@@ -2,23 +2,20 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-
 from mediakit.app import MediaKit
 from mediakit.catalog.catalog import Catalog
 from mediakit.config import MediakitConfig
 from mediakit.storage.backend import StorageBackend
 
-
 # ---------------------------------------------------------------------------
 # FakeStorage — in-memory StorageBackend for HTTP endpoint tests
 # ---------------------------------------------------------------------------
+
 
 class FakeStorage:
     """In-memory StorageBackend that satisfies the protocol without S3.
@@ -67,6 +64,7 @@ assert isinstance(FakeStorage(MediakitConfig(bucket="x")), StorageBackend), (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def tmp_db_path(tmp_path) -> str:
     return str(tmp_path / "test_media.db")
@@ -106,7 +104,7 @@ async def mk(mk_config: MediakitConfig) -> AsyncGenerator[MediaKit, None]:
 
 @pytest_asyncio.fixture
 async def client(mk: MediaKit) -> AsyncGenerator[AsyncClient, None]:
-    """httpx AsyncClient wired to the MediaKit ASGI app (no lifespan — state injected by mk fixture)."""
+    """httpx AsyncClient wired to the MediaKit ASGI app (no lifespan — state injected by mk)."""
     # Override the app's lifespan so our already-initialised mk is used
     app = mk._build_app()
     # Patch storage/catalog directly into routes by using the mk instance that

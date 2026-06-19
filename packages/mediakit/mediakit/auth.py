@@ -41,7 +41,7 @@ async def check_auth(request: Request, mk: MediaKit) -> bool:
         header = request.headers.get("Authorization", "")
         if not header.startswith("Bearer "):
             return False
-        token = header[len("Bearer "):]
+        token = header[len("Bearer ") :]
         return token == mk.config.api_key
 
     if callable(auth):

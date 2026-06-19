@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import pytest
 from httpx import AsyncClient
-
 from mediakit.app import MediaKit
-
 
 AUTH = {"Authorization": "Bearer test-secret"}
 
@@ -14,6 +12,7 @@ AUTH = {"Authorization": "Bearer test-secret"}
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 async def _seed_asset(mk: MediaKit, key: str = "originals/abc12345/photo.webp") -> dict:
     """Insert a test asset directly via catalog."""
@@ -32,6 +31,7 @@ async def _seed_asset(mk: MediaKit, key: str = "originals/abc12345/photo.webp") 
 # ---------------------------------------------------------------------------
 # GET /assets
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_list_assets_empty(client: AsyncClient) -> None:
@@ -93,6 +93,7 @@ async def test_list_assets_no_auth_required(client: AsyncClient) -> None:
 # GET /assets/{key:path}
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_asset_success(client: AsyncClient, mk: MediaKit) -> None:
     await _seed_asset(mk)
@@ -120,6 +121,7 @@ async def test_get_asset_no_auth_required(client: AsyncClient, mk: MediaKit) -> 
 # ---------------------------------------------------------------------------
 # PATCH /assets/{key:path}
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_patch_asset_alt_text(client: AsyncClient, mk: MediaKit) -> None:
@@ -170,6 +172,7 @@ async def test_patch_asset_not_found(client: AsyncClient) -> None:
 # ---------------------------------------------------------------------------
 # DELETE /assets/{key:path}
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_delete_asset_success(client: AsyncClient, mk: MediaKit) -> None:

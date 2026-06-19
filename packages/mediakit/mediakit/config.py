@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -10,9 +10,9 @@ from pydantic import BaseModel
 class MediakitConfig(BaseModel):
     # Storage
     bucket: str
-    provider: str = "s3"                   # "s3" (AWS S3, R2, MinIO) or "gcs"
-    endpoint_url: str | None = None        # None for AWS S3; set for R2 or any S3-compatible endpoint
-    aws_access_key_id: str | None = None   # falls back to AWS_ACCESS_KEY_ID env var
+    provider: str = "s3"  # "s3" (AWS S3, R2, MinIO) or "gcs"
+    endpoint_url: str | None = None  # None for AWS S3; set for R2/MinIO
+    aws_access_key_id: str | None = None  # falls back to AWS_ACCESS_KEY_ID env var
     aws_secret_access_key: str | None = None
     region_name: str = "auto"
 
@@ -27,12 +27,12 @@ class MediakitConfig(BaseModel):
 
     # Auth
     api_key: str | None = None
-    auth: Any | None = None                # callable (request) -> bool, or None
+    auth: Any | None = None  # callable (request) -> bool, or None
 
     # Serving
     public_read: bool = False
-    presign_expires: int = 3600            # 1 hour
-    upload_expires: int = 900              # 15 minutes
+    presign_expires: int = 3600  # 1 hour
+    upload_expires: int = 900  # 15 minutes
 
     # Paths
     mount_path: str = "/media"

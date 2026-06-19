@@ -60,7 +60,6 @@ def _row_to_dict(row: aiosqlite.Row, description) -> dict:
 
 
 class Catalog:
-
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
         self._db: aiosqlite.Connection | None = None
@@ -107,9 +106,19 @@ class Catalog:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                key, content_hash, bucket, original_key, filename,
-                content_type, size, width, height, alt_text, tags_json,
-                now, now,
+                key,
+                content_hash,
+                bucket,
+                original_key,
+                filename,
+                content_type,
+                size,
+                width,
+                height,
+                alt_text,
+                tags_json,
+                now,
+                now,
             ),
         )
         await self._db.commit()
@@ -120,9 +129,7 @@ class Catalog:
     async def get_asset(self, key: str) -> dict | None:
         """Return the asset row dict for *key*, or ``None`` if not found."""
         assert self._db is not None
-        async with self._db.execute(
-            "SELECT * FROM assets WHERE key = ?", (key,)
-        ) as cursor:
+        async with self._db.execute("SELECT * FROM assets WHERE key = ?", (key,)) as cursor:
             row = await cursor.fetchone()
             if row is None:
                 return None
@@ -208,15 +215,9 @@ class Catalog:
         """
         assert self._db is not None
         # Delete references and derivatives manually (aiosqlite doesn't enforce FK by default)
-        await self._db.execute(
-            "DELETE FROM asset_references WHERE asset_key = ?", (key,)
-        )
-        await self._db.execute(
-            "DELETE FROM derivatives WHERE original_key = ?", (key,)
-        )
-        cursor = await self._db.execute(
-            "DELETE FROM assets WHERE key = ?", (key,)
-        )
+        await self._db.execute("DELETE FROM asset_references WHERE asset_key = ?", (key,))
+        await self._db.execute("DELETE FROM derivatives WHERE original_key = ?", (key,))
+        cursor = await self._db.execute("DELETE FROM assets WHERE key = ?", (key,))
         await self._db.commit()
         return cursor.rowcount > 0
 
@@ -247,9 +248,7 @@ class Catalog:
         )
         await self._db.commit()
         row_id = cursor.lastrowid
-        async with self._db.execute(
-            "SELECT * FROM derivatives WHERE id = ?", (row_id,)
-        ) as cur:
+        async with self._db.execute("SELECT * FROM derivatives WHERE id = ?", (row_id,)) as cur:
             row = await cur.fetchone()
             assert row is not None
             return _row_to_dict(row, cur.description)

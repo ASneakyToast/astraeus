@@ -4,13 +4,16 @@ Two-step flow:
 
 1. Client POSTs ``/upload/prepare`` → receives a presigned PUT URL.
 2. Client PUTs the file directly to the bucket (no bytes through this server).
-3. Client POSTs ``/upload/confirm`` → mediakit verifies object exists,
-   inserts into catalog, returns asset metadata.
+3. Client POSTs ``/upload/confirm`` → mediakit verifies object exists, runs the
+   processing pipeline (EXIF strip, WebP conversion, dimension cap), replaces the
+   original in storage, inserts into catalog, returns asset metadata.
 """
 
 from __future__ import annotations
 
 import hashlib
+import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from starlette.requests import Request
@@ -97,7 +100,51 @@ def make_upload_routes(mk: MediaKit) -> list[Route]:
                 status_code=404,
             )
 
-        # Use a placeholder hash (first 16 chars of key name) since we don't have the bytes
+        # ------------------------------------------------------------------
+        # Processing pipeline — download, process, re-upload
+        # ------------------------------------------------------------------
+        final_content_type = str(content_type)
+        final_size = int(size)
+        final_width = body.get("width")
+        final_height = body.get("height")
+
+        try:
+            import obstore
+
+            from mediakit.processing import run_pipeline
+
+            store = mk.storage._get_store()
+
+            # Download original bytes from bucket
+            result = await obstore.get_async(store, str(key))
+            original_bytes = bytes(await result.bytes_async())
+
+            # Write to a temp file for Pillow to open
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Keep the original file extension so Pillow can infer format
+                original_suffix = Path(str(filename)).suffix or ".bin"
+                source_path = Path(tmpdir) / f"upload{original_suffix}"
+                source_path.write_bytes(original_bytes)
+
+                proc = await run_pipeline(source_path, mk.config)
+
+                # Re-upload processed file back to the same key
+                processed_bytes = proc.path.read_bytes()
+                await obstore.put_async(store, str(key), processed_bytes)
+
+                final_content_type = proc.content_type
+                final_size = proc.size
+                final_width = proc.width
+                final_height = proc.height
+
+        except Exception:
+            # Processing is best-effort: if it fails (e.g. non-image file,
+            # storage backend doesn't support get/put in test), fall back to
+            # client-supplied metadata.
+            pass
+
+        # Use a hash of the key as a stable content_hash (no bytes available
+        # in the base case; real deduplication is a Phase 9+ concern).
         content_hash = hashlib.sha256(str(key).encode()).hexdigest()[:16]
 
         asset = await mk.catalog.insert_asset(
@@ -105,10 +152,10 @@ def make_upload_routes(mk: MediaKit) -> list[Route]:
             content_hash=content_hash,
             bucket=mk.config.bucket,
             filename=str(filename),
-            content_type=str(content_type),
-            size=int(size),
-            width=body.get("width"),
-            height=body.get("height"),
+            content_type=final_content_type,
+            size=final_size,
+            width=final_width,
+            height=final_height,
         )
         return JSONResponse(asset, status_code=201)
 

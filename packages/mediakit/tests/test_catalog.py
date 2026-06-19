@@ -5,13 +5,12 @@ from __future__ import annotations
 import os
 
 import pytest
-
 from mediakit.catalog.catalog import Catalog
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _sample_asset(key: str = "originals/abc12345/photo.webp") -> dict:
     return {
@@ -27,6 +26,7 @@ def _sample_asset(key: str = "originals/abc12345/photo.webp") -> dict:
 # ---------------------------------------------------------------------------
 # insert_asset / get_asset
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_insert_and_get_asset(catalog: Catalog) -> None:
@@ -66,12 +66,14 @@ async def test_insert_asset_with_optional_fields(catalog: Catalog) -> None:
     assert row["alt_text"] == "A lovely photo"
     # tags stored as JSON — raw value is a JSON string
     import json
+
     assert json.loads(row["tags"]) == ["landscape", "nature"]
 
 
 # ---------------------------------------------------------------------------
 # list_assets
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_list_assets_empty(catalog: Catalog) -> None:
@@ -164,6 +166,7 @@ async def test_list_assets_filter_tags(catalog: Catalog) -> None:
 # update_asset
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_update_asset_alt_text(catalog: Catalog) -> None:
     await catalog.insert_asset(**_sample_asset())
@@ -177,9 +180,7 @@ async def test_update_asset_tags(catalog: Catalog) -> None:
     import json
 
     await catalog.insert_asset(**_sample_asset())
-    updated = await catalog.update_asset(
-        "originals/abc12345/photo.webp", tags=["foo", "bar"]
-    )
+    updated = await catalog.update_asset("originals/abc12345/photo.webp", tags=["foo", "bar"])
     assert updated is not None
     assert json.loads(updated["tags"]) == ["foo", "bar"]
 
@@ -193,6 +194,7 @@ async def test_update_asset_not_found(catalog: Catalog) -> None:
 # ---------------------------------------------------------------------------
 # delete_asset
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_delete_asset(catalog: Catalog) -> None:
@@ -213,6 +215,7 @@ async def test_delete_asset_not_found(catalog: Catalog) -> None:
 # ---------------------------------------------------------------------------
 # Derivatives
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_insert_derivative(catalog: Catalog) -> None:
@@ -269,12 +272,11 @@ async def test_get_or_create_derivative_returns_existing(catalog: Catalog) -> No
 # References
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_set_references(catalog: Catalog) -> None:
     await catalog.insert_asset(**_sample_asset())
-    await catalog.set_references(
-        "BlogPost", "post-1", ["originals/abc12345/photo.webp"]
-    )
+    await catalog.set_references("BlogPost", "post-1", ["originals/abc12345/photo.webp"])
     # No error means success; verify via find_orphans (no orphans now)
     orphans = await catalog.find_orphans()
     assert "originals/abc12345/photo.webp" not in orphans
@@ -316,6 +318,7 @@ async def test_remove_references(catalog: Catalog) -> None:
 # find_orphans
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_find_orphans_all_orphans(catalog: Catalog) -> None:
     await catalog.insert_asset(**_sample_asset())
@@ -334,6 +337,7 @@ async def test_find_orphans_none_when_referenced(catalog: Catalog) -> None:
 # ---------------------------------------------------------------------------
 # export_csv
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_export_csv(catalog: Catalog, tmp_path) -> None:

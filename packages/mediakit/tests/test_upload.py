@@ -5,13 +5,13 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
-
 AUTH = {"Authorization": "Bearer test-secret"}
 
 
 # ---------------------------------------------------------------------------
 # POST /upload/prepare
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_prepare_upload_success(client: AsyncClient) -> None:
@@ -61,6 +61,7 @@ async def test_prepare_upload_invalid_json(client: AsyncClient) -> None:
 # ---------------------------------------------------------------------------
 # POST /upload/confirm
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_confirm_upload_success(client: AsyncClient) -> None:
