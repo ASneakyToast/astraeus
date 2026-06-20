@@ -147,7 +147,28 @@ class CMS:
         The class is converted to a Pydantic model before storage.
         """
 
+        # Fields that exist as top-level columns on CMSDocument — defining them
+        # in the body schema is always a mistake and will cause them to appear
+        # twice (once from the CMS row, once from the body JSON).
+        _RESERVED_FIELDS = {"id", "slug", "doc_type", "published", "created_at", "updated_at", "meta"}
+
         def decorator(cls):
+            # Warn loudly if any body field shadows a CMS system field
+            body_fields = {
+                k for k, v in vars(cls).items()
+                if not k.startswith("_") and not callable(v)
+            }
+            shadowed = body_fields & _RESERVED_FIELDS
+            if shadowed:
+                import warnings
+                warnings.warn(
+                    f"@cms.document({name!r}): body field(s) {sorted(shadowed)} shadow CMS "
+                    f"system fields. These fields are already tracked at the top level of every "
+                    f"document — remove them from the body schema to avoid duplicates in the editor "
+                    f"and ambiguity in the API response.",
+                    stacklevel=3,
+                )
+
             cls.__document_type__ = name
             model = build_document_model(name, cls)
             self._document_types[name] = model
