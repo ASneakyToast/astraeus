@@ -96,12 +96,22 @@ class ListField(_BaseField):
             self.item_type = item_type
             self.blocks = []
 
+    def field_meta(self) -> dict[str, Any]:
+        m = super().field_meta()
+        m["field_type"] = "block_list"
+        return m
+
 
 @dataclass
 class BlockField(_BaseField):
     """A single nested block."""
 
     block_type: Any = None
+
+    def field_meta(self) -> dict[str, Any]:
+        m = super().field_meta()
+        m["field_type"] = "block"
+        return m
 
 
 @dataclass

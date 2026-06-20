@@ -11,9 +11,6 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from starlette.applications import Starlette
-from starlette.routing import Mount
-from starlette.staticfiles import StaticFiles
-
 from starlette_cms.prosemirror import ProseMirrorBridge
 
 if TYPE_CHECKING:
@@ -37,7 +34,7 @@ class Editor:
     def __init__(
         self,
         *,
-        cms: "CMS",
+        cms: CMS,
         media_base: str | None = None,
         mount_path: str = "/editor",
         auth: Callable | None = None,

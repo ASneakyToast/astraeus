@@ -84,3 +84,41 @@ async def test_shell_injects_config():
         resp = await client.get("/editor/shell")
 
     assert "__EDITOR_CONFIG__" in resp.text
+
+
+@pytest.mark.anyio
+async def test_shell_injects_media_base_null():
+    """Shell HTML contains mediaBase: null when Editor has no media_base."""
+    from starlette_cms.app import CMS
+    from starlette_editor.app import Editor
+
+    cms = CMS(database_url="sqlite:///:memory:", auth="none", read_auth=False)
+    editor = Editor(cms=cms, mount_path="/editor")  # no media_base
+
+    app = Starlette(routes=[Mount("/editor", app=editor.app)])
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        resp = await client.get("/editor/shell")
+
+    assert resp.status_code == 200
+    assert "mediaBase: null" in resp.text
+
+
+@pytest.mark.anyio
+async def test_shell_injects_media_base():
+    """Shell HTML contains the configured media_base path."""
+    from starlette_cms.app import CMS
+    from starlette_editor.app import Editor
+
+    cms = CMS(database_url="sqlite:///:memory:", auth="none", read_auth=False)
+    editor = Editor(cms=cms, mount_path="/editor", media_base="/media")
+
+    app = Starlette(routes=[Mount("/editor", app=editor.app)])
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        resp = await client.get("/editor/shell")
+
+    assert resp.status_code == 200
+    assert '"/media"' in resp.text

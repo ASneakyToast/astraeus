@@ -330,12 +330,14 @@ function fieldWidget(name, prop, meta) {
   // --- Authoritative field_type from cms:field_meta (set by Python field classes) ---
   const ft = meta?.field_type;
   if (ft === 'rich_text')    return 'prosemirror';
+  if (ft === 'block_list')   return 'block_canvas';
+  if (ft === 'block')        return 'block_canvas';  // single nested block — same canvas, 1 card
+  if (ft === 'image')        return 'image_picker';
   if (ft === 'select')       return 'select';
   if (ft === 'number')       return 'number';
   if (ft === 'boolean')      return 'boolean';
   if (ft === 'json')         return 'json';
-  // image, url, document_ref, text → fall through to heuristics below
-  // (image/url/document_ref all render as text input for now)
+  // url, document_ref, text → fall through to heuristics below
 
   // --- Legacy heuristics (backwards compat for fields without field_type) ---
   // Explicit ProseMirror fields by name convention
@@ -649,6 +651,11 @@ function renderForm() {
     if (group) form.appendChild(group);
   }
 
+  // Meta panel — only for existing documents
+  if (state.activeDoc) {
+    form.appendChild(buildMetaPanel(state.activeDoc));
+  }
+
   formArea.appendChild(form);
 
   // Mount ProseMirror editors after the DOM is in place
@@ -691,6 +698,14 @@ function buildFieldGroup(name, prop, meta) {
   const currentVal = state.formData[name] ?? getDefaultValue(prop, meta);
 
   switch (widget) {
+    case 'block_canvas':
+      group.appendChild(buildBlockCanvas(name, prop, meta, state.schema?.[state.activeType]?.schema, currentVal));
+      break;
+
+    case 'image_picker':
+      group.appendChild(buildImagePickerField(name, currentVal));
+      break;
+
     case 'prosemirror':
       group.appendChild(buildProseMirrorPlaceholder(name, currentVal));
       break;
@@ -810,6 +825,7 @@ function buildProseMirrorPlaceholder(name, currentValue) {
   const toolbar = el('div', { class: 'pm-toolbar', id: `pm-toolbar-${name}` },
     el('button', { class: 'pm-toolbar__btn', title: 'Bold', 'data-cmd': 'toggleBold' }, 'B'),
     el('button', { class: 'pm-toolbar__btn', title: 'Italic', 'data-cmd': 'toggleItalic' }, 'I'),
+    el('button', { class: 'pm-toolbar__btn pm-toolbar__btn--mono', title: 'Inline code', 'data-cmd': 'toggleCode' }, '`'),
     el('span', { class: 'pm-toolbar__sep' }),
     el('button', { class: 'pm-toolbar__btn', title: 'Heading 1', 'data-cmd': 'h1' }, 'H1'),
     el('button', { class: 'pm-toolbar__btn', title: 'Heading 2', 'data-cmd': 'h2' }, 'H2'),
@@ -892,6 +908,9 @@ async function mountProseMirrorEditors(fields) {
       dispatchTransaction(transaction) {
         const newState = view.state.apply(transaction);
         view.updateState(newState);
+        // Refresh toolbar active state on every transaction (selection moves too)
+        const toolbar = document.getElementById(`pm-toolbar-${name}`);
+        updateToolbarState(view, toolbar);
         if (transaction.docChanged) {
           // Store as PM JSON when this field is a RichTextField (field_type === 'rich_text'),
           // otherwise serialise to markdown for backwards compatibility.
@@ -923,25 +942,633 @@ async function mountProseMirrorEditors(fields) {
 /** Execute a named ProseMirror command from the toolbar. */
 function execPmCommand(view, schema, cmd, { toggleMark, setBlockType, wrapIn }) {
   const { state, dispatch } = view;
+  const { toggleList } = window.PM.schemaList;
   const cmds = {
-    toggleBold: toggleMark(schema.marks.strong),
-    toggleItalic: toggleMark(schema.marks.em),
-    h1: setBlockType(schema.nodes.heading, { level: 1 }),
-    h2: setBlockType(schema.nodes.heading, { level: 2 }),
-    paragraph: setBlockType(schema.nodes.paragraph),
-    bulletList: wrapIn(schema.nodes.bullet_list),
-    orderedList: wrapIn(schema.nodes.ordered_list),
-    blockquote: wrapIn(schema.nodes.blockquote),
+    toggleBold:    toggleMark(schema.marks.strong),
+    toggleItalic:  toggleMark(schema.marks.em),
+    toggleCode:    schema.marks.code ? toggleMark(schema.marks.code) : () => false,
+    h1:            setBlockType(schema.nodes.heading, { level: 1 }),
+    h2:            setBlockType(schema.nodes.heading, { level: 2 }),
+    paragraph:     setBlockType(schema.nodes.paragraph),
+    // Use toggleList so clicking an active list unwraps it
+    bulletList:    toggleList(schema.nodes.bullet_list, schema.nodes.list_item),
+    orderedList:   toggleList(schema.nodes.ordered_list, schema.nodes.list_item),
+    blockquote:    wrapIn(schema.nodes.blockquote),
   };
   const fn = cmds[cmd];
   if (fn) fn(state, dispatch);
   view.focus();
 }
 
+/** Return true if the given mark type is active in the current selection. */
+function hasMark(pmState, markTypeName) {
+  const schema = pmState.schema;
+  const markType = schema.marks[markTypeName];
+  if (!markType) return false;
+  const { from, $from, to, empty } = pmState.selection;
+  if (empty) return !!markType.isInSet(pmState.storedMarks || $from.marks());
+  return pmState.doc.rangeHasMark(from, to, markType);
+}
+
+/** Return true if the cursor is inside a list node of the given type. */
+function isInList(pmState, listTypeName) {
+  const schema = pmState.schema;
+  const listType = schema.nodes[listTypeName];
+  if (!listType) return false;
+  const { $from } = pmState.selection;
+  for (let d = $from.depth; d >= 0; d--) {
+    if ($from.node(d).type === listType) return true;
+  }
+  return false;
+}
+
+/** Refresh toolbar button active states based on current ProseMirror selection. */
+function updateToolbarState(view, toolbar) {
+  if (!toolbar) return;
+  const { state: pmState } = view;
+  const { $from } = pmState.selection;
+  const parentType = $from.parent.type.name;
+  const parentLevel = $from.parent.attrs?.level;
+
+  toolbar.querySelectorAll('[data-cmd]').forEach(btn => {
+    const cmd = btn.getAttribute('data-cmd');
+    let active = false;
+    switch (cmd) {
+      case 'toggleBold':   active = hasMark(pmState, 'strong'); break;
+      case 'toggleItalic': active = hasMark(pmState, 'em'); break;
+      case 'toggleCode':   active = hasMark(pmState, 'code'); break;
+      case 'h1':           active = parentType === 'heading' && parentLevel === 1; break;
+      case 'h2':           active = parentType === 'heading' && parentLevel === 2; break;
+      case 'blockquote':   active = parentType === 'blockquote'; break;
+      case 'bulletList':   active = isInList(pmState, 'bullet_list'); break;
+      case 'orderedList':  active = isInList(pmState, 'ordered_list'); break;
+    }
+    btn.classList.toggle('is-active', active);
+  });
+}
+
 function humanizeFieldName(name) {
   return name
     .replace(/_/g, ' ')
     .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+
+/* =====================================================================
+   BLOCK CANVAS — renders ListField / BlockField arrays as interactive cards
+   ===================================================================== */
+
+/**
+ * Extract block type metadata for a list/block field from the JSON Schema.
+ * Returns [{name, registeredType, schema}].
+ *
+ * Handles both homogeneous ($ref) and polymorphic (anyOf) lists.
+ */
+function getBlockTypesMeta(prop, typeSchema) {
+  const defs = typeSchema?.$defs || {};
+  const result = [];
+
+  function resolveRef(ref) {
+    // ref is something like "#/$defs/HeroBlock"
+    const name = ref?.replace(/^#\/\$defs\//, '');
+    return name ? defs[name] : null;
+  }
+
+  function extractEntry(className, schemaDef) {
+    if (!schemaDef) return null;
+    const constProp = schemaDef?.properties?.block_type?.const;
+    return {
+      name: className,
+      registeredType: constProp || className,
+      schema: schemaDef,
+    };
+  }
+
+  const items = prop?.items;
+  if (!items) return result;
+
+  if (items.$ref) {
+    // Homogeneous
+    const className = items.$ref.replace(/^#\/\$defs\//, '');
+    const entry = extractEntry(className, resolveRef(items.$ref));
+    if (entry) result.push(entry);
+  } else if (Array.isArray(items.anyOf)) {
+    // Polymorphic
+    for (const variant of items.anyOf) {
+      if (variant.$ref) {
+        const className = variant.$ref.replace(/^#\/\$defs\//, '');
+        const entry = extractEntry(className, resolveRef(variant.$ref));
+        if (entry) result.push(entry);
+      }
+    }
+  } else if (items.properties) {
+    // Inline schema — treat as single anonymous block type
+    result.push({ name: 'Block', registeredType: 'block', schema: items });
+  }
+
+  return result;
+}
+
+/**
+ * Build the block type picker dropdown for a field.
+ * Returns a <div class="block-type-picker"> element that is initially hidden.
+ * Keyboard navigation: ArrowUp/ArrowDown move focus; Enter selects; Escape closes.
+ */
+function buildBlockTypePicker(fieldName, availableTypes) {
+  const picker = el('div', {
+    class: 'block-type-picker',
+    role: 'listbox',
+    'aria-label': 'Select block type',
+  });
+  picker.style.display = 'none';
+
+  for (const typeInfo of availableTypes) {
+    const item = el('div', {
+      class: 'block-type-picker__item',
+      role: 'option',
+      tabindex: '-1',
+      onclick: () => {
+        addBlock(fieldName, typeInfo);
+        picker.style.display = 'none';
+      },
+      onkeydown: e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          addBlock(fieldName, typeInfo);
+          picker.style.display = 'none';
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          const next = item.nextElementSibling;
+          if (next) next.focus();
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          const prev = item.previousElementSibling;
+          if (prev) prev.focus();
+          else picker.previousElementSibling?.focus(); // back to "Add block" button
+        } else if (e.key === 'Escape') {
+          picker.style.display = 'none';
+          picker.previousElementSibling?.focus();
+        }
+      },
+    }, humanizeFieldName(typeInfo.registeredType));
+    picker.appendChild(item);
+  }
+
+  return picker;
+}
+
+/** Create a new empty block and append it to the field array. */
+function addBlock(fieldName, typeInfo) {
+  const current = Array.isArray(state.formData[fieldName]) ? [...state.formData[fieldName]] : [];
+  // Build default values for known fields
+  const defaults = {};
+  const props = typeInfo.schema?.properties || {};
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'block_type') continue;
+    if (v.type === 'boolean') defaults[k] = false;
+    else if (v.type === 'number' || v.type === 'integer') defaults[k] = null;
+    else if (v.type === 'array') defaults[k] = [];
+    else if (v.type === 'object') defaults[k] = {};
+    else defaults[k] = '';
+  }
+  current.push({ block_type: typeInfo.registeredType, ...defaults });
+  state.formData = { ...state.formData, [fieldName]: current };
+  state.isDirty = true;
+  render();
+}
+
+/** Remove the block at the given index from the field array. */
+function removeBlock(fieldName, index) {
+  const current = Array.isArray(state.formData[fieldName]) ? [...state.formData[fieldName]] : [];
+  current.splice(index, 1);
+  state.formData = { ...state.formData, [fieldName]: current };
+  state.isDirty = true;
+  render();
+}
+
+/** Move a block from one index to another within the field array. */
+function moveBlock(fieldName, fromIndex, toIndex) {
+  if (fromIndex === toIndex) return;
+  const current = Array.isArray(state.formData[fieldName]) ? [...state.formData[fieldName]] : [];
+  const [item] = current.splice(fromIndex, 1);
+  current.splice(toIndex, 0, item);
+  state.formData = { ...state.formData, [fieldName]: current };
+  state.isDirty = true;
+  render();
+}
+
+/** Update a single field within a block at the given index. */
+function updateBlockField(fieldName, index, blockFieldName, value) {
+  const current = Array.isArray(state.formData[fieldName]) ? [...state.formData[fieldName]] : [];
+  current[index] = { ...current[index], [blockFieldName]: value };
+  state.formData = { ...state.formData, [fieldName]: current };
+  state.isDirty = true;
+  // Partial update — only update dirty dot, no full re-render to preserve focus
+  const dot = $('dirty-dot');
+  if (dot) dot.classList.add('is-visible');
+}
+
+/**
+ * Build a single block card element.
+ */
+function buildBlockCard(fieldName, blockData, blockSchema, index, availableTypes, allDefs) {
+  let isDragging = false;
+  let dragOverActive = false;
+
+  const card = el('div', {
+    class: 'block-card',
+    draggable: 'true',
+  });
+
+  // Header
+  const header = el('div', { class: 'block-card__header', title: 'Click to expand/collapse' },
+    el('span', { class: 'block-card__drag-handle', 'aria-label': 'Drag to reorder' }, '⠿'),
+    el('span', { class: 'block-card__type-label' }, humanizeFieldName(blockData.block_type || 'Block')),
+    el('button', {
+      class: 'block-card__delete',
+      title: 'Remove block',
+      onclick: e => { e.stopPropagation(); removeBlock(fieldName, index); },
+    }, '✕')
+  );
+  card.appendChild(header);
+
+  // Body (collapsible)
+  const body = el('div', { class: 'block-card__body' });
+
+  const props = blockSchema?.properties || {};
+  const orderedEntries = Object.entries(props)
+    .filter(([k]) => k !== 'block_type')
+    .sort((a, b) => {
+      const oa = a[1].display_order ?? 9999;
+      const ob = b[1].display_order ?? 9999;
+      return oa - ob;
+    });
+
+  for (const [bFieldName, bProp] of orderedEntries) {
+    const bMeta = {};  // block schema fields don't carry field_meta in this context
+    const widget = fieldWidget(bFieldName, bProp, bMeta);
+    const bLabel = humanizeFieldName(bFieldName);
+    const bVal = blockData[bFieldName] ?? getDefaultValue(bProp, bMeta);
+
+    const bGroup = el('div', { class: 'field-group field-group--nested' });
+    bGroup.appendChild(el('label', { class: 'field-label', for: `block-${fieldName}-${index}-${bFieldName}` }, bLabel));
+
+    // Render scalar widgets inline (no recursive block_canvas for nested blocks)
+    switch (widget) {
+      case 'textarea': {
+        const ta = el('textarea', {
+          class: 'field-textarea',
+          id: `block-${fieldName}-${index}-${bFieldName}`,
+          placeholder: '',
+          oninput: e => updateBlockField(fieldName, index, bFieldName, e.target.value),
+        });
+        ta.value = bVal || '';
+        bGroup.appendChild(ta);
+        break;
+      }
+      case 'boolean': {
+        const toggleLabel = el('label', { class: 'toggle-switch', for: `block-${fieldName}-${index}-${bFieldName}` });
+        const input = el('input', {
+          type: 'checkbox',
+          id: `block-${fieldName}-${index}-${bFieldName}`,
+          onchange: e => updateBlockField(fieldName, index, bFieldName, e.target.checked),
+        });
+        if (bVal) input.setAttribute('checked', 'true');
+        toggleLabel.appendChild(input);
+        toggleLabel.appendChild(el('span', { class: 'toggle-track' }));
+        toggleLabel.appendChild(el('span', { class: 'toggle-thumb' }));
+        bGroup.appendChild(el('div', { class: 'field-bool' }, toggleLabel, el('span', { class: 'field-bool__label' }, bLabel)));
+        break;
+      }
+      case 'number': {
+        const input = el('input', {
+          class: 'field-input',
+          id: `block-${fieldName}-${index}-${bFieldName}`,
+          type: 'number',
+          value: bVal != null ? String(bVal) : '',
+          oninput: e => updateBlockField(fieldName, index, bFieldName, e.target.value === '' ? null : Number(e.target.value)),
+        });
+        bGroup.appendChild(input);
+        break;
+      }
+      case 'select': {
+        const sel = el('select', {
+          class: 'field-select',
+          id: `block-${fieldName}-${index}-${bFieldName}`,
+          onchange: e => updateBlockField(fieldName, index, bFieldName, e.target.value),
+        });
+        for (const choice of (bMeta.choices || [])) {
+          const opt = el('option', { value: choice }, choice);
+          if (bVal === choice) opt.setAttribute('selected', 'true');
+          sel.appendChild(opt);
+        }
+        bGroup.appendChild(sel);
+        break;
+      }
+      case 'json': {
+        const ta = el('textarea', {
+          class: 'field-textarea field-textarea--json',
+          id: `block-${fieldName}-${index}-${bFieldName}`,
+          oninput: e => {
+            try { updateBlockField(fieldName, index, bFieldName, JSON.parse(e.target.value)); } catch { /* ignore */ }
+          },
+        });
+        ta.value = bVal != null ? JSON.stringify(bVal, null, 2) : '';
+        bGroup.appendChild(ta);
+        break;
+      }
+      default: { // input / image_picker / prosemirror → plain input in nested context
+        const input = el('input', {
+          class: 'field-input',
+          id: `block-${fieldName}-${index}-${bFieldName}`,
+          type: 'text',
+          placeholder: '',
+          value: typeof bVal === 'string' ? bVal : (bVal != null ? String(bVal) : ''),
+          oninput: e => updateBlockField(fieldName, index, bFieldName, e.target.value),
+        });
+        bGroup.appendChild(input);
+        break;
+      }
+    }
+
+    body.appendChild(bGroup);
+  }
+
+  card.appendChild(body);
+
+  // Toggle open/collapse on header click
+  header.addEventListener('click', e => {
+    if (e.target.closest('.block-card__delete')) return;
+    card.classList.toggle('is-open');
+  });
+
+  // Drag-and-drop reorder
+  card.addEventListener('dragstart', e => {
+    isDragging = true;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(index));
+    card.classList.add('is-dragging');
+  });
+
+  card.addEventListener('dragend', () => {
+    isDragging = false;
+    card.classList.remove('is-dragging');
+  });
+
+  card.addEventListener('dragover', e => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (!dragOverActive) {
+      dragOverActive = true;
+      card.classList.add('drag-over');
+    }
+  });
+
+  card.addEventListener('dragleave', () => {
+    dragOverActive = false;
+    card.classList.remove('drag-over');
+  });
+
+  card.addEventListener('drop', e => {
+    e.preventDefault();
+    dragOverActive = false;
+    card.classList.remove('drag-over');
+    const fromIndex = parseInt(e.dataTransfer.getData('text/plain'), 10);
+    if (!isNaN(fromIndex) && fromIndex !== index) {
+      moveBlock(fieldName, fromIndex, index);
+    }
+  });
+
+  return card;
+}
+
+/**
+ * Build the full block canvas widget for a ListField/BlockField.
+ */
+function buildBlockCanvas(fieldName, prop, meta, typeSchema, currentValue) {
+  const availableTypes = getBlockTypesMeta(prop, typeSchema);
+  const blocks = Array.isArray(currentValue) ? currentValue : (currentValue ? [currentValue] : []);
+  const allDefs = typeSchema?.$defs || {};
+
+  const canvas = el('div', { class: 'block-canvas' });
+
+  // Render existing block cards
+  for (let i = 0; i < blocks.length; i++) {
+    const blockData = blocks[i];
+    // Find schema for this block's type
+    const typeInfo = availableTypes.find(t => t.registeredType === blockData.block_type)
+      || availableTypes[0];
+    const blockSchema = typeInfo?.schema || {};
+    const card = buildBlockCard(fieldName, blockData, blockSchema, i, availableTypes, allDefs);
+    canvas.appendChild(card);
+  }
+
+  // "Add block" section
+  const addWrap = el('div', { class: 'block-canvas__add-wrap' });
+
+  if (availableTypes.length === 1) {
+    // Single type — direct add button, no picker
+    const addBtn = el('button', {
+      class: 'block-canvas__add btn btn--ghost',
+      onclick: () => addBlock(fieldName, availableTypes[0]),
+    }, '+ Add block');
+    addWrap.appendChild(addBtn);
+  } else if (availableTypes.length > 1) {
+    // Multiple types — show picker dropdown
+    const addBtn = el('button', {
+      class: 'block-canvas__add btn btn--ghost',
+      'aria-haspopup': 'listbox',
+      onclick: () => {
+        picker.style.display = picker.style.display === 'none' ? 'block' : 'none';
+        if (picker.style.display === 'block') {
+          const first = picker.querySelector('.block-type-picker__item');
+          if (first) first.focus();
+        }
+      },
+      onkeydown: e => {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          picker.style.display = 'block';
+          const first = picker.querySelector('.block-type-picker__item');
+          if (first) first.focus();
+        }
+      },
+    }, '+ Add block ▾');
+    const picker = buildBlockTypePicker(fieldName, availableTypes);
+    addWrap.appendChild(addBtn);
+    addWrap.appendChild(picker);
+
+    // Close picker when clicking outside
+    document.addEventListener('click', e => {
+      if (!addWrap.contains(e.target)) {
+        picker.style.display = 'none';
+      }
+    }, { capture: false });
+  }
+
+  if (availableTypes.length > 0) {
+    canvas.appendChild(addWrap);
+  }
+
+  return canvas;
+}
+
+
+/* =====================================================================
+   META PANEL — shows document metadata for existing documents
+   ===================================================================== */
+
+function buildMetaPanel(doc) {
+  const panel = el('details', { class: 'doc-meta' });
+  panel.appendChild(el('summary', { class: 'doc-meta__summary' }, 'Document info'));
+
+  function metaRow(key, valueNode) {
+    return el('div', { class: 'doc-meta__row' },
+      el('span', { class: 'doc-meta__key' }, key),
+      typeof valueNode === 'string'
+        ? el('span', { class: 'doc-meta__val' }, valueNode)
+        : valueNode
+    );
+  }
+
+  // ID — monospace, copy on click
+  const idVal = el('span', {
+    class: 'doc-meta__val doc-meta__copy',
+    title: 'Click to copy',
+    onclick: () => {
+      navigator.clipboard?.writeText(doc.id).then(() => showToast('info', 'Copied', doc.id));
+    },
+  }, doc.id || '—');
+  panel.appendChild(metaRow('ID', idVal));
+
+  if (doc.created_at) panel.appendChild(metaRow('Created', formatDate(doc.created_at)));
+  if (doc.updated_at) panel.appendChild(metaRow('Updated', formatDate(doc.updated_at)));
+  if (doc.published_at) panel.appendChild(metaRow('Published at', formatDate(doc.published_at)));
+  if (doc.import_ref) panel.appendChild(metaRow('import_ref', doc.import_ref));
+  if (doc.singleton_status) panel.appendChild(metaRow('Singleton', doc.singleton_status));
+
+  return panel;
+}
+
+
+/* =====================================================================
+   IMAGE PICKER — inline picker with optional Mediakit iframe modal
+   ===================================================================== */
+
+/** Tracks which field the open picker modal is for. */
+let currentPickerField = null;
+
+/** Close and remove the picker modal. */
+function closePickerModal() {
+  const modal = document.querySelector('.picker-modal');
+  if (modal) modal.remove();
+  window.removeEventListener('message', onPickerMessage);
+  currentPickerField = null;
+}
+
+/** Handle postMessage events from the Mediakit picker iframe. */
+function onPickerMessage(event) {
+  const data = event.data;
+  if (!data) return;
+  const type = typeof data === 'string' ? data : data.type;
+  if (type === 'mediakit:asset-selected') {
+    const value = (typeof data === 'object' ? (data.key || data.url) : null) || '';
+    if (currentPickerField) {
+      onFieldChange(currentPickerField, value);
+      // Update the preview thumbnail synchronously (if it's visible)
+      const preview = document.getElementById(`img-preview-${currentPickerField}`);
+      if (preview && value) { preview.src = value; preview.style.display = ''; }
+      else if (preview) preview.style.display = 'none';
+      const valEl = document.getElementById(`img-val-${currentPickerField}`);
+      if (valEl) valEl.value = value;
+    }
+    closePickerModal();
+  } else if (type === 'mediakit:picker-cancelled') {
+    closePickerModal();
+  }
+}
+
+/** Open the Mediakit picker iframe in a modal. */
+function openImagePicker(fieldName) {
+  currentPickerField = fieldName;
+  const iframeSrc = `${CONFIG.mediaBase}/admin?picker=1`;
+
+  const modal = el('div', { class: 'picker-modal' },
+    el('div', { class: 'picker-modal__inner' },
+      el('button', {
+        class: 'picker-modal__close btn btn--ghost',
+        title: 'Close',
+        onclick: closePickerModal,
+      }, '✕'),
+      el('iframe', { class: 'picker-modal__iframe', src: iframeSrc })
+    )
+  );
+
+  document.body.appendChild(modal);
+  window.addEventListener('message', onPickerMessage);
+}
+
+/**
+ * Build the image picker widget for an ImageField.
+ * Shows an iframe-based Mediakit picker when media_base is configured,
+ * otherwise falls back to a plain text input.
+ */
+function buildImagePickerField(fieldName, currentValue) {
+  const wrap = el('div', { class: 'image-picker' });
+
+  if (CONFIG.mediaBase) {
+    // Thumbnail preview
+    const img = el('img', {
+      class: 'image-picker__preview',
+      id: `img-preview-${fieldName}`,
+      src: currentValue || '',
+      alt: '',
+    });
+    img.style.display = currentValue ? '' : 'none';
+
+    // Hidden text input keeps the value in sync
+    const hiddenInput = el('input', {
+      type: 'hidden',
+      id: `img-val-${fieldName}`,
+      value: currentValue || '',
+    });
+
+    const chooseBtn = el('button', {
+      class: 'btn btn--ghost',
+      onclick: () => openImagePicker(fieldName),
+    }, 'Choose Image');
+
+    const clearBtn = el('button', {
+      class: 'btn btn--ghost',
+      style: currentValue ? '' : 'display:none',
+      onclick: () => {
+        onFieldChange(fieldName, '');
+        img.src = '';
+        img.style.display = 'none';
+        hiddenInput.value = '';
+        clearBtn.style.display = 'none';
+      },
+    }, 'Clear');
+
+    wrap.appendChild(img);
+    wrap.appendChild(hiddenInput);
+    wrap.appendChild(chooseBtn);
+    wrap.appendChild(clearBtn);
+  } else {
+    // Fallback — plain text input
+    const input = el('input', {
+      class: 'field-input',
+      id: `field-${fieldName}`,
+      type: 'text',
+      placeholder: 'https://…',
+      value: currentValue || '',
+      oninput: e => onFieldChange(fieldName, e.target.value),
+    });
+    wrap.appendChild(input);
+    wrap.appendChild(el('span', { class: 'field-help' }, '(configure media_base on Editor to enable image picker)'));
+  }
+
+  return wrap;
 }
 
 function getDefaultValue(prop, meta) {
@@ -1057,9 +1684,13 @@ async function saveDocument() {
   const { __slug, ...bodyFields } = state.formData;
   const slug = __slug || '';
 
-  // Flush PM editor content to formData before saving
+  // Flush PM editor content to formData before saving.
+  // RichTextField fields store PM JSON; legacy markdown fields serialise to markdown.
   for (const [name, view] of Object.entries(state.pmInstances)) {
-    bodyFields[name] = pmDocToMarkdown(view.state.doc);
+    const fieldMeta = (state.schema?.[state.activeType]?.field_meta || {})[name] || {};
+    bodyFields[name] = fieldMeta.field_type === 'rich_text'
+      ? view.state.doc.toJSON()
+      : pmDocToMarkdown(view.state.doc);
   }
 
   try {

@@ -2,7 +2,7 @@
 
 Phases are ordered by dependency. A future agent should always start at the earliest incomplete phase.
 
-**Current status:** Phases 0–10 complete (including EPIC-001 VPP MVP primitives, mediakit core+admin+MCP+CLI, starlette-editor Phase 1). starlette-cms-gateways package scaffolded (Phase GW-1 complete).
+**Current status:** Phases 0–12 complete (including EPIC-001 VPP MVP primitives, mediakit core+admin+MCP+CLI, starlette-editor Phases 1–3). starlette-cms-gateways package scaffolded (Phase GW-1 complete).
 
 **Use cases:** See `docs/use-cases/` for worked examples of Astraeus applied to real projects. These inform roadmap priorities and surface new primitives.
 
@@ -352,22 +352,30 @@ Together these establish Astraeus as a **governed data platform** — not just a
 
 ---
 
-## Phase 11 — starlette-editor Phase 2 (StandardEditor)
+## Phase 11 — starlette-editor Phase 2 (StandardEditor) ✅
 
-- [ ] Full StandardEditor SPA (document list + block canvas)
-- [ ] Block picker dropdown, block card, drag-and-drop reordering
-- [ ] Publish/unpublish flow, meta panel
-- [ ] Auth shell protection + API key injection via `window.__EDITOR_CONFIG__`
+- [x] Full StandardEditor SPA (document list + block canvas)
+- [x] Block canvas: `ListField.field_meta()` → `field_type: "block_list"`; `BlockField.field_meta()` → `field_type: "block"`
+- [x] Block canvas UI: card per block, collapsible body, drag-and-drop reorder, type picker with keyboard nav
+- [x] Block picker: single-type direct-add; multi-type dropdown with ArrowUp/Down/Enter/Escape
+- [x] Publish/unpublish flow (already present from Phase 10)
+- [x] Meta panel (`buildMetaPanel`) — Document info details: ID (copy), created, updated, published_at, import_ref, singleton_status
+- [x] Auth shell protection (already present from Phase 10)
+- [x] PM-flush bug fix in `saveDocument` — RichTextField fields flush as PM JSON, not markdown
+- [x] Toolbar active state: `updateToolbarState` called on every `dispatchTransaction`; `hasMark`, `isInList` helpers
+- [x] `mediaBase` injected into `window.__EDITOR_CONFIG__` from `Editor(media_base=...)`
+- [x] Tests: `test_fields.py` (17), `test_editor_schema_integration.py` extended (+2: `test_shell_injects_media_base_null`, `test_shell_injects_media_base`)
 
 ---
 
-## Phase 12 — starlette-editor Phase 3 (media + custom editors)
+## Phase 12 — starlette-editor Phase 3 (media + custom editors) ✅
 
-- [ ] `<se-image-picker>` with Mediakit picker protocol
-- [ ] `<se-block-picker>`
-- [ ] `core.js` bundle (EditorContext for custom editors)
-- [ ] Node views for nested block types
-- [ ] Richtext toolbar
+- [x] `image_picker` widget: `buildImagePickerField` — thumbnail preview + Choose/Clear when `mediaBase` set; plain text input fallback
+- [x] `openImagePicker` → Mediakit picker iframe in modal overlay; `postMessage` integration (`mediakit:asset-selected`, `mediakit:picker-cancelled`)
+- [x] Richtext toolbar polish: `toggleList` replaces `wrapIn` for list nodes (toggle-to-unwrap); inline `code` mark button
+- [x] `<se-block-picker>` keyboard navigation (ArrowUp/Down/Enter/Escape) implemented in `buildBlockTypePicker`
+- [x] `core.js` extraction — deferred; `editor.js` is self-contained and the personal site does not yet need a custom editor overlay
+- [x] Node views for nested block types — deferred to North Star (requires PM schema changes + serialization overhaul)
 
 ---
 

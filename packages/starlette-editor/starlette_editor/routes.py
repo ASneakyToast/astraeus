@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 STATIC_DIR = pathlib.Path(__file__).parent / "static"
 
 
-def make_editor_routes(editor: "Editor") -> list:
+def make_editor_routes(editor: Editor) -> list:
     """Return the routes for the editor sub-application.
 
     Routes:
@@ -53,7 +53,8 @@ def make_editor_routes(editor: "Editor") -> list:
   window.__EDITOR_CONFIG__ = {{
     cmsBase: "",
     apiKey: {_js_string(editor.cms.api_key)},
-    mountPath: {_js_string(mount)}
+    mountPath: {_js_string(mount)},
+    mediaBase: {_js_string(editor.media_base)}
   }};
   </script>
 
