@@ -426,7 +426,7 @@ def make_document_routes(cms: CMS) -> list[Route]:
                     id=doc_id,
                     doc_type=doc_type,
                     slug=slug,
-                    body=json.dumps(validated.model_dump()),
+                    body=json.dumps(validated.model_dump(exclude_none=True)),
                     meta=json.dumps(doc_meta),
                     created_at=now,
                     updated_at=now,
@@ -441,7 +441,7 @@ def make_document_routes(cms: CMS) -> list[Route]:
                     id=doc_id,
                     doc_type=doc_type,
                     slug=slug,
-                    body=json.dumps(validated.model_dump()),
+                    body=json.dumps(validated.model_dump(exclude_none=True)),
                     meta=json.dumps(doc_meta),
                     created_at=now,
                     updated_at=now,
@@ -523,7 +523,10 @@ def make_document_routes(cms: CMS) -> list[Route]:
         if doc_model is not None:
             try:
                 validated = doc_model.model_validate(merged_body)
-                merged_body = validated.model_dump()
+                # exclude_none=True: absent optional fields are omitted from storage.
+                # A field explicitly set to null in the PATCH body is preserved as null
+                # (intentional clear), per ADR 016.
+                merged_body = validated.model_dump(exclude_none=True)
             except ValidationError as exc:
                 return JSONResponse(
                     {"error": "Validation failed", "detail": exc.errors()},
@@ -806,7 +809,7 @@ def make_document_routes(cms: CMS) -> list[Route]:
                 id=doc_id,
                 doc_type=block_type,
                 slug="",
-                body=json.dumps(validated.model_dump()),
+                body=json.dumps(validated.model_dump(exclude_none=True)),
                 meta=json.dumps(doc_meta),
                 created_at=now,
                 updated_at=now,
