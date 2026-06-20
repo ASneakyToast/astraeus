@@ -2,7 +2,7 @@
 
 Phases are ordered by dependency. A future agent should always start at the earliest incomplete phase.
 
-**Current status:** Phases 0–6 and 10 complete (including EPIC-001 VPP MVP primitives, mediakit core, starlette-editor Phase 1). starlette-cms-gateways package scaffolded (Phase GW-1 complete).
+**Current status:** Phases 0–10 complete (including EPIC-001 VPP MVP primitives, mediakit core+admin+MCP+CLI, starlette-editor Phase 1). starlette-cms-gateways package scaffolded (Phase GW-1 complete).
 
 **Use cases:** See `docs/use-cases/` for worked examples of Astraeus applied to real projects. These inform roadmap priorities and surface new primitives.
 
@@ -305,34 +305,34 @@ Together these establish Astraeus as a **governed data platform** — not just a
 
 ---
 
-## Phase 7 — mediakit admin UI
+## Phase 7 — mediakit admin UI ✅
 
 **Goal:** A usable browser interface for uploading and browsing assets, including picker mode.
 
-- [ ] `GET /admin` — asset browser grid (IIIF square/256, thumbnails)
-- [ ] Normal mode: click → detail view with metadata editor
-- [ ] Picker mode (`?picker=1`): click → `postMessage("mediakit:asset-selected", ...)` + close
-- [ ] Cancel button → `postMessage("mediakit:picker-cancelled", ...)`
-- [ ] `GET /admin/upload` — drag-and-drop uploader (vanilla JS, no framework)
-- [ ] Filtering by type and tag
+- [x] `GET /admin` — asset browser grid (IIIF square/256, thumbnails)
+- [x] Normal mode: click → detail view with metadata editor
+- [x] Picker mode (`?picker=1`): click → `postMessage("mediakit:asset-selected", ...)` + close
+- [x] Cancel button → `postMessage("mediakit:picker-cancelled", ...)`
+- [x] `GET /admin/upload` — drag-and-drop uploader (vanilla JS, no framework)
+- [x] Filtering by type and tag
 
 ---
 
-## Phase 8 — mediakit MCP server
+## Phase 8 — mediakit MCP server ✅
 
 **Goal:** An agent can list, search, and manage media assets using tools.
 
-- [ ] `pip install mediakit[mcp]`
-- [ ] `mediakit mcp serve --url {base_url} --api-key {key}`
-- [ ] Tools: `list_assets`, `get_asset`, `search_assets`, `update_asset`, `delete_asset`, `get_iiif_url`
+- [x] `pip install mediakit[mcp]`
+- [x] `mediakit mcp serve --url {base_url} --api-key {key}`
+- [x] Tools: `list_assets`, `get_asset`, `search_assets`, `update_asset`, `delete_asset`, `get_iiif_url`
 
 ---
 
-## Phase 9 — mediakit CLI
+## Phase 9 — mediakit CLI ✅
 
-- [ ] `mediakit sync` — walk bucket, reconcile against catalog, insert missing records
-- [ ] `mediakit gc` — remove orphaned derivatives and unconfirmed upload temporaries
-- [ ] `mediakit export` — export catalog as CSV
+- [x] `mediakit sync` — walk bucket, reconcile against catalog, insert missing records
+- [x] `mediakit gc` — remove orphaned assets with no references
+- [x] `mediakit export` — export catalog as CSV
 
 ---
 
