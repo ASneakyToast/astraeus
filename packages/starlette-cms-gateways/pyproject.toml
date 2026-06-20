@@ -1,0 +1,46 @@
+[project]
+name = "starlette-cms-gateways"
+version = "0.1.0"
+description = "Gateway framework for starlette-cms — pull external service data into your CMS as documents"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Joel Lithgow" }]
+requires-python = ">=3.12"
+keywords = ["starlette", "cms", "gateway", "sync", "integration"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "httpx>=0.27",
+    "click>=8.0",
+    "starlette-cms>=0.5.0",
+]
+
+[project.optional-dependencies]
+mcp = [
+    "mcp>=1.0",
+]
+full = ["starlette-cms-gateways[mcp]"]
+dev = ["starlette-cms-gateways[full]", "respx>=0.20"]
+
+[project.scripts]
+gateways = "starlette_cms_gateways.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ASneakyToast/astraeus"
+Repository = "https://github.com/ASneakyToast/astraeus"
+Issues = "https://github.com/ASneakyToast/astraeus/issues"
+
+[tool.uv.sources]
+starlette-cms = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/starlette_cms_gateways"]

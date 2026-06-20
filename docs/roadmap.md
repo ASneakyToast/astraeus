@@ -2,7 +2,7 @@
 
 Phases are ordered by dependency. A future agent should always start at the earliest incomplete phase.
 
-**Current status:** Phases 0–4 complete (including EPIC-001 VPP MVP primitives).
+**Current status:** Phases 0–6 and 10 complete (including EPIC-001 VPP MVP primitives, mediakit core, starlette-editor Phase 1). starlette-cms-gateways package scaffolded (Phase GW-1 complete).
 
 **Use cases:** See `docs/use-cases/` for worked examples of Astraeus applied to real projects. These inform roadmap priorities and surface new primitives.
 
@@ -250,6 +250,58 @@ Together these establish Astraeus as a **governed data platform** — not just a
 
 ### 6g — Auth ✅
 - [x] Same three modes as starlette-cms: none, apikey, callable
+
+---
+
+## starlette-cms-gateways Phase GW-0 — import_ref ✅
+
+**Goal:** Add `import_ref` as a first-class nullable indexed column on `CMSDocument`.
+
+- [x] `import_ref = Varchar(length=256, null=True, index=True)` on `CMSDocument`
+- [x] Migration `003_import_ref.py` — `ALTER TABLE` + composite index on `(doc_type, import_ref)`
+- [x] `GET /api/documents?import_ref=...` — filter support
+- [x] `POST /api/documents` accepts `"import_ref"` in body; 409 on duplicate `(doc_type, import_ref)`
+- [x] `PATCH /api/documents/{id}` accepts `"import_ref"` in body
+- [x] GET responses include `"import_ref"` field
+- [x] `starlette-cms` version bumped to `0.5.0`
+
+---
+
+## starlette-cms-gateways Phase GW-1 — Package scaffold + core framework ✅
+
+**Goal:** A working gateway framework that any developer can subclass in ~50 lines.
+
+- [x] `packages/starlette-cms-gateways/` package with `pyproject.toml`, `README.md`, `CLAUDE.md`
+- [x] `GatewayItem`, `SyncResult` dataclasses
+- [x] `BaseGateway` ABC — `fetch()` abstract, `sync()` framework-provided
+- [x] `CMSClient` — `find_by_import_ref`, `upsert`, `get_last_synced`, `save_sync_state`
+- [x] `GatewaySyncStateBlock` — singleton block helper; `register(cms)` utility
+- [x] `gateways` CLI — `list`, `status`, `sync`, `register-blocks` commands
+- [x] MCP server factory `build_gateway_mcp_server()` (`[mcp]` extra)
+- [x] ADR 015 written
+
+---
+
+## starlette-cms-gateways Phase GW-2 — Tests ✅
+
+**Goal:** Full test coverage for `import_ref` CMS changes and gateway framework.
+
+- [x] `import_ref` filter on `GET /api/documents`
+- [x] 409 on duplicate `(doc_type, import_ref)` at `POST /api/documents`
+- [x] `import_ref` included in GET response body
+- [x] `CMSClient.upsert()` create/update/skip logic (mocked via `respx`)
+- [x] `gateways list` discovers test gateway via entry point
+- [x] End-to-end idempotency: local CMS + test gateway, second sync run skips all
+- [x] `GatewayItem` and `SyncResult` dataclass unit tests
+
+---
+
+## starlette-cms-gateways Phase GW-3 — Examples ✅
+
+**Goal:** Reference gateway implementations for documentation.
+
+- [x] `examples/spotify_liked_songs/blocks.py` + `gateway.py`
+- [x] `examples/inaturalist_outings/blocks.py` + `gateway.py`
 
 ---
 
