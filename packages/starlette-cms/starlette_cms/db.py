@@ -25,8 +25,12 @@ from __future__ import annotations
 import warnings
 from urllib.parse import urlparse
 
+import structlog
+
 from starlette_cms.exceptions import CMSSchemaMismatch
 from starlette_cms.tables import CMSDocument, CMSMeta, CMSWebhook
+
+logger = structlog.get_logger(__name__)
 
 
 class CMSDatabase:
@@ -69,6 +73,7 @@ class CMSDatabase:
         await CMSDocument.create_table(if_not_exists=True)
         await CMSMeta.create_table(if_not_exists=True)
         await CMSWebhook.create_table(if_not_exists=True)
+        logger.debug("starlette_cms.db.tables_ready", database_url=self.database_url)
 
         # Enable WAL mode for SQLite (improves concurrent read performance)
         if engine.engine_type == "sqlite":
@@ -83,6 +88,9 @@ class CMSDatabase:
             if not rows:
                 # Fresh database — seed the version and continue
                 await CMSMeta.insert(CMSMeta(key="schema_version", value=self.schema_version)).run()
+                logger.info(
+                    "starlette_cms.db.schema_seeded", schema_version=self.schema_version
+                )
             else:
                 stored = rows[0]["value"]
                 if stored != self.schema_version:
@@ -91,6 +99,11 @@ class CMSDatabase:
                         f"package version {self.schema_version!r}. "
                         f"Run `cms migrate` to apply pending migrations."
                     )
+                logger.debug(
+                    "starlette_cms.db.schema_ok",
+                    stored=stored,
+                    expected=self.schema_version,
+                )
 
     async def close(self) -> None:
         """Close the engine connection pool."""

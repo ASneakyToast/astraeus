@@ -26,4 +26,9 @@ from mediakit.storage.backend import StorageBackend
 
 __version__ = "0.2.0"
 
+# Library contract: install NullHandler so the host app controls log routing.
+# See ADR 017.
+import logging as _logging
+_logging.getLogger("mediakit").addHandler(_logging.NullHandler())
+
 __all__ = ["MediaKit", "MediakitConfig", "StorageBackend"]

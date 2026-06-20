@@ -22,11 +22,68 @@ All commands that talk to the CMS accept ``--cms-url`` and ``--api-key``
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import sys
 from importlib.metadata import entry_points
 from typing import Any
 
 import click
+import structlog
+
+
+# ---------------------------------------------------------------------------
+# Logging setup (CLI is an application — it configures structlog directly)
+# ---------------------------------------------------------------------------
+
+
+def _configure_logging(log_level: int) -> None:
+    """
+    Configure structlog for the gateways CLI.
+
+    Uses ConsoleRenderer on a TTY, JSONRenderer when piped/in CI.
+    Called once by the root group via the --verbose/--quiet flags.
+    """
+    use_console = sys.stdout.isatty()
+    final_renderer = (
+        structlog.dev.ConsoleRenderer(colors=True)
+        if use_console
+        else structlog.processors.JSONRenderer()
+    )
+
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso", utc=True),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.ExceptionRenderer(),
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(log_level),
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+
+    formatter = structlog.stdlib.ProcessorFormatter(
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            final_renderer,
+        ],
+    )
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    handler.setLevel(log_level)
+
+    root = logging.getLogger()
+    root.setLevel(log_level)
+    if not root.handlers:
+        root.addHandler(handler)
+
+
+# Module-level logger — available after _configure_logging() is called
+logger = structlog.get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -46,9 +103,10 @@ def _discover_gateways() -> dict[str, Any]:
             cls = ep.load()
             result[ep.name] = cls
         except Exception as exc:  # noqa: BLE001
-            click.echo(
-                click.style(f"  ⚠ Failed to load gateway {ep.name!r}: {exc}", fg="yellow"),
-                err=True,
+            logger.warning(
+                "starlette_cms_gateways.cli.gateway_load_failed",
+                gateway=ep.name,
+                exc_info=exc,
             )
     return result
 
@@ -85,8 +143,19 @@ def _require_cms_url(cms_url: str) -> str:
 
 
 @click.group()
-def main() -> None:
+@click.option("-v", "--verbose", is_flag=True, default=False, help="Enable DEBUG logging.")
+@click.option("-q", "--quiet", is_flag=True, default=False, help="Suppress INFO logs (WARNING+ only).")
+@click.pass_context
+def main(ctx: click.Context, verbose: bool, quiet: bool) -> None:
     """starlette-cms gateway management commands."""
+    ctx.ensure_object(dict)
+    if verbose:
+        level = logging.DEBUG
+    elif quiet:
+        level = logging.WARNING
+    else:
+        level = logging.INFO
+    _configure_logging(level)
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +284,15 @@ def sync(
             raise click.ClickException(str(exc)) from exc
         finally:
             await client.close()
+
+        if result.errors:
+            for ref, msg in result.errors:
+                logger.warning(
+                    "starlette_cms_gateways.sync.item_failed",
+                    gateway=gateway_name,
+                    import_ref=ref,
+                    error=msg,
+                )
 
         status_fg = "red" if result.has_errors else "green"
         click.echo(

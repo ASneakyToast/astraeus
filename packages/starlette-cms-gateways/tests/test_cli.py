@@ -124,7 +124,7 @@ def test_status_requires_cms_url():
 # ---------------------------------------------------------------------------
 
 
-def test_list_handles_load_error_gracefully():
+def test_list_handles_load_error_gracefully(caplog):
     bad_ep = MagicMock()
     bad_ep.name = "broken-gw"
     bad_ep.load.side_effect = ImportError("missing dependency")
@@ -132,11 +132,14 @@ def test_list_handles_load_error_gracefully():
     good_ep = _make_ep("good-gw", DummyGateway)
 
     runner = CliRunner()
-    with patch("starlette_cms_gateways.cli.entry_points", return_value=[bad_ep, good_ep]):
-        result = runner.invoke(main, ["list"])
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        with patch("starlette_cms_gateways.cli.entry_points", return_value=[bad_ep, good_ep]):
+            result = runner.invoke(main, ["list"])
 
     # Should still exit cleanly and show the good gateway
     assert result.exit_code == 0
     assert "good-gw" in result.output
-    # Warning should appear on stderr (captured in output by CliRunner mix_stderr)
-    assert "broken-gw" in result.output or "Failed to load" in result.output
+    # Warning now goes to structlog/logging, not click output
+    assert any("broken-gw" in r.message or "broken-gw" in str(r.getMessage()) for r in caplog.records)

@@ -17,12 +17,15 @@ from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
+import structlog
 from starlette.applications import Starlette
 from starlette.routing import Route
 
 from starlette_cms.media import MediaBackend
 from starlette_cms.model_builder import build_document_model
 from starlette_cms.registry import BlockRegistry
+
+logger = structlog.get_logger(__name__)
 
 
 class CMS:
@@ -265,6 +268,7 @@ class CMS:
         from starlette_cms import __version__
         from starlette_cms.db import CMSDatabase
 
+        logger.info("starlette_cms.startup", version=__version__, database_url=self.database_url)
         self._db = CMSDatabase(
             database_url=self.database_url,
             schema_version=__version__,
@@ -274,6 +278,7 @@ class CMS:
             yield
         finally:
             await self._db.close()
+            logger.info("starlette_cms.shutdown")
 
     @asynccontextmanager
     async def lifespan(self, app) -> AsyncGenerator[None, None]:

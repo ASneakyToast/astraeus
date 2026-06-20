@@ -54,6 +54,11 @@ from starlette_cms.registry import block
 
 __version__ = "0.5.0"
 
+# Library contract: install NullHandler so the host app controls log routing.
+# See ADR 017.
+import logging as _logging
+_logging.getLogger("starlette_cms").addHandler(_logging.NullHandler())
+
 __all__ = [
     "CMS",
     "block",

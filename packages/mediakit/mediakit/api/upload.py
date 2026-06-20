@@ -16,12 +16,15 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import structlog
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 if TYPE_CHECKING:
     from mediakit.app import MediaKit
+
+logger = structlog.get_logger(__name__)
 
 
 def _make_key(filename: str, content_type: str, timestamp: str) -> str:
@@ -50,6 +53,7 @@ def make_upload_routes(mk: MediaKit) -> list[Route]:
         try:
             body = await request.json()
         except Exception:
+            logger.warning("mediakit.upload.invalid_json", endpoint="prepare")
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
         filename = body.get("filename")
@@ -80,6 +84,7 @@ def make_upload_routes(mk: MediaKit) -> list[Route]:
         try:
             body = await request.json()
         except Exception:
+            logger.warning("mediakit.upload.invalid_json", endpoint="confirm")
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
         key = body.get("key")
@@ -141,7 +146,13 @@ def make_upload_routes(mk: MediaKit) -> list[Route]:
             # Processing is best-effort: if it fails (e.g. non-image file,
             # storage backend doesn't support get/put in test), fall back to
             # client-supplied metadata.
-            pass
+            logger.warning(
+                "mediakit.upload.pipeline_failed",
+                key=key,
+                filename=filename,
+                content_type=content_type,
+                exc_info=True,
+            )
 
         # Use a hash of the key as a stable content_hash (no bytes available
         # in the base case; real deduplication is a Phase 9+ concern).

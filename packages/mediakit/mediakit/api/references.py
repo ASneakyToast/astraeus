@@ -8,12 +8,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import structlog
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 if TYPE_CHECKING:
     from mediakit.app import MediaKit
+
+logger = structlog.get_logger(__name__)
 
 
 def make_reference_routes(mk: MediaKit) -> list[Route]:
@@ -32,6 +35,7 @@ def make_reference_routes(mk: MediaKit) -> list[Route]:
         try:
             body = await request.json()
         except Exception:
+            logger.warning("mediakit.references.invalid_json", endpoint="set_references")
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
         host_model = body.get("host_model")
@@ -63,6 +67,7 @@ def make_reference_routes(mk: MediaKit) -> list[Route]:
         try:
             body = await request.json()
         except Exception:
+            logger.warning("mediakit.references.invalid_json", endpoint="remove_references")
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
         host_model = body.get("host_model")

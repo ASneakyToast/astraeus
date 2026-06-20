@@ -8,10 +8,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import structlog
+
 from mediakit.config import MediakitConfig
 
 if TYPE_CHECKING:
     import obstore.store as obs
+
+logger = structlog.get_logger(__name__)
 
 
 class S3CompatibleBackend:
@@ -75,6 +79,7 @@ class S3CompatibleBackend:
             await obstore.head_async(self._get_store(), key)
             return True
         except Exception:
+            logger.debug("mediakit.storage.object_not_found", key=key)
             return False
 
     async def get_url(self, key: str, expires_in: int = 3600) -> str:

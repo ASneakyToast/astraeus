@@ -7,6 +7,7 @@ import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+import structlog
 from piccolo.columns.base import Column
 from pydantic import ValidationError
 from starlette.requests import Request
@@ -19,6 +20,8 @@ from starlette_cms.tables import CMSDocument
 
 if TYPE_CHECKING:
     from starlette_cms.app import CMS
+
+logger = structlog.get_logger(__name__)
 
 
 def _utcnow() -> str:
@@ -50,6 +53,10 @@ def _matches_filters(doc: dict, filters: dict[str, Any]) -> bool:
         try:
             body = json.loads(body)
         except Exception:
+            logger.warning(
+                "starlette_cms.documents.body_parse_failed",
+                doc_id=doc.get("id"),
+            )
             body = {}
     for key, expected in filters.items():
         if body.get(key) != expected:
@@ -167,6 +174,10 @@ async def _check_ref_integrity(cms: CMS, doc_id: str, doc_type: str) -> JSONResp
                     try:
                         body = json.loads(body)
                     except Exception:
+                        logger.warning(
+                            "starlette_cms.documents.ref_body_parse_failed",
+                            doc_id=row["id"],
+                        )
                         body = {}
                 if body.get(field_name) == doc_id:
                     referencing_ids.append(row["id"])
@@ -189,6 +200,10 @@ async def _check_ref_integrity(cms: CMS, doc_id: str, doc_type: str) -> JSONResp
                         try:
                             ref_body = json.loads(ref_body)
                         except Exception:
+                            logger.warning(
+                                "starlette_cms.documents.nullify_body_parse_failed",
+                                doc_id=ref_doc_id,
+                            )
                             ref_body = {}
                     ref_body[field_name] = None
                     await (
@@ -418,7 +433,11 @@ def make_document_routes(cms: CMS) -> list[Route]:
         try:
             is_append_only = cms.registry.is_append_only(doc_type)
         except Exception:
-            pass
+            logger.warning(
+                "starlette_cms.documents.registry_lookup_failed",
+                doc_type=doc_type,
+                operation="is_append_only",
+            )
 
         if is_append_only:
             await CMSDocument.insert(
@@ -492,7 +511,12 @@ def make_document_routes(cms: CMS) -> list[Route]:
                     status_code=405,
                 )
         except Exception:
-            pass
+            logger.warning(
+                "starlette_cms.documents.registry_lookup_failed",
+                doc_type=doc_type,
+                operation="is_append_only",
+                doc_id=doc_id,
+            )
 
         try:
             patch_data = await request.json()
@@ -508,6 +532,11 @@ def make_document_routes(cms: CMS) -> list[Route]:
             try:
                 existing_body = json.loads(existing_body)
             except Exception:
+                logger.warning(
+                    "starlette_cms.documents.body_parse_failed",
+                    doc_id=doc_id,
+                    operation="patch",
+                )
                 existing_body = {}
 
         new_body_data = patch_data.get("body", {})
@@ -566,6 +595,10 @@ def make_document_routes(cms: CMS) -> list[Route]:
                 try:
                     existing_meta = json.loads(existing_meta)
                 except Exception:
+                    logger.warning(
+                        "starlette_cms.documents.meta_parse_failed",
+                        doc_id=doc_id,
+                    )
                     existing_meta = {}
             merged_meta = {**existing_meta, **patch_data["meta"]}
             update_kwargs[CMSDocument.meta] = json.dumps(merged_meta)
@@ -603,7 +636,12 @@ def make_document_routes(cms: CMS) -> list[Route]:
                     status_code=405,
                 )
         except Exception:
-            pass
+            logger.warning(
+                "starlette_cms.documents.registry_lookup_failed",
+                doc_type=doc_type,
+                operation="is_append_only",
+                doc_id=doc_id,
+            )
 
         # Enforce referential integrity (on_delete="block" → 409; "nullify" → set to None)
         if (err := await _check_ref_integrity(cms, doc_id, doc_type)) is not None:
@@ -634,7 +672,12 @@ def make_document_routes(cms: CMS) -> list[Route]:
         try:
             is_singleton = cms.registry.is_singleton(doc_type)
         except Exception:
-            pass
+            logger.warning(
+                "starlette_cms.documents.registry_lookup_failed",
+                doc_type=doc_type,
+                operation="is_singleton",
+                doc_id=doc_id,
+            )
 
         if is_singleton:
             await (

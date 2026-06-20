@@ -31,8 +31,11 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 import httpx
+import structlog
 
 from starlette_cms_gateways.base import GatewayItem, SyncResult
+
+logger = structlog.get_logger(__name__)
 
 
 class CMSError(Exception):
@@ -230,6 +233,10 @@ class CMSClient:
             try:
                 existing_meta = _json.loads(existing_meta)
             except Exception:
+                logger.warning(
+                    "starlette_cms_gateways.client.meta_parse_failed",
+                    import_ref=item.import_ref,
+                )
                 existing_meta = {}
 
         stored_hash = existing_meta.get("content_hash", "")
@@ -320,7 +327,12 @@ class CMSClient:
         )
         if post_resp.status_code not in (200, 201):
             # Sync state persistence failure is non-fatal — log but don't raise
-            pass
+            logger.warning(
+                "starlette_cms_gateways.client.sync_state_save_failed",
+                service_name=service_name,
+                status_code=post_resp.status_code,
+                response=post_resp.text[:200],
+            )
 
     async def list_documents(
         self,

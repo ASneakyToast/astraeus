@@ -1,0 +1,32 @@
+[project]
+name = "astraeus-otel"
+version = "0.1.0"
+description = "OpenTelemetry SDK bootstrap for the Astraeus package suite — one call wires traces, structured logs, and OTEL export across all packages"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Joel Lithgow" }]
+requires-python = ">=3.12"
+keywords = ["starlette", "opentelemetry", "otel", "logging", "tracing", "observability"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "opentelemetry-sdk>=1.25",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.25",
+    "opentelemetry-instrumentation-starlette>=0.46b0",
+    "structlog>=24.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ASneakyToast/astraeus"
+Repository = "https://github.com/ASneakyToast/astraeus"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -28,11 +28,14 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
+import structlog
 from starlette.applications import Starlette
 
 from mediakit.catalog.catalog import Catalog
 from mediakit.config import MediakitConfig
 from mediakit.storage.s3_compatible import S3CompatibleBackend
+
+logger = structlog.get_logger(__name__)
 
 
 class MediaKit:
@@ -98,6 +101,14 @@ class MediaKit:
                 async with mk.lifespan_context(app):
                     yield
         """
+        from mediakit import __version__
+
+        logger.info(
+            "mediakit.startup",
+            version=__version__,
+            bucket=self.config.bucket,
+            catalog_path=str(self.config.catalog_path),
+        )
         self._catalog = Catalog(self.config.catalog_path)
         await self._catalog.initialize()
         self._storage = S3CompatibleBackend(self.config)
@@ -105,6 +116,7 @@ class MediaKit:
             yield
         finally:
             await self._catalog.close()
+            logger.info("mediakit.shutdown")
 
     @asynccontextmanager
     async def lifespan(self, app):

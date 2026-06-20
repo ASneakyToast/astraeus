@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import httpx
+import structlog
 from nanoid import generate
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -20,7 +20,7 @@ from starlette_cms.tables import CMSWebhook
 if TYPE_CHECKING:
     from starlette_cms.app import CMS
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -29,12 +29,31 @@ logger = logging.getLogger(__name__)
 
 
 async def _deliver(url: str, payload: dict[str, Any]) -> None:
-    """POST *payload* to *url*; swallow all errors and log failures."""
+    """POST *payload* to *url*; swallow transport errors and log failures."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(url, json=payload)
+            resp = await client.post(url, json=payload)
+            if resp.status_code >= 400:
+                logger.warning(
+                    "starlette_cms.webhook.delivery_failed",
+                    url=url,
+                    event=payload.get("event"),
+                    status_code=resp.status_code,
+                )
+            else:
+                logger.debug(
+                    "starlette_cms.webhook.delivered",
+                    url=url,
+                    event=payload.get("event"),
+                    status_code=resp.status_code,
+                )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Webhook delivery failed to %s: %s", url, exc)
+        logger.warning(
+            "starlette_cms.webhook.delivery_error",
+            url=url,
+            event=payload.get("event"),
+            exc_info=exc,
+        )
 
 
 async def fire_event(
@@ -84,7 +103,11 @@ async def fire_event(
             events_list = raw_events if isinstance(raw_events, list) else []
 
         if event in events_list:
-            loop.create_task(_deliver(row["url"], payload))
+            task = loop.create_task(_deliver(row["url"], payload))
+            # Prevent unhandled-task-exception warnings; _deliver logs its own errors
+            task.add_done_callback(
+                lambda t: t.exception() if not t.cancelled() else None
+            )
 
 
 # ---------------------------------------------------------------------------
