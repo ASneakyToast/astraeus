@@ -5,7 +5,6 @@ Tests:
 1. First sync creates all items.
 2. Second sync (no changes) skips all — idempotency.
 3. Third sync with a changed item updates only that item.
-4. full_refresh=True ignores last-sync timestamp.
 
 The CMS is spun up using httpx.AsyncClient with ASGITransport so no network
 port is opened.  CMSClient is patched to use the same in-process ASGI client
@@ -17,7 +16,6 @@ from __future__ import annotations
 import os
 import tempfile
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 
 import httpx
 import pytest_asyncio
@@ -46,7 +44,7 @@ class TestGateway(BaseGateway):
     block_type = "test_item"
     auto_publish = True
 
-    async def fetch(self, since: datetime | None) -> AsyncIterator[GatewayItem]:
+    async def fetch(self) -> AsyncIterator[GatewayItem]:
         for entry in _FAKE_DB:
             yield GatewayItem(
                 import_ref=f"test:item:{entry['id']}",
@@ -65,13 +63,7 @@ async def cms_and_client():
     """
     Spin up a real CMS with in-process ASGI transport.  Returns (cms, client)
     where client is a CMSClient whose underlying httpx client uses ASGITransport.
-
-    The ``gateway_sync_state`` singleton block is registered here so all tests
-    in this module can use ``get_last_synced`` without needing to call
-    ``register()`` themselves.
     """
-    from starlette_cms_gateways.blocks import register as register_gateway_blocks
-
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
 
@@ -82,9 +74,6 @@ async def cms_and_client():
         class TestItemBlock:
             name: str = TextField(required=True)
             score: float = NumberField()
-
-        # Register gateway_sync_state before app is built
-        register_gateway_blocks(instance)
 
         starlette_app = Starlette(routes=[Mount("/", app=instance.app)])
 
@@ -177,24 +166,6 @@ async def test_third_sync_updates_changed_item(cms_and_client):
     assert r2.skipped == 1
 
 
-async def test_full_refresh_recreates_docs(cms_and_client):
-    """full_refresh=True — first sync creates; re-sync also sees all items (since=None)."""
-    _, client = cms_and_client
-    global _FAKE_DB
-    _FAKE_DB = [
-        {"id": "FR1", "name": "Fresh", "score": 1.0},
-    ]
-
-    gateway = TestGateway(cms_client=client)
-    r1 = await gateway.sync(full_refresh=True)
-    assert r1.created == 1
-
-    # Data unchanged — full refresh should still see the item, but skip it
-    r2 = await gateway.sync(full_refresh=True)
-    assert r2.skipped == 1
-    assert r2.created == 0
-
-
 async def test_sync_result_has_no_errors_on_clean_run(cms_and_client):
     _, client = cms_and_client
     global _FAKE_DB
@@ -204,18 +175,3 @@ async def test_sync_result_has_no_errors_on_clean_run(cms_and_client):
     result = await gateway.sync()
     assert not result.has_errors
     assert result.finished_at is not None
-
-
-async def test_sync_persists_state_and_get_last_synced(cms_and_client):
-    """After a sync, get_last_synced should return a non-None datetime."""
-    _cms, client = cms_and_client
-
-    global _FAKE_DB
-    _FAKE_DB = [{"id": "ST1", "name": "State Test", "score": 0.0}]
-
-    gateway = TestGateway(cms_client=client)
-    await gateway.sync()
-
-    last = await client.get_last_synced("test_service")
-    assert last is not None
-    assert isinstance(last, datetime)

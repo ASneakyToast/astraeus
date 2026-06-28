@@ -1,8 +1,8 @@
 """
 CMSClient — thin httpx wrapper for the starlette-cms HTTP API.
 
-Handles authentication, deduplication lookups, upserts, and sync state
-persistence.  All operations are async.
+Handles authentication, deduplication lookups, and upserts.
+All operations are async.
 
 Usage::
 
@@ -27,7 +27,6 @@ Usage::
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Literal
 
 import httpx
@@ -269,88 +268,6 @@ class CMSClient:
                 span.set_status(StatusCode.ERROR, str(exc))
                 raise
 
-    # ------------------------------------------------------------------
-    # Sync state helpers (GatewaySyncState singleton)
-    # ------------------------------------------------------------------
-
-    async def get_last_synced(self, service_name: str) -> datetime | None:
-        """
-        Return the last successful sync time for ``service_name``, or ``None``
-        if no sync state exists.
-
-        Reads the ``gateway_sync_state`` singleton and extracts the
-        ``last_synced`` timestamp for this service.
-        """
-        http = self._get_http()
-        resp = await http.get(
-            f"{self.base_url}/api/documents/singleton/gateway_sync_state",
-            headers=self._auth_headers(),
-        )
-        if resp.status_code == 404:
-            return None
-        if resp.status_code != 200:
-            raise CMSError(resp.status_code, resp.text)
-
-        data = resp.json()
-        body = data.get("body") or {}
-        services = body.get("services") or {}
-        svc = services.get(service_name) or {}
-        ts_str = svc.get("last_synced")
-        if ts_str:
-            try:
-                return datetime.fromisoformat(ts_str)
-            except ValueError:
-                logger.warning(
-                    "starlette_cms_gateways.client.bad_last_synced_timestamp",
-                    raw=ts_str,
-                )
-                return None
-        return None
-
-    async def save_sync_state(
-        self,
-        *,
-        service_name: str,
-        body: dict[str, Any],
-    ) -> None:
-        """
-        Publish an updated ``gateway_sync_state`` singleton to the CMS.
-
-        Reads the current active singleton (if any), merges the new service
-        entry, and publishes the updated version via
-        ``POST /api/documents/singleton/gateway_sync_state``.
-        """
-        http = self._get_http()
-
-        # Read current state so we can merge service entries
-        current_services: dict[str, Any] = {}
-        resp = await http.get(
-            f"{self.base_url}/api/documents/singleton/gateway_sync_state",
-            headers=self._auth_headers(),
-        )
-        if resp.status_code == 200:
-            current_body = resp.json().get("body") or {}
-            current_services = current_body.get("services") or {}
-
-        # Merge in the new service body (body is already the per-service dict)
-        current_services[service_name] = body.get("services", {}).get(service_name, body)
-
-        new_body: dict[str, Any] = {"services": current_services}
-
-        post_resp = await http.post(
-            f"{self.base_url}/api/documents/singleton/gateway_sync_state",
-            json={"body": new_body},
-            headers=self._auth_headers(),
-        )
-        if post_resp.status_code not in (200, 201):
-            # Sync state persistence failure is non-fatal — log but don't raise
-            logger.warning(
-                "starlette_cms_gateways.client.sync_state_save_failed",
-                service_name=service_name,
-                status_code=post_resp.status_code,
-                response=post_resp.text[:200],
-            )
-
     async def list_documents(
         self,
         *,
@@ -379,19 +296,3 @@ class CMSClient:
         if resp.status_code != 200:
             raise CMSError(resp.status_code, resp.text)
         return resp.json()
-
-    async def get_gateway_status(self) -> dict[str, Any]:
-        """
-        Return the current ``gateway_sync_state`` singleton body, or ``{}`` if
-        no sync state has been persisted yet.
-        """
-        http = self._get_http()
-        resp = await http.get(
-            f"{self.base_url}/api/documents/singleton/gateway_sync_state",
-            headers=self._auth_headers(),
-        )
-        if resp.status_code == 404:
-            return {}
-        if resp.status_code != 200:
-            raise CMSError(resp.status_code, resp.text)
-        return resp.json().get("body") or {}

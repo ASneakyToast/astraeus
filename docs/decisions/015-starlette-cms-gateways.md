@@ -140,3 +140,27 @@ layer (cron, GitHub Actions, Celery beat).
 - Monthly/temporal aggregation gateways (e.g. "Spotify monthly liked songs") are a consumer-level concern —
   `BaseGateway` supports them but the framework provides no special aggregation primitives
 - A `starlette-cms-gateways-contrib` package could ship community-maintained integrations in the future
+
+---
+
+## Amendment — EPIC-002 STORY-001 (2026-06-28)
+
+`GatewaySyncState` and the `since` parameter have been removed from the framework.
+
+**What was removed:**
+- `blocks.py` — `GatewaySyncStateBlock` helper and `register()` function
+- `CMSClient.get_last_synced()`, `save_sync_state()`, `get_gateway_status()` methods
+- `BaseGateway.sync(full_refresh=...)` — the `full_refresh` parameter
+- `BaseGateway.fetch(since: datetime | None)` — the `since` parameter
+- CLI `status` and `register-blocks` commands
+- MCP `list_gateway_syncs` tool
+
+**Rationale:** OpenTelemetry is now the observability layer for sync runs. Each gateway owns its own
+incremental-sync cursor state — the framework should not prescribe how state is stored. Gateways that
+need incremental sync can manage a CMS singleton, a file, or an external store themselves. Removing
+the built-in state layer simplifies the framework, removes a CMS dependency on `singleton=True` blocks,
+and decouples observability from the sync loop.
+
+**Migration:** Subclasses that relied on the `since` parameter must manage their own cursor state.
+Remove the `since` argument from `fetch()` implementations and call `register()` / `register-blocks`
+from consumer startup code if the `gateway_sync_state` singleton was previously used.

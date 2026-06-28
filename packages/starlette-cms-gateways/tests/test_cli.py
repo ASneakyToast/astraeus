@@ -109,17 +109,6 @@ def test_sync_unknown_gateway():
 
 
 # ---------------------------------------------------------------------------
-# gateways status — missing URL
-# ---------------------------------------------------------------------------
-
-
-def test_status_requires_cms_url():
-    runner = CliRunner()
-    result = runner.invoke(main, ["status"])
-    assert result.exit_code != 0
-
-
-# ---------------------------------------------------------------------------
 # Entry point discovery with a load error
 # ---------------------------------------------------------------------------
 

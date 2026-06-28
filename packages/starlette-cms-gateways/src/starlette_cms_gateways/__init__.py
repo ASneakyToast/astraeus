@@ -2,20 +2,18 @@
 starlette-cms-gateways — Gateway framework for starlette-cms.
 
 Pull data from external services into your CMS as documents, with
-deduplication, incremental sync, and CLI tooling built in.
+deduplication and CLI tooling built in.
 
 Quickstart::
 
     from starlette_cms_gateways import BaseGateway, GatewayItem
     from collections.abc import AsyncIterator
-    from datetime import datetime
 
     class MyGateway(BaseGateway):
         service_name = "my_service"
         block_type   = "my_item"
-        auto_publish = True
 
-        async def fetch(self, since: datetime | None) -> AsyncIterator[GatewayItem]:
+        async def fetch(self) -> AsyncIterator[GatewayItem]:
             yield GatewayItem(
                 import_ref="my_service:item:abc123",
                 slug="my-item-abc123",

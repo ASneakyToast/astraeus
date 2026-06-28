@@ -3,21 +3,23 @@ BaseGateway ABC and associated data types.
 
 Gateway authors subclass :class:`BaseGateway`, set three class-level attributes,
 and implement a single :meth:`~BaseGateway.fetch` async generator.  The
-framework handles deduplication, upsert, sync state, and result reporting.
+framework handles deduplication, upsert, and result reporting.
+
+Observability (last-sync timestamps, per-run metrics) is the gateway's own
+responsibility — use OpenTelemetry spans/metrics or your own state store.
 
 Usage::
 
     from starlette_cms_gateways import BaseGateway, GatewayItem
     from collections.abc import AsyncIterator
-    from datetime import datetime
 
     class SpotifyLikedSongsGateway(BaseGateway):
         service_name = "spotify_liked_songs"
         block_type   = "spotify_liked_song"
         auto_publish = True
 
-        async def fetch(self, since: datetime | None) -> AsyncIterator[GatewayItem]:
-            async for track in spotify_client.iter_liked_songs(after=since):
+        async def fetch(self) -> AsyncIterator[GatewayItem]:
+            async for track in spotify_client.iter_liked_songs():
                 yield GatewayItem(
                     import_ref=f"spotify:liked:{track['id']}",
                     slug=f"spotify-liked-{track['id']}",
@@ -137,8 +139,8 @@ class BaseGateway(ABC):
             auto_publish = True             # publish immediately on sync
 
     The framework-provided :meth:`sync` method handles the full fetch →
-    upsert → record-state loop.  Call it via the CLI (``gateways sync``) or
-    directly in your own code::
+    upsert loop.  Call it via the CLI (``gateways sync``) or directly in
+    your own code::
 
         gateway = MyGateway(cms_client=CMSClient(...))
         result = await gateway.sync()
@@ -152,7 +154,7 @@ class BaseGateway(ABC):
     # -----------------------------------------------------------------------
 
     service_name: ClassVar[str]
-    """Unique service identifier.  Used as the sync state singleton key."""
+    """Unique service identifier."""
 
     block_type: ClassVar[str]
     """CMS block type name for synced documents."""
@@ -172,17 +174,16 @@ class BaseGateway(ABC):
     # -----------------------------------------------------------------------
 
     @abstractmethod
-    def fetch(self, since: datetime | None) -> AsyncIterator[GatewayItem]:
+    def fetch(self) -> AsyncIterator[GatewayItem]:
         """
         Yield items from the external service.
-
-        :param since: The UTC datetime of the last successful sync, or ``None``
-            on the first run (full refresh).  Use this to request only new or
-            changed items from the upstream API.
 
         This method is an async generator — use ``yield`` to emit items one at
         a time.  The framework calls :meth:`sync` which iterates this generator
         and upserts each item into the CMS.
+
+        If you need incremental sync behaviour, manage your own cursor state
+        (e.g. a file, a CMS singleton document, or an external store).
         """
         ...
 
@@ -190,38 +191,27 @@ class BaseGateway(ABC):
     # Framework-provided sync loop
     # -----------------------------------------------------------------------
 
-    async def sync(self, *, full_refresh: bool = False) -> SyncResult:
+    async def sync(self) -> SyncResult:
         """
         Run a full sync cycle for this gateway.
 
-        1. Read last-sync state from the CMS (``GatewaySyncState`` singleton).
-        2. Call :meth:`fetch` with ``since`` (or ``None`` on full refresh).
-        3. For each :class:`GatewayItem` yielded:
+        1. Call :meth:`fetch` to get items from the external service.
+        2. For each :class:`GatewayItem` yielded:
 
            a. Check for an existing document by ``import_ref``.
            b. If none → create.
            c. If exists and body hash changed → update body.
            d. If exists and body identical → skip.
 
-        4. Persist updated ``GatewaySyncState`` singleton.
-
-        :param full_refresh: If True, ignore ``since`` and fetch everything.
         :returns: :class:`SyncResult` with create/update/skip counts.
         """
-        from starlette_cms_gateways.blocks import GatewaySyncStateBlock
-
         result = SyncResult()
 
         with tracer.start_as_current_span("gateways.sync") as span:
             span.set_attribute("gateway_name", self.service_name)
             try:
-                # Read the last successful sync timestamp
-                last_synced: datetime | None = None
-                if not full_refresh:
-                    last_synced = await self._client.get_last_synced(self.service_name)
-
                 # Iterate items from the external service
-                async for item in self.fetch(None if full_refresh else last_synced):
+                async for item in self.fetch():
                     try:
                         action = await self._client.upsert(
                             item=item,
@@ -244,16 +234,5 @@ class BaseGateway(ABC):
             except Exception as exc:
                 span.set_status(StatusCode.ERROR, str(exc))
                 raise
-
-        # Persist sync state back to the CMS
-        state_body = GatewaySyncStateBlock.make_body(
-            service_name=self.service_name,
-            last_synced=result.finished_at or datetime.now(UTC),
-            result=result,
-        )
-        await self._client.save_sync_state(
-            service_name=self.service_name,
-            body=state_body,
-        )
 
         return result

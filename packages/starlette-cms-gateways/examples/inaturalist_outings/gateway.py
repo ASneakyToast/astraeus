@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 
 import httpx
 
@@ -49,8 +48,8 @@ class INaturalistGateway(BaseGateway):
     Each observation becomes one document of block type
     ``inaturalist_observation``.
 
-    Incremental sync: on subsequent runs, only observations made *after* the
-    last sync date are fetched (uses the ``d1`` query parameter).
+    Manages its own cursor state internally if incremental sync is needed
+    (e.g. store the last sync date in a CMS singleton or external store).
 
     Configuration via environment variables:
     - ``INATURALIST_USERNAME`` — the iNaturalist account to pull observations for
@@ -69,7 +68,7 @@ class INaturalistGateway(BaseGateway):
                 "INaturalistGateway."
             )
 
-    async def fetch(self, since: datetime | None) -> AsyncIterator[GatewayItem]:
+    async def fetch(self) -> AsyncIterator[GatewayItem]:
         """
         Yield observations from iNaturalist, paginating through all results.
 
@@ -82,10 +81,6 @@ class INaturalistGateway(BaseGateway):
             "order_by": "observed_on",
             "per_page": 200,
         }
-
-        if since is not None:
-            # iNaturalist d1/d2 are date strings (YYYY-MM-DD)
-            params["d1"] = since.strftime("%Y-%m-%d")
 
         page = 1
 

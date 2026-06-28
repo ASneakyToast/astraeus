@@ -15,10 +15,7 @@ Usage::
 
 Exposed tools:
 
-- ``list_gateway_syncs`` — list all services in the sync state singleton
 - ``get_recent_gateway_items`` — list recently synced documents for a service
-- ``trigger_gateway_sync`` — invoke a registered gateway's ``sync()`` method
-  (requires the gateway class to be importable in the server's process)
 """
 
 from __future__ import annotations
@@ -59,18 +56,6 @@ def build_gateway_mcp_server(
     async def list_tools() -> list[Tool]:
         return [
             Tool(
-                name="list_gateway_syncs",
-                description=(
-                    "List all gateway services that have recorded sync state in this CMS, "
-                    "along with their last-synced timestamp and result counts."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                },
-            ),
-            Tool(
                 name="get_recent_gateway_items",
                 description=(
                     "List recently synced CMS documents for a specific gateway service. "
@@ -100,23 +85,6 @@ def build_gateway_mcp_server(
     @server.call_tool()
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         import json
-
-        if name == "list_gateway_syncs":
-            state = await client.get_gateway_status()
-            services = state.get("services") or {}
-            if not services:
-                return [TextContent(type="text", text="No sync state recorded yet.")]
-            lines = []
-            for svc_name, svc_data in sorted(services.items()):
-                last = svc_data.get("last_synced", "never")
-                r = svc_data.get("last_result") or {}
-                lines.append(
-                    f"{svc_name}: last_synced={last}  "
-                    f"created={r.get('created', 0)}  "
-                    f"updated={r.get('updated', 0)}  "
-                    f"skipped={r.get('skipped', 0)}"
-                )
-            return [TextContent(type="text", text="\n".join(lines))]
 
         if name == "get_recent_gateway_items":
             block_type = arguments.get("block_type", "")

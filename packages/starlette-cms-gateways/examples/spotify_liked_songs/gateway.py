@@ -38,7 +38,6 @@ Then sync::
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime
 
 from starlette_cms_gateways import BaseGateway, GatewayItem
 
@@ -48,17 +47,14 @@ class SpotifyLikedSongsGateway(BaseGateway):
     Sync Spotify liked songs into starlette-cms.
 
     Each liked track becomes one document of block type ``spotify_liked_song``.
-    Documents are ``append_only`` — they are auto-published and cannot be
-    modified after creation.
+    Documents are auto-published on creation.
 
-    Incremental sync: on subsequent runs, only tracks liked *after* the last
-    sync timestamp are fetched.  Spotify returns items newest-first; the gateway
-    stops iterating when it encounters a track older than ``since``.
+    Manages its own cursor state internally if incremental sync is needed.
     """
 
     service_name = "spotify_liked_songs"
     block_type = "spotify_liked_song"
-    auto_publish = True  # append_only blocks are auto-published anyway
+    auto_publish = True
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -78,12 +74,9 @@ class SpotifyLikedSongsGateway(BaseGateway):
                 "Install it with: pip install spotipy"
             ) from exc
 
-    async def fetch(self, since: datetime | None) -> AsyncIterator[GatewayItem]:
+    async def fetch(self) -> AsyncIterator[GatewayItem]:
         """
         Yield liked tracks from Spotify, newest first.
-
-        Stops when a track's ``added_at`` timestamp is older than ``since``
-        (incremental sync).  On full refresh (``since=None``), yields all tracks.
 
         Note: Spotipy's API is synchronous — we call it in a thread-pool via
         ``asyncio.to_thread`` to avoid blocking the event loop.
@@ -108,17 +101,6 @@ class SpotifyLikedSongsGateway(BaseGateway):
             for item in items:
                 track = item.get("track") or {}
                 added_at_str = item.get("added_at", "")
-
-                # Incremental stop condition
-                if since is not None and added_at_str:
-                    try:
-                        added_at = datetime.fromisoformat(
-                            added_at_str.replace("Z", "+00:00")
-                        )
-                        if added_at <= since:
-                            return  # Everything from here is older — stop
-                    except ValueError:
-                        pass
 
                 track_id = track.get("id", "")
                 if not track_id:
