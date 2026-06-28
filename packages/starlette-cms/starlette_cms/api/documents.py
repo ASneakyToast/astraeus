@@ -78,6 +78,11 @@ def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
                 "starlette_cms.documents.body_parse_failed_in_row",
                 body_type=type(body).__name__,
             )
+    # Strip null values from body on read — per ADR 016, absence is the
+    # canonical representation of "not set"; null is not a valid stored value.
+    # This sanitises legacy documents written before exclude_none=True was applied.
+    if isinstance(body, dict):
+        body = {k: v for k, v in body.items() if v is not None}
 
     meta = row.get("meta", "{}")
     if isinstance(meta, str):
