@@ -24,10 +24,8 @@ from starlette.applications import Starlette
 from starlette.routing import Mount
 from starlette_cms import CMS, TextField
 from starlette_cms.fields import NumberField
-
 from starlette_cms_gateways.base import BaseGateway, GatewayItem
 from starlette_cms_gateways.client import CMSClient
-
 
 # ---------------------------------------------------------------------------
 # Test gateway implementation
@@ -175,3 +173,91 @@ async def test_sync_result_has_no_errors_on_clean_run(cms_and_client):
     result = await gateway.sync()
     assert not result.has_errors
     assert result.finished_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Mutability test (STORY-002)
+# ---------------------------------------------------------------------------
+
+
+async def test_synced_doc_is_patchable(cms_and_client):
+    """Synced document can be PATCHed after creation (append_only=False default)."""
+    _, client = cms_and_client
+    global _FAKE_DB
+    _FAKE_DB = [{"id": "P1", "name": "Patchable", "score": 1.0}]
+
+    gateway = TestGateway(cms_client=client)
+    await gateway.sync()
+
+    # Find the created document
+    data = await client.list_documents(doc_type="test_item")
+    docs = data.get("documents", [])
+    assert docs, "Expected at least one document after sync"
+
+    doc = next(
+        (d for d in docs if d.get("import_ref") == "test:item:P1"),
+        None,
+    )
+    assert doc is not None, "Could not find synced document by import_ref"
+
+    # Should be patchable — update it directly
+    updated = await client.update_document(
+        doc["id"],
+        body={"name": "Patched!", "score": 99.0},
+    )
+    assert updated["body"]["name"] == "Patched!"
+
+
+# ---------------------------------------------------------------------------
+# Draft-by-default tests (STORY-003)
+# ---------------------------------------------------------------------------
+
+
+class DraftTestGateway(TestGateway):
+    """Like TestGateway but with auto_publish=False (the new BaseGateway default)."""
+
+    service_name = "draft_test_service"
+    auto_publish = False  # explicitly False — verifies draft-by-default behaviour
+
+
+async def test_sync_creates_drafts_by_default(cms_and_client):
+    """Default auto_publish=False — synced docs are created as drafts (published=False)."""
+    _, client = cms_and_client
+    global _FAKE_DB
+    _FAKE_DB = [{"id": "DR1", "name": "Draft Item", "score": 0.5}]
+
+    gateway = DraftTestGateway(cms_client=client)
+    result = await gateway.sync()
+
+    assert result.created == 1
+    assert not result.has_errors
+
+    data = await client.list_documents(doc_type="test_item")
+    doc = next(
+        (d for d in data.get("documents", []) if d.get("import_ref") == "test:item:DR1"),
+        None,
+    )
+    assert doc is not None, "Document should have been created"
+    assert doc.get("published") is False, "Document should be a draft (published=False)"
+
+
+async def test_sync_auto_publish_true_publishes_docs(cms_and_client):
+    """Explicit auto_publish=True publishes docs immediately after sync."""
+    _, client = cms_and_client
+    global _FAKE_DB
+    _FAKE_DB = [{"id": "PB1", "name": "Published Item", "score": 1.0}]
+
+    # TestGateway has auto_publish=True explicitly set
+    gateway = TestGateway(cms_client=client)
+    result = await gateway.sync()
+
+    assert result.created == 1
+    assert not result.has_errors
+
+    data = await client.list_documents(doc_type="test_item")
+    doc = next(
+        (d for d in data.get("documents", []) if d.get("import_ref") == "test:item:PB1"),
+        None,
+    )
+    assert doc is not None, "Document should have been created"
+    assert doc.get("published") is True, "Document should be published (auto_publish=True)"

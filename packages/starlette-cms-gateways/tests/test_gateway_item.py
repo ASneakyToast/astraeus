@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from starlette_cms_gateways.base import GatewayItem, SyncResult
-
 
 # ---------------------------------------------------------------------------
 # GatewayItem
@@ -94,3 +91,34 @@ def test_sync_result_to_dict():
     assert d["total"] == 6
     assert d["finished_at"] is not None
     assert d["errors"] == []
+
+
+# ---------------------------------------------------------------------------
+# BaseGateway.immutable default
+# ---------------------------------------------------------------------------
+
+
+def test_base_gateway_immutable_defaults_to_false():
+    """immutable class attribute defaults to False."""
+    from starlette_cms_gateways.base import BaseGateway
+
+    assert BaseGateway.immutable is False
+
+
+def test_gateway_subclass_can_set_immutable_true():
+    """Subclass can override immutable = True and it's readable."""
+    from typing import ClassVar
+
+    from starlette_cms_gateways.base import BaseGateway
+
+    class AuditGateway(BaseGateway):
+        service_name = "audit_svc"
+        block_type = "audit_item"
+        immutable: ClassVar[bool] = True
+
+        async def fetch(self):  # type: ignore[override]
+            return
+            yield
+
+    assert AuditGateway.immutable is True
+    assert BaseGateway.immutable is False  # base unchanged

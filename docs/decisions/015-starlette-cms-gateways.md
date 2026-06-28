@@ -164,3 +164,30 @@ and decouples observability from the sync loop.
 **Migration:** Subclasses that relied on the `since` parameter must manage their own cursor state.
 Remove the `since` argument from `fetch()` implementations and call `register()` / `register-blocks`
 from consumer startup code if the `gateway_sync_state` singleton was previously used.
+
+---
+
+## Amendment — EPIC-002 STORY-002 (2026-06-28): mutable by default
+
+Gateway blocks are now **mutable by default** (`append_only=False`).  The previous examples used
+`append_only=True` which prevented post-sync annotation.  The new default allows patching synced
+documents via MCP, the editor, or the API — adding notes, tags, curated fields, etc.
+
+A new `immutable: ClassVar[bool] = False` attribute on `BaseGateway` serves as a **declarative marker**
+for tooling.  Gateways that want audit-trail behaviour set both `append_only=True` on the block and
+`immutable = True` on the gateway class.  The CMS enforces `append_only` at the API layer.
+
+---
+
+## Amendment — EPIC-002 STORY-003 (2026-06-28): draft-by-default
+
+`auto_publish` class-level default changed from `True` to `False` in both `BaseGateway`
+and `CMSClient.upsert()`.
+
+**Rationale:** Synced items should require explicit human approval before appearing publicly.  The original
+default of `True` was optimistic (suited to personal activity feeds), but it is the wrong safe default for
+a general-purpose framework.  Gateways that want immediate publication set `auto_publish = True` explicitly
+on their subclass — the override is one line and the intent is clear.
+
+**Migration:** Any existing `BaseGateway` subclass that relied on the `True` default must now set
+`auto_publish = True` explicitly.

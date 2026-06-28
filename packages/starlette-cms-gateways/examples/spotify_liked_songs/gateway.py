@@ -54,7 +54,7 @@ class SpotifyLikedSongsGateway(BaseGateway):
 
     service_name = "spotify_liked_songs"
     block_type = "spotify_liked_song"
-    auto_publish = True
+    auto_publish = False  # Hold as drafts; publish after review. Set True to auto-publish.
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)

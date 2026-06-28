@@ -194,7 +194,7 @@ class CMSClient:
         *,
         item: GatewayItem,
         block_type: str,
-        auto_publish: bool = True,
+        auto_publish: bool = False,
     ) -> Literal["created", "updated", "skipped"]:
         """
         Create, update, or skip a document based on ``import_ref`` deduplication.
@@ -208,6 +208,9 @@ class CMSClient:
 
         The content hash is stored in the document's ``meta.content_hash`` field
         so it survives across process restarts without re-fetching the full body.
+
+        By default (``auto_publish=False``), created/updated documents remain as
+        drafts.  Pass ``auto_publish=True`` to publish immediately.
         """
         with tracer.start_as_current_span("gateways.client.upsert") as span:
             span.set_attribute("doc_type", block_type)

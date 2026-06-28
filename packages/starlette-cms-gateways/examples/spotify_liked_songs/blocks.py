@@ -20,13 +20,14 @@ from starlette_cms.fields import TextField, URLField
 from starlette_cms.registry import block
 
 
-@block("spotify_liked_song", append_only=True)
+@block("spotify_liked_song")
 class SpotifyLikedSongBlock:
     """
     A single Spotify liked song entry.
 
-    ``append_only=True`` means these records are auto-published on creation and
-    cannot be modified after creation — a clean audit trail of listening history.
+    Mutable by default — annotate via MCP or editor after sync (add notes,
+    curate, tag).  To create an immutable audit trail instead, set
+    ``append_only=True`` on the block and ``immutable = True`` on the gateway.
     """
 
     track_name: str = TextField(label="Track Name")

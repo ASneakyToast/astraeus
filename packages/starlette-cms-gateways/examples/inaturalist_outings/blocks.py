@@ -16,12 +16,14 @@ from starlette_cms.fields import JSONField, NumberField, TextField, URLField
 from starlette_cms.registry import block
 
 
-@block("inaturalist_observation", append_only=True)
+@block("inaturalist_observation")
 class INaturalistObservationBlock:
     """
     A single iNaturalist observation.
 
-    ``append_only=True`` — observations are immutable once synced.
+    Mutable by default — annotate via MCP or editor after sync (add notes,
+    curate, tag).  To create an immutable record, set ``append_only=True``
+    on the block and ``immutable = True`` on the gateway.
     """
 
     species_guess: str = TextField(label="Species (as identified)")

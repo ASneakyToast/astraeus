@@ -10,11 +10,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 from click.testing import CliRunner
-
 from starlette_cms_gateways.cli import main
-
 
 # ---------------------------------------------------------------------------
 # Helpers

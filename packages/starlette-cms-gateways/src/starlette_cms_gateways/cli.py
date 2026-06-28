@@ -31,7 +31,6 @@ from typing import Any
 import click
 import structlog
 
-
 # ---------------------------------------------------------------------------
 # Logging setup (CLI is an application — it configures structlog directly)
 # ---------------------------------------------------------------------------

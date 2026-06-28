@@ -35,7 +35,6 @@ import os
 from collections.abc import AsyncIterator
 
 import httpx
-
 from starlette_cms_gateways import BaseGateway, GatewayItem
 
 INATURALIST_API = "https://api.inaturalist.org/v1"
@@ -57,7 +56,7 @@ class INaturalistGateway(BaseGateway):
 
     service_name = "inaturalist_outings"
     block_type = "inaturalist_observation"
-    auto_publish = True
+    auto_publish = False  # Hold as drafts; publish after review. Set True to auto-publish.
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)

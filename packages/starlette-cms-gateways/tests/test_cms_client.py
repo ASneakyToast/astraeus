@@ -7,12 +7,9 @@ respx and return carefully crafted mock responses.
 
 from __future__ import annotations
 
-import json
-
 import httpx
 import pytest
 import respx
-
 from starlette_cms_gateways.base import GatewayItem
 from starlette_cms_gateways.client import CMSClient, CMSError
 
@@ -116,7 +113,7 @@ async def test_upsert_creates_new_document():
             return_value=httpx.Response(201, json=created_doc)
         )
         # publish
-        mock.post(f"/api/documents/new001/publish").mock(
+        mock.post("/api/documents/new001/publish").mock(
             return_value=httpx.Response(200, json={**created_doc, "published": True})
         )
 
@@ -262,3 +259,76 @@ async def test_auth_header_sent_on_requests():
         await client.find_by_import_ref("block", "ref")
 
     assert sent_headers.get("authorization") == "Bearer my-key"
+
+
+# ---------------------------------------------------------------------------
+# upsert — default auto_publish=False (STORY-003)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_upsert_create_default_is_draft():
+    """Default upsert (no auto_publish kwarg) should NOT call publish endpoint."""
+    item = GatewayItem(
+        import_ref="svc:type:DRAFT",
+        slug="draft-doc",
+        body={"title": "Draft"},
+    )
+    created_doc = _doc(doc_id="draft01", import_ref="svc:type:DRAFT")
+
+    publish_called = False
+
+    with respx.mock(base_url=BASE, assert_all_mocked=False, assert_all_called=False) as mock:
+        mock.get("/api/documents").mock(
+            return_value=httpx.Response(200, json=_list_resp([]))
+        )
+        mock.post("/api/documents").mock(
+            return_value=httpx.Response(201, json=created_doc)
+        )
+
+        def _record_publish(request):
+            nonlocal publish_called
+            publish_called = True
+            return httpx.Response(200, json={})
+
+        mock.post("/api/documents/draft01/publish").mock(side_effect=_record_publish)
+
+        client = _make_client()
+        action = await client.upsert(item=item, block_type="my_block")  # no auto_publish kwarg
+
+    assert action == "created"
+    assert not publish_called, "publish should NOT be called with default auto_publish=False"
+
+
+@pytest.mark.anyio
+async def test_upsert_create_explicit_auto_publish_true():
+    """Explicit auto_publish=True should call publish endpoint."""
+    item = GatewayItem(
+        import_ref="svc:type:PUB2",
+        slug="pub-doc-2",
+        body={"title": "Publish me"},
+    )
+    created_doc = _doc(doc_id="pub02", import_ref="svc:type:PUB2")
+
+    publish_called = False
+
+    with respx.mock(base_url=BASE, assert_all_mocked=False, assert_all_called=False) as mock:
+        mock.get("/api/documents").mock(
+            return_value=httpx.Response(200, json=_list_resp([]))
+        )
+        mock.post("/api/documents").mock(
+            return_value=httpx.Response(201, json=created_doc)
+        )
+
+        def _record_publish(request):
+            nonlocal publish_called
+            publish_called = True
+            return httpx.Response(200, json={**created_doc, "published": True})
+
+        mock.post("/api/documents/pub02/publish").mock(side_effect=_record_publish)
+
+        client = _make_client()
+        action = await client.upsert(item=item, block_type="my_block", auto_publish=True)
+
+    assert action == "created"
+    assert publish_called, "publish SHOULD be called with explicit auto_publish=True"

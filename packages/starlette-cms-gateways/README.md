@@ -25,7 +25,7 @@ Define a block type for your gateway data in your own app:
 from starlette_cms.registry import block
 from starlette_cms.fields import TextField, URLField
 
-@block("spotify_liked_song", append_only=True)
+@block("spotify_liked_song")
 class SpotifyLikedSongBlock:
     track_name:  str = TextField()
     artist_name: str = TextField()
@@ -101,14 +101,15 @@ gateways status --cms-url ... \           # show last sync state for all gateway
 
 | Attribute | Type | Description |
 |---|---|---|
-| `service_name` | `ClassVar[str]` | Unique service identifier (used in sync state key) |
+| `service_name` | `ClassVar[str]` | Unique service identifier |
 | `block_type` | `ClassVar[str]` | CMS block type name for synced documents |
-| `auto_publish` | `ClassVar[bool]` | Publish documents immediately on sync (default `True`) |
+| `auto_publish` | `ClassVar[bool]` | Publish documents immediately on sync (default `False` — creates drafts) |
+| `immutable` | `ClassVar[bool]` | Documentary marker: gateway records are append-only (default `False`) |
 
 | Method | Signature | Description |
 |---|---|---|
-| `fetch` | `(since: datetime \| None) → AsyncIterator[GatewayItem]` | **Implement this.** Yield items from the external service. |
-| `sync` | `(full_refresh: bool = False) → SyncResult` | Framework-provided. Calls `fetch()` and upserts all items. |
+| `fetch` | `() → AsyncIterator[GatewayItem]` | **Implement this.** Yield items from the external service. |
+| `sync` | `() → SyncResult` | Framework-provided. Calls `fetch()` and upserts all items. |
 
 ## `GatewayItem` reference
 
@@ -125,6 +126,35 @@ See [`examples/`](./examples/) for full implementations:
 
 - [`examples/spotify_liked_songs/`](./examples/spotify_liked_songs/) — Spotify liked songs with the Spotipy library
 - [`examples/inaturalist_outings/`](./examples/inaturalist_outings/) — iNaturalist observations grouped into outings
+
+## Mutable vs. immutable gateway items
+
+By default, synced documents are **mutable** — you can patch them via the CMS
+API, the MCP server, or the editor UI after they are synced.  This lets you add
+notes, tags, ratings, or any other annotations on top of the imported data.
+
+To opt into **immutable** (audit-trail) behaviour for a gateway:
+
+1. Register your block with `append_only=True`:
+
+   ```python
+   @block("my_event", append_only=True)
+   class MyEventBlock:
+       ...
+   ```
+
+2. Set `immutable = True` on your gateway class:
+
+   ```python
+   class MyGateway(BaseGateway):
+       service_name = "my_service"
+       block_type   = "my_event"
+       immutable    = True          # ← declarative marker for tooling
+   ```
+
+The `immutable` flag on the gateway is documentary — the CMS enforces
+`append_only` at the API layer.  Tooling (`gateways list`, MCP introspection)
+reads `immutable` to describe the gateway's intent.
 
 ## Requirements
 

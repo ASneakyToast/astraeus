@@ -134,9 +134,9 @@ class BaseGateway(ABC):
     Subclass this and implement :meth:`fetch`.  Set three class attributes::
 
         class MyGateway(BaseGateway):
-            service_name = "my_service"     # unique key — used in sync state
+            service_name = "my_service"     # unique key
             block_type   = "my_block"       # CMS block type for synced docs
-            auto_publish = True             # publish immediately on sync
+            auto_publish = False            # default: create as drafts
 
     The framework-provided :meth:`sync` method handles the full fetch →
     upsert loop.  Call it via the CLI (``gateways sync``) or directly in
@@ -159,8 +159,16 @@ class BaseGateway(ABC):
     block_type: ClassVar[str]
     """CMS block type name for synced documents."""
 
-    auto_publish: ClassVar[bool] = True
-    """If True, documents are published immediately on creation or update."""
+    auto_publish: ClassVar[bool] = False
+    """If False (default), documents are created as drafts and must be explicitly
+    published.  Set True to publish immediately on creation or update.
+    """
+
+    immutable: ClassVar[bool] = False
+    """If True, register the gateway's block type with ``append_only=True`` in the CMS.
+    Use for audit-style gateways where records should never be modified after creation.
+    Default False — synced items are mutable so annotations can be added after sync.
+    """
 
     # -----------------------------------------------------------------------
     # Constructor

@@ -39,7 +39,6 @@ def build_gateway_mcp_server(
     """
     try:
         from mcp.server import Server
-        from mcp.server.models import InitializationOptions
         from mcp.types import TextContent, Tool
     except ImportError as exc:
         raise ImportError(
