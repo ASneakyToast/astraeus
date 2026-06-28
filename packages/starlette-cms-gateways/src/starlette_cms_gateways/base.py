@@ -39,8 +39,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from opentelemetry import trace
+from opentelemetry.trace import StatusCode
+
 if TYPE_CHECKING:
     from starlette_cms_gateways.client import CMSClient
+
+tracer = trace.get_tracer(__name__)
 
 
 @dataclass
@@ -207,31 +212,38 @@ class BaseGateway(ABC):
 
         result = SyncResult()
 
-        # Read the last successful sync timestamp
-        last_synced: datetime | None = None
-        if not full_refresh:
-            last_synced = await self._client.get_last_synced(self.service_name)
-
-        # Iterate items from the external service
-        async for item in self.fetch(None if full_refresh else last_synced):
+        with tracer.start_as_current_span("gateways.sync") as span:
+            span.set_attribute("gateway_name", self.service_name)
             try:
-                action = await self._client.upsert(
-                    item=item,
-                    block_type=self.block_type,
-                    auto_publish=self.auto_publish
-                    if item.published is None
-                    else item.published,
-                )
-                if action == "created":
-                    result.created += 1
-                elif action == "updated":
-                    result.updated += 1
-                else:
-                    result.skipped += 1
-            except Exception as exc:  # noqa: BLE001
-                result.errors.append((item.import_ref, str(exc)))
+                # Read the last successful sync timestamp
+                last_synced: datetime | None = None
+                if not full_refresh:
+                    last_synced = await self._client.get_last_synced(self.service_name)
 
-        result.finish()
+                # Iterate items from the external service
+                async for item in self.fetch(None if full_refresh else last_synced):
+                    try:
+                        action = await self._client.upsert(
+                            item=item,
+                            block_type=self.block_type,
+                            auto_publish=self.auto_publish
+                            if item.published is None
+                            else item.published,
+                        )
+                        if action == "created":
+                            result.created += 1
+                        elif action == "updated":
+                            result.updated += 1
+                        else:
+                            result.skipped += 1
+                    except Exception as exc:  # noqa: BLE001
+                        result.errors.append((item.import_ref, str(exc)))
+
+                result.finish()
+                span.set_attribute("item_count", result.total)
+            except Exception as exc:
+                span.set_status(StatusCode.ERROR, str(exc))
+                raise
 
         # Persist sync state back to the CMS
         state_body = GatewaySyncStateBlock.make_body(

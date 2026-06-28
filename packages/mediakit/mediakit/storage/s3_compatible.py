@@ -9,6 +9,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import structlog
+from opentelemetry import trace
+from opentelemetry.trace import StatusCode
 
 from mediakit.config import MediakitConfig
 
@@ -16,6 +18,7 @@ if TYPE_CHECKING:
     import obstore.store as obs
 
 logger = structlog.get_logger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
 class S3CompatibleBackend:
@@ -66,21 +69,29 @@ class S3CompatibleBackend:
 
         import obstore
 
-        store = self._get_store()
-        url = await obstore.sign_async(store, "PUT", key, timedelta(seconds=expires_in))
-        expires_at = (datetime.now(UTC) + timedelta(seconds=expires_in)).isoformat()
-        return {"upload_url": url, "key": key, "expires_at": expires_at}
+        with tracer.start_as_current_span("mediakit.storage.prepare_upload") as span:
+            span.set_attribute("key", key)
+            try:
+                store = self._get_store()
+                url = await obstore.sign_async(store, "PUT", key, timedelta(seconds=expires_in))
+                expires_at = (datetime.now(UTC) + timedelta(seconds=expires_in)).isoformat()
+                return {"upload_url": url, "key": key, "expires_at": expires_at}
+            except Exception as exc:
+                span.set_status(StatusCode.ERROR, str(exc))
+                raise
 
     async def confirm_exists(self, key: str) -> bool:
         """Return True if the object exists in the bucket."""
         import obstore
 
-        try:
-            await obstore.head_async(self._get_store(), key)
-            return True
-        except Exception:
-            logger.debug("mediakit.storage.object_not_found", key=key)
-            return False
+        with tracer.start_as_current_span("mediakit.storage.confirm_exists") as span:
+            span.set_attribute("key", key)
+            try:
+                await obstore.head_async(self._get_store(), key)
+                return True
+            except Exception:
+                logger.debug("mediakit.storage.object_not_found", key=key)
+                return False
 
     async def get_url(self, key: str, expires_in: int = 3600) -> str:
         """Return a presigned GET URL (or public URL if bucket is public-read).

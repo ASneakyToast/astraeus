@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import structlog
 from nanoid import generate
+from opentelemetry import trace
+from opentelemetry.trace import StatusCode
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
@@ -21,6 +23,7 @@ if TYPE_CHECKING:
     from starlette_cms.app import CMS
 
 logger = structlog.get_logger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -30,30 +33,36 @@ logger = structlog.get_logger(__name__)
 
 async def _deliver(url: str, payload: dict[str, Any]) -> None:
     """POST *payload* to *url*; swallow transport errors and log failures."""
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(url, json=payload)
-            if resp.status_code >= 400:
-                logger.warning(
-                    "starlette_cms.webhook.delivery_failed",
-                    url=url,
-                    event=payload.get("event"),
-                    status_code=resp.status_code,
-                )
-            else:
-                logger.debug(
-                    "starlette_cms.webhook.delivered",
-                    url=url,
-                    event=payload.get("event"),
-                    status_code=resp.status_code,
-                )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "starlette_cms.webhook.delivery_error",
-            url=url,
-            event=payload.get("event"),
-            exc_info=exc,
-        )
+    event = payload.get("event", "")
+    with tracer.start_as_current_span("cms.webhooks.deliver") as span:
+        span.set_attribute("url", url)
+        span.set_attribute("event", event)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(url, json=payload)
+                if resp.status_code >= 400:
+                    span.set_status(StatusCode.ERROR, f"HTTP {resp.status_code}")
+                    logger.warning(
+                        "starlette_cms.webhook.delivery_failed",
+                        url=url,
+                        event=event,
+                        status_code=resp.status_code,
+                    )
+                else:
+                    logger.debug(
+                        "starlette_cms.webhook.delivered",
+                        url=url,
+                        event=event,
+                        status_code=resp.status_code,
+                    )
+        except Exception as exc:  # noqa: BLE001
+            span.set_status(StatusCode.ERROR, str(exc))
+            logger.warning(
+                "starlette_cms.webhook.delivery_error",
+                url=url,
+                event=event,
+                exc_info=exc,
+            )
 
 
 async def fire_event(
@@ -98,6 +107,10 @@ async def fire_event(
             try:
                 events_list = json.loads(raw_events)
             except (json.JSONDecodeError, TypeError):
+                logger.warning(
+                    "starlette_cms.webhooks.events_parse_failed",
+                    webhook_id=row.get("id"),
+                )
                 events_list = []
         else:
             events_list = raw_events if isinstance(raw_events, list) else []
@@ -124,6 +137,10 @@ def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
                 try:
                     result[key] = json.loads(value)
                 except (json.JSONDecodeError, TypeError):
+                    logger.warning(
+                        "starlette_cms.webhooks.row_field_parse_failed",
+                        key=key,
+                    )
                     result[key] = []
             else:
                 result[key] = value

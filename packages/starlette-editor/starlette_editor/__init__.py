@@ -18,7 +18,14 @@ Quickstart::
     )
 """
 
+import logging as _logging
+
 from starlette_editor.app import Editor
+
+# Library contract: prevent "No handlers could be found" warnings in host apps
+# that have not called setup_telemetry().  The host is responsible for adding
+# real handlers; we only ensure the logger is known to the hierarchy.
+_logging.getLogger("starlette_editor").addHandler(_logging.NullHandler())
 
 __version__ = "0.2.0"
 

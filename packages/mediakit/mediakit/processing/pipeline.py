@@ -22,8 +22,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from opentelemetry import trace
+from opentelemetry.trace import StatusCode
+
 if TYPE_CHECKING:
     from mediakit.config import MediakitConfig
+
+tracer = trace.get_tracer(__name__)
 
 
 @dataclass
@@ -134,4 +139,10 @@ async def run_pipeline(source_path: Path, config: MediakitConfig) -> ProcessingR
         EXIF stripping, dimension cap, and output format/quality.
     :returns: :class:`ProcessingResult` with final dimensions, content type, and size.
     """
-    return await asyncio.to_thread(_sync_run_pipeline, source_path, config)
+    with tracer.start_as_current_span("mediakit.processing.pipeline") as span:
+        span.set_attribute("key", str(source_path))
+        try:
+            return await asyncio.to_thread(_sync_run_pipeline, source_path, config)
+        except Exception as exc:
+            span.set_status(StatusCode.ERROR, str(exc))
+            raise

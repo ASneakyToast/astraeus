@@ -27,15 +27,18 @@ Usage::
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Literal
 
 import httpx
 import structlog
+from opentelemetry import trace
+from opentelemetry.trace import StatusCode
 
-from starlette_cms_gateways.base import GatewayItem, SyncResult
+from starlette_cms_gateways.base import GatewayItem
 
 logger = structlog.get_logger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
 class CMSError(Exception):
@@ -207,54 +210,64 @@ class CMSClient:
         The content hash is stored in the document's ``meta.content_hash`` field
         so it survives across process restarts without re-fetching the full body.
         """
-        existing = await self.find_by_import_ref(block_type, item.import_ref)
-
-        if existing is None:
-            # Create new document
-            meta: dict[str, Any] = {"content_hash": item.content_hash()}
-            if item.title:
-                meta["title"] = item.title
-            doc = await self.create_document(
-                doc_type=block_type,
-                slug=item.slug,
-                body=item.body,
-                import_ref=item.import_ref,
-                meta=meta,
-            )
-            if auto_publish:
-                await self.publish_document(doc["id"])
-            return "created"
-
-        # Compare content hash to decide whether to update
-        existing_meta = existing.get("meta") or {}
-        if isinstance(existing_meta, str):
-            import json as _json
-
+        with tracer.start_as_current_span("gateways.client.upsert") as span:
+            span.set_attribute("doc_type", block_type)
+            span.set_attribute("import_ref", item.import_ref)
             try:
-                existing_meta = _json.loads(existing_meta)
-            except Exception:
-                logger.warning(
-                    "starlette_cms_gateways.client.meta_parse_failed",
-                    import_ref=item.import_ref,
+                existing = await self.find_by_import_ref(block_type, item.import_ref)
+
+                if existing is None:
+                    # Create new document
+                    meta: dict[str, Any] = {"content_hash": item.content_hash()}
+                    if item.title:
+                        meta["title"] = item.title
+                    doc = await self.create_document(
+                        doc_type=block_type,
+                        slug=item.slug,
+                        body=item.body,
+                        import_ref=item.import_ref,
+                        meta=meta,
+                    )
+                    if auto_publish:
+                        await self.publish_document(doc["id"])
+                    span.set_attribute("action", "created")
+                    return "created"
+
+                # Compare content hash to decide whether to update
+                existing_meta = existing.get("meta") or {}
+                if isinstance(existing_meta, str):
+                    import json as _json
+
+                    try:
+                        existing_meta = _json.loads(existing_meta)
+                    except Exception:
+                        logger.warning(
+                            "starlette_cms_gateways.client.meta_parse_failed",
+                            import_ref=item.import_ref,
+                        )
+                        existing_meta = {}
+
+                stored_hash = existing_meta.get("content_hash", "")
+                if stored_hash == item.content_hash():
+                    span.set_attribute("action", "skipped")
+                    return "skipped"
+
+                # Update body and refresh content hash
+                new_meta = {**existing_meta, "content_hash": item.content_hash()}
+                if item.title:
+                    new_meta["title"] = item.title
+                await self.update_document(
+                    existing["id"],
+                    body=item.body,
+                    meta=new_meta,
                 )
-                existing_meta = {}
-
-        stored_hash = existing_meta.get("content_hash", "")
-        if stored_hash == item.content_hash():
-            return "skipped"
-
-        # Update body and refresh content hash
-        new_meta = {**existing_meta, "content_hash": item.content_hash()}
-        if item.title:
-            new_meta["title"] = item.title
-        await self.update_document(
-            existing["id"],
-            body=item.body,
-            meta=new_meta,
-        )
-        if auto_publish and not existing.get("published"):
-            await self.publish_document(existing["id"])
-        return "updated"
+                if auto_publish and not existing.get("published"):
+                    await self.publish_document(existing["id"])
+                span.set_attribute("action", "updated")
+                return "updated"
+            except Exception as exc:
+                span.set_status(StatusCode.ERROR, str(exc))
+                raise
 
     # ------------------------------------------------------------------
     # Sync state helpers (GatewaySyncState singleton)
@@ -287,6 +300,10 @@ class CMSClient:
             try:
                 return datetime.fromisoformat(ts_str)
             except ValueError:
+                logger.warning(
+                    "starlette_cms_gateways.client.bad_last_synced_timestamp",
+                    raw=ts_str,
+                )
                 return None
         return None
 

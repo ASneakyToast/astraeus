@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import structlog
+from opentelemetry import trace
+from opentelemetry.trace import StatusCode
 from piccolo.columns.base import Column
 from pydantic import ValidationError
 from starlette.requests import Request
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
     from starlette_cms.app import CMS
 
 logger = structlog.get_logger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
 def _utcnow() -> str:
@@ -71,13 +74,17 @@ def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         try:
             body = json.loads(body)
         except (json.JSONDecodeError, TypeError):
-            pass
+            logger.warning(
+                "starlette_cms.documents.body_parse_failed_in_row",
+                body_type=type(body).__name__,
+            )
 
     meta = row.get("meta", "{}")
     if isinstance(meta, str):
         try:
             meta = json.loads(meta)
         except (json.JSONDecodeError, TypeError):
+            logger.warning("starlette_cms.documents.meta_parse_failed_in_row")
             meta = {}
 
     # Convert datetime objects to ISO strings
@@ -262,7 +269,7 @@ def make_document_routes(cms: CMS) -> list[Route]:
                 return err
 
         params = request.query_params
-        doc_type = params.get("type")
+        doc_type = params.get("type") or ""
         slug = params.get("slug")
         import_ref = params.get("import_ref")
         published_param = params.get("published")
@@ -311,27 +318,35 @@ def make_document_routes(cms: CMS) -> list[Route]:
 
         query = query.order_by(order_col, ascending=order_asc)
 
-        if key_value_filters:
-            all_rows = await query.run()
-            all_docs = [_row_to_dict(r) for r in all_rows]
-            filtered_docs = [d for d in all_docs if _matches_filters(d, key_value_filters)]
-            total = len(filtered_docs)
-            docs = filtered_docs[offset : offset + limit]
-        else:
-            # Total count (without limit/offset)
-            count_query = CMSDocument.count()
-            if doc_type:
-                count_query = count_query.where(CMSDocument.doc_type == doc_type)
-            if slug:
-                count_query = count_query.where(CMSDocument.slug == slug)
-            if import_ref is not None:
-                count_query = count_query.where(CMSDocument.import_ref == import_ref)
-            if published_param is not None:
-                count_query = count_query.where(CMSDocument.published == published)  # type: ignore[possibly-undefined]
+        with tracer.start_as_current_span("cms.documents.list") as span:
+            span.set_attribute("doc_type", doc_type)
+            span.set_attribute("limit", limit)
+            span.set_attribute("offset", offset)
+            try:
+                if key_value_filters:
+                    all_rows = await query.run()
+                    all_docs = [_row_to_dict(r) for r in all_rows]
+                    filtered_docs = [d for d in all_docs if _matches_filters(d, key_value_filters)]
+                    total = len(filtered_docs)
+                    docs = filtered_docs[offset : offset + limit]
+                else:
+                    # Total count (without limit/offset)
+                    count_query = CMSDocument.count()
+                    if doc_type:
+                        count_query = count_query.where(CMSDocument.doc_type == doc_type)
+                    if slug:
+                        count_query = count_query.where(CMSDocument.slug == slug)
+                    if import_ref is not None:
+                        count_query = count_query.where(CMSDocument.import_ref == import_ref)
+                    if published_param is not None:
+                        count_query = count_query.where(CMSDocument.published == published)  # type: ignore[possibly-undefined]
 
-            total = await count_query.run()
-            rows = await query.limit(limit).offset(offset).run()
-            docs = [_row_to_dict(r) for r in rows]
+                    total = await count_query.run()
+                    rows = await query.limit(limit).offset(offset).run()
+                    docs = [_row_to_dict(r) for r in rows]
+            except Exception as exc:
+                span.set_status(StatusCode.ERROR, str(exc))
+                raise
 
         # Bulk-resolve requested ref fields
         if resolve_refs_param:
@@ -439,36 +454,42 @@ def make_document_routes(cms: CMS) -> list[Route]:
                 operation="is_append_only",
             )
 
-        if is_append_only:
-            await CMSDocument.insert(
-                CMSDocument(
-                    id=doc_id,
-                    doc_type=doc_type,
-                    slug=slug,
-                    body=json.dumps(validated.model_dump(exclude_none=True)),
-                    meta=json.dumps(doc_meta),
-                    created_at=now,
-                    updated_at=now,
-                    published=True,
-                    published_at=now,
-                    import_ref=import_ref,
-                )
-            ).run()
-        else:
-            await CMSDocument.insert(
-                CMSDocument(
-                    id=doc_id,
-                    doc_type=doc_type,
-                    slug=slug,
-                    body=json.dumps(validated.model_dump(exclude_none=True)),
-                    meta=json.dumps(doc_meta),
-                    created_at=now,
-                    updated_at=now,
-                    published=False,
-                    published_at=None,
-                    import_ref=import_ref,
-                )
-            ).run()
+        with tracer.start_as_current_span("cms.documents.create") as span:
+            span.set_attribute("doc_type", doc_type)
+            try:
+                if is_append_only:
+                    await CMSDocument.insert(
+                        CMSDocument(
+                            id=doc_id,
+                            doc_type=doc_type,
+                            slug=slug,
+                            body=json.dumps(validated.model_dump(exclude_none=True)),
+                            meta=json.dumps(doc_meta),
+                            created_at=now,
+                            updated_at=now,
+                            published=True,
+                            published_at=now,
+                            import_ref=import_ref,
+                        )
+                    ).run()
+                else:
+                    await CMSDocument.insert(
+                        CMSDocument(
+                            id=doc_id,
+                            doc_type=doc_type,
+                            slug=slug,
+                            body=json.dumps(validated.model_dump(exclude_none=True)),
+                            meta=json.dumps(doc_meta),
+                            created_at=now,
+                            updated_at=now,
+                            published=False,
+                            published_at=None,
+                            import_ref=import_ref,
+                        )
+                    ).run()
+            except Exception as exc:
+                span.set_status(StatusCode.ERROR, str(exc))
+                raise
 
         rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
 
@@ -603,7 +624,13 @@ def make_document_routes(cms: CMS) -> list[Route]:
             merged_meta = {**existing_meta, **patch_data["meta"]}
             update_kwargs[CMSDocument.meta] = json.dumps(merged_meta)
 
-        await CMSDocument.update(update_kwargs).where(CMSDocument.id == doc_id).run()
+        with tracer.start_as_current_span("cms.documents.patch") as span:
+            span.set_attribute("doc_id", doc_id)
+            try:
+                await CMSDocument.update(update_kwargs).where(CMSDocument.id == doc_id).run()
+            except Exception as exc:
+                span.set_status(StatusCode.ERROR, str(exc))
+                raise
 
         updated_rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
         updated_row = updated_rows[0]
@@ -647,7 +674,13 @@ def make_document_routes(cms: CMS) -> list[Route]:
         if (err := await _check_ref_integrity(cms, doc_id, doc_type)) is not None:
             return err  # type: ignore[return-value]
 
-        await CMSDocument.delete().where(CMSDocument.id == doc_id).run()
+        with tracer.start_as_current_span("cms.documents.delete") as span:
+            span.set_attribute("doc_id", doc_id)
+            try:
+                await CMSDocument.delete().where(CMSDocument.id == doc_id).run()
+            except Exception as exc:
+                span.set_status(StatusCode.ERROR, str(exc))
+                raise
 
         loop = asyncio.get_running_loop()
         loop.create_task(fire_event(cms, "document.deleted", doc_id, doc_type, slug))
@@ -679,39 +712,45 @@ def make_document_routes(cms: CMS) -> list[Route]:
                 doc_id=doc_id,
             )
 
-        if is_singleton:
-            await (
-                CMSDocument.update({CMSDocument.singleton_status: "archived"})
-                .where(
-                    CMSDocument.doc_type == doc_type,
-                    CMSDocument.singleton_status == "active",
-                )
-                .run()
-            )
-            await (
-                CMSDocument.update(
-                    {
-                        CMSDocument.published: True,
-                        CMSDocument.published_at: now,
-                        CMSDocument.singleton_status: "active",
-                        CMSDocument.updated_at: now,
-                    }
-                )
-                .where(CMSDocument.id == doc_id)
-                .run()
-            )
-        else:
-            await (
-                CMSDocument.update(
-                    {
-                        CMSDocument.published: True,
-                        CMSDocument.published_at: now,
-                        CMSDocument.updated_at: now,
-                    }
-                )
-                .where(CMSDocument.id == doc_id)
-                .run()
-            )
+        with tracer.start_as_current_span("cms.documents.publish") as span:
+            span.set_attribute("doc_id", doc_id)
+            try:
+                if is_singleton:
+                    await (
+                        CMSDocument.update({CMSDocument.singleton_status: "archived"})
+                        .where(
+                            CMSDocument.doc_type == doc_type,
+                            CMSDocument.singleton_status == "active",
+                        )
+                        .run()
+                    )
+                    await (
+                        CMSDocument.update(
+                            {
+                                CMSDocument.published: True,
+                                CMSDocument.published_at: now,
+                                CMSDocument.singleton_status: "active",
+                                CMSDocument.updated_at: now,
+                            }
+                        )
+                        .where(CMSDocument.id == doc_id)
+                        .run()
+                    )
+                else:
+                    await (
+                        CMSDocument.update(
+                            {
+                                CMSDocument.published: True,
+                                CMSDocument.published_at: now,
+                                CMSDocument.updated_at: now,
+                            }
+                        )
+                        .where(CMSDocument.id == doc_id)
+                        .run()
+                    )
+            except Exception as exc:
+                span.set_status(StatusCode.ERROR, str(exc))
+                raise
 
         updated_rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
         updated_row = updated_rows[0]

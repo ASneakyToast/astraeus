@@ -13,6 +13,25 @@ import sys
 _configured = False
 
 
+def reset_for_tests() -> None:
+    """Reset the idempotency guard so ``setup_telemetry()`` can be called again.
+
+    **Test use only.** Call in test teardown or a fixture to allow repeated
+    ``setup_telemetry()`` calls within the same process.
+
+    ::
+
+        import astraeus_otel.setup as _setup
+
+        def test_something():
+            setup_telemetry(TelemetryConfig(enable_console=False))
+            ...
+            _setup.reset_for_tests()
+    """
+    global _configured
+    _configured = False
+
+
 def setup_telemetry(config=None) -> None:
     """
     Bootstrap OpenTelemetry SDK and structlog for all Astraeus packages.

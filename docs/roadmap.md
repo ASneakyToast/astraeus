@@ -2,7 +2,7 @@
 
 Phases are ordered by dependency. A future agent should always start at the earliest incomplete phase.
 
-**Current status:** Phases 0–12 complete (including EPIC-001 VPP MVP primitives, mediakit core+admin+MCP+CLI, starlette-editor Phases 1–3). starlette-cms-gateways package scaffolded (Phase GW-1 complete).
+**Current status:** Phases 0–13 complete (including EPIC-001 VPP MVP primitives, mediakit core+admin+MCP+CLI, starlette-editor Phases 1–3, ADR 017 observability). starlette-cms-gateways package scaffolded (Phase GW-1 complete).
 
 **Use cases:** See `docs/use-cases/` for worked examples of Astraeus applied to real projects. These inform roadmap priorities and surface new primitives.
 
@@ -376,6 +376,22 @@ Together these establish Astraeus as a **governed data platform** — not just a
 - [x] `<se-block-picker>` keyboard navigation (ArrowUp/Down/Enter/Escape) implemented in `buildBlockTypePicker`
 - [x] `core.js` extraction — deferred; `editor.js` is self-contained and the personal site does not yet need a custom editor overlay
 - [x] Node views for nested block types — deferred to North Star (requires PM schema changes + serialization overhaul)
+
+---
+
+## Phase 13 — Observability (ADR 017) ✅
+
+**Goal:** Structured logging + OpenTelemetry spans on all critical paths across the monorepo.
+
+- [x] `astraeus-otel`: `reset_for_tests()` helper in `setup.py` + 5 tests covering `TelemetryConfig` and `setup_telemetry()`
+- [x] `starlette-cms`: `tracer = trace.get_tracer(__name__)` in `documents.py` + `webhooks.py`
+- [x] `starlette-cms`: OTel spans on `cms.documents.list/create/patch/delete/publish` (DB operations)
+- [x] `starlette-cms`: OTel span on `cms.webhooks.deliver` with `url` + `event` attributes
+- [x] `starlette-cms`: Silent swallows fixed — `body_parse_failed_in_row`, `meta_parse_failed_in_row`, `events_parse_failed`, `row_field_parse_failed`
+- [x] `mediakit`: OTel spans on `mediakit.processing.pipeline`, `mediakit.upload.confirm`, `mediakit.storage.prepare_upload`, `mediakit.storage.confirm_exists`
+- [x] `starlette-cms-gateways`: OTel spans on `gateways.sync` (with `item_count`) and `gateways.client.upsert` (with `action`)
+- [x] `starlette-cms-gateways`: Silent swallow fixed — `bad_last_synced_timestamp`
+- [x] `starlette-editor`: `structlog>=24.0` + `opentelemetry-api>=1.25` added to deps; `NullHandler` installed
 
 ---
 

@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
+from opentelemetry import trace
+from opentelemetry.trace import StatusCode
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
     from mediakit.app import MediaKit
 
 logger = structlog.get_logger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
 def _make_key(filename: str, content_type: str, timestamp: str) -> str:
@@ -98,77 +101,83 @@ def make_upload_routes(mk: MediaKit) -> list[Route]:
                 status_code=422,
             )
 
-        exists = await mk.storage.confirm_exists(str(key))
-        if not exists:
-            return JSONResponse(
-                {"error": "Object not found in bucket — upload may not have completed"},
-                status_code=404,
-            )
+        with tracer.start_as_current_span("mediakit.upload.confirm") as span:
+            span.set_attribute("key", str(key))
+            try:
+                exists = await mk.storage.confirm_exists(str(key))
+                if not exists:
+                    return JSONResponse(
+                        {"error": "Object not found in bucket — upload may not have completed"},
+                        status_code=404,
+                    )
 
-        # ------------------------------------------------------------------
-        # Processing pipeline — download, process, re-upload
-        # ------------------------------------------------------------------
-        final_content_type = str(content_type)
-        final_size = int(size)
-        final_width = body.get("width")
-        final_height = body.get("height")
+                # ------------------------------------------------------------------
+                # Processing pipeline — download, process, re-upload
+                # ------------------------------------------------------------------
+                final_content_type = str(content_type)
+                final_size = int(size)
+                final_width = body.get("width")
+                final_height = body.get("height")
 
-        try:
-            import obstore
+                try:
+                    import obstore
 
-            from mediakit.processing import run_pipeline
+                    from mediakit.processing import run_pipeline
 
-            store = mk.storage._get_store()
+                    store = mk.storage._get_store()
 
-            # Download original bytes from bucket
-            result = await obstore.get_async(store, str(key))
-            original_bytes = bytes(await result.bytes_async())
+                    # Download original bytes from bucket
+                    result = await obstore.get_async(store, str(key))
+                    original_bytes = bytes(await result.bytes_async())
 
-            # Write to a temp file for Pillow to open
-            with tempfile.TemporaryDirectory() as tmpdir:
-                # Keep the original file extension so Pillow can infer format
-                original_suffix = Path(str(filename)).suffix or ".bin"
-                source_path = Path(tmpdir) / f"upload{original_suffix}"
-                source_path.write_bytes(original_bytes)
+                    # Write to a temp file for Pillow to open
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        # Keep the original file extension so Pillow can infer format
+                        original_suffix = Path(str(filename)).suffix or ".bin"
+                        source_path = Path(tmpdir) / f"upload{original_suffix}"
+                        source_path.write_bytes(original_bytes)
 
-                proc = await run_pipeline(source_path, mk.config)
+                        proc = await run_pipeline(source_path, mk.config)
 
-                # Re-upload processed file back to the same key
-                processed_bytes = proc.path.read_bytes()
-                await obstore.put_async(store, str(key), processed_bytes)
+                        # Re-upload processed file back to the same key
+                        processed_bytes = proc.path.read_bytes()
+                        await obstore.put_async(store, str(key), processed_bytes)
 
-                final_content_type = proc.content_type
-                final_size = proc.size
-                final_width = proc.width
-                final_height = proc.height
+                        final_content_type = proc.content_type
+                        final_size = proc.size
+                        final_width = proc.width
+                        final_height = proc.height
 
-        except Exception:
-            # Processing is best-effort: if it fails (e.g. non-image file,
-            # storage backend doesn't support get/put in test), fall back to
-            # client-supplied metadata.
-            logger.warning(
-                "mediakit.upload.pipeline_failed",
-                key=key,
-                filename=filename,
-                content_type=content_type,
-                exc_info=True,
-            )
+                except Exception:
+                    # Processing is best-effort: if it fails (e.g. non-image file,
+                    # storage backend doesn't support get/put in test), fall back to
+                    # client-supplied metadata.
+                    logger.warning(
+                        "mediakit.upload.pipeline_failed",
+                        key=key,
+                        filename=filename,
+                        content_type=content_type,
+                        exc_info=True,
+                    )
 
-        # Use a hash of the key as a stable content_hash (no bytes available
-        # in the base case; real deduplication is a Phase 9+ concern).
-        content_hash = hashlib.sha256(str(key).encode()).hexdigest()[:16]
+                # Use a hash of the key as a stable content_hash (no bytes available
+                # in the base case; real deduplication is a Phase 9+ concern).
+                content_hash = hashlib.sha256(str(key).encode()).hexdigest()[:16]
 
-        asset = await mk.catalog.insert_asset(
-            key=str(key),
-            content_hash=content_hash,
-            bucket=mk.config.bucket,
-            filename=str(filename),
-            content_type=final_content_type,
-            size=final_size,
-            width=final_width,
-            height=final_height,
-        )
-        return JSONResponse(asset, status_code=201)
+                asset = await mk.catalog.insert_asset(
+                    key=str(key),
+                    content_hash=content_hash,
+                    bucket=mk.config.bucket,
+                    filename=str(filename),
+                    content_type=final_content_type,
+                    size=final_size,
+                    width=final_width,
+                    height=final_height,
+                )
+                return JSONResponse(asset, status_code=201)
+            except Exception as exc:
+                span.set_status(StatusCode.ERROR, str(exc))
+                raise
 
     return [
         Route("/upload/prepare", endpoint=prepare, methods=["POST"]),
