@@ -12,7 +12,6 @@ It provides:
 
 - `BaseGateway` — abstract base class; consumer implements `fetch()`, framework handles the sync loop
 - `CMSClient` — thin httpx wrapper for the starlette-cms HTTP API
-- `GatewaySyncState` — singleton block type for persisting last-sync state in the CMS
 - `gateways` CLI — plugin-based command that discovers gateways via entry points
 
 **This package ships zero built-in gateway integrations.** Spotify, iNaturalist, GitHub, etc. are
@@ -27,9 +26,8 @@ purposes only — they are not installed as part of the package.
 src/starlette_cms_gateways/
 ├── __init__.py      # public API: BaseGateway, GatewayItem, SyncResult
 ├── base.py          # BaseGateway ABC + sync loop implementation
-├── client.py        # CMSClient — upsert, find_by_import_ref, sync state helpers
-├── blocks.py        # GatewaySyncState singleton block
-├── cli.py           # gateways CLI group (sync, status, list, register-blocks)
+├── client.py        # CMSClient — upsert, find_by_import_ref
+├── cli.py           # gateways CLI group (sync, list)
 └── mcp/
     └── server.py    # build_gateway_mcp_server() factory [requires mcp extra]
 examples/
@@ -51,9 +49,9 @@ thread or scheduler inside the CMS or this package. See ADR 005 and ADR 015.
 **`auto_publish` is a class-level flag, not a runtime parameter.** Set it at the class level when defining
 a `BaseGateway` subclass. Do not pass it to `sync()`.
 
-**Sync state is a singleton in the CMS.** `GatewaySyncState` uses `singleton=True`. The framework publishes
-a new singleton after each sync run (auto-archiving the previous). Never read/write sync state via a separate
-database.
+**Cursor management is the gateway's own responsibility.** The framework does not inject a `since` parameter
+into `fetch()`. If you need incremental sync, store your cursor in a CMS singleton, a file, or an external
+store — whatever fits your use case.
 
 **Gateway implementations go in consumer repos, not here.** If you are adding a new gateway for a
 specific service, it belongs in the consuming application's codebase and entry points, not in this package.
@@ -63,9 +61,8 @@ The `examples/` directory is documentation only.
 
 ## Key ADRs and decisions
 
-- **ADR 015** (`docs/decisions/015-starlette-cms-gateways.md`) — this package's architecture
+- **ADR 015** (`docs/decisions/015-starlette-cms-gateways.md`) — this package's architecture, including EPIC-002 amendments
 - **ADR 005** — gateway workers are external HTTP clients of the CMS (never embedded)
-- **ADR 008** — use `@block()` (standalone form) + `register(cms)` for `GatewaySyncState`; never `@cms.block()`
 
 ---
 

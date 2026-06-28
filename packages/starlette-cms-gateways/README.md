@@ -38,15 +38,14 @@ Implement the gateway:
 ```python
 from starlette_cms_gateways import BaseGateway, GatewayItem
 from collections.abc import AsyncIterator
-from datetime import datetime
 
 class SpotifyLikedSongsGateway(BaseGateway):
     service_name = "spotify_liked_songs"
     block_type   = "spotify_liked_song"
     auto_publish = True
 
-    async def fetch(self, since: datetime | None) -> AsyncIterator[GatewayItem]:
-        async for track in self.spotify.iter_liked_songs(after=since):
+    async def fetch(self) -> AsyncIterator[GatewayItem]:
+        async for track in self.spotify.iter_liked_songs():
             yield GatewayItem(
                 import_ref=f"spotify:liked:{track['id']}",
                 slug=f"spotify-liked-{track['id']}",
@@ -82,18 +81,17 @@ The framework handles everything except the external API call:
 - **Deduplication** — each `GatewayItem` carries an `import_ref` (stable external ID). On sync, the
   framework queries the CMS for an existing document with that `import_ref` and decides create / update /
   skip based on a content hash stored in `meta`.
-- **Incremental sync** — the framework persists a `GatewaySyncState` singleton in your CMS after each run.
-  On the next run it passes `since` to your `fetch()` so you only pull new/changed items.
-- **Sync state** — last-synced timestamps and item counts are stored as a CMS singleton document, queryable
-  via the CMS API or MCP tools.
+- **Idempotent syncs** — running `sync` twice on the same data is safe; unchanged items are skipped
+  (content hash comparison), so re-syncing is cheap and has no side effects.
+- **Cursor management is your responsibility** — if you need incremental sync (e.g. "only fetch items
+  since last run"), store your own cursor in a CMS singleton, a file, or an external store. The framework
+  does not inject a `since` parameter.
 
 ## CLI
 
 ```bash
 gateways list                             # list installed gateways
 gateways sync <name> --cms-url ... \      # run a sync
-    --api-key ...
-gateways status --cms-url ... \           # show last sync state for all gateways
     --api-key ...
 ```
 
