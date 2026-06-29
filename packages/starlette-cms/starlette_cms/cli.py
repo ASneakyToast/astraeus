@@ -1,23 +1,20 @@
 """
-CLI entry point — ``cms migrate``, ``cms validate``
+CLI entry point — ``cms validate``, ``cms mcp``
 
 All commands that need a CMS instance accept ``--app MODULE:ATTRIBUTE``
 (e.g. ``--app myapp:cms``), defaulting to the ``CMS_APP`` environment
 variable.  The attribute must be a ``CMS`` instance — not a Starlette app.
 
+For database migrations use the ``piccolo`` CLI with the ``starlette_cms``
+app (``piccolo migrations forwards starlette_cms``).
+
 Examples::
-
-    # Show pending migrations
-    cms migrate status --app myapp:cms
-
-    # Preview without applying
-    cms migrate --dry-run --app myapp:cms
-
-    # Apply
-    cms migrate --app myapp:cms
 
     # Re-validate all stored documents
     cms validate --app myapp:cms
+
+    # Run the MCP server
+    cms mcp serve --url https://mysite.com/cms
 """
 
 from __future__ import annotations
@@ -92,110 +89,6 @@ def _app_option(f):
 @click.group()
 def main():
     """starlette-cms management commands."""
-
-
-# ---------------------------------------------------------------------------
-# migrate group
-# ---------------------------------------------------------------------------
-
-
-@main.group()
-def migrate():
-    """Database and schema migration commands."""
-
-
-@migrate.command("status")
-@_app_option
-def migrate_status(app_spec: str) -> None:
-    """Show pending migrations between the stored version and package version."""
-    from starlette_cms import __version__
-    from starlette_cms.migrations import MigrationError, MigrationRunner
-
-    if not app_spec:
-        raise click.UsageError("Provide --app or set the CMS_APP environment variable.")
-
-    cms = _load_cms(app_spec)
-    runner = MigrationRunner(cms)
-
-    # Fetch stored version without running the full lifespan
-    stored = asyncio.run(_fetch_stored_version(cms))
-    target = __version__
-
-    click.echo(f"Stored version : {stored or '(none)'}")
-    click.echo(f"Package version: {target}")
-
-    if stored == target:
-        click.echo(click.style("✓ Up to date — no migrations pending.", fg="green"))
-        return
-
-    if stored is None:
-        click.echo(
-            click.style(
-                "Fresh database — schema_version will be seeded on first startup.",
-                fg="yellow",
-            )
-        )
-        return
-
-    try:
-        pending = runner.pending(current_version=stored, target_version=target)
-    except MigrationError as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    if not pending:
-        click.echo(click.style("✓ Up to date — no migrations pending.", fg="green"))
-        return
-
-    click.echo(f"\n{len(pending)} pending migration(s):")
-    for step in pending:
-        click.echo(f"  {step.from_version} → {step.to_version}  [{step.fn.__name__}]")
-
-
-@migrate.command("run")
-@click.option("--dry-run", is_flag=True, help="Show what would run without applying.")
-@_app_option
-def migrate_run(dry_run: bool, app_spec: str) -> None:
-    """Apply pending migrations (or preview with --dry-run)."""
-    from starlette_cms import __version__
-    from starlette_cms.migrations import MigrationError, MigrationRunner
-
-    if not app_spec:
-        raise click.UsageError("Provide --app or set the CMS_APP environment variable.")
-
-    cms = _load_cms(app_spec)
-    runner = MigrationRunner(cms)
-
-    stored = asyncio.run(_fetch_stored_version(cms))
-    target = __version__
-
-    if stored is None:
-        click.echo(
-            click.style("Fresh database — run the app once to seed schema_version.", fg="yellow")
-        )
-        return
-
-    if stored == target:
-        click.echo(click.style("✓ Already up to date.", fg="green"))
-        return
-
-    try:
-        pending = runner.pending(current_version=stored, target_version=target)
-    except MigrationError as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    if not pending:
-        click.echo(click.style("✓ Already up to date.", fg="green"))
-        return
-
-    if dry_run:
-        click.echo(f"[dry-run] Would apply {len(pending)} migration(s):")
-        for step in pending:
-            click.echo(f"  {step.from_version} → {step.to_version}  [{step.fn.__name__}]")
-        return
-
-    click.echo(f"Applying {len(pending)} migration(s)...")
-    asyncio.run(_run_migrations(cms, runner, pending))
-    click.echo(click.style(f"✓ Done. Schema is now at {target}.", fg="green"))
 
 
 # ---------------------------------------------------------------------------
@@ -287,41 +180,6 @@ def validate(app_spec: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _fetch_stored_version(cms: CMS) -> str | None:
-    """
-    Initialise the DB engine (without the version check) and read
-    schema_version from cms_meta.  Returns None if the table is empty.
-    """
-    from starlette_cms.db import CMSDatabase
-
-    # Build engine + create tables — but skip the mismatch check.
-    # We do this by temporarily passing an empty schema_version so
-    # CMSDatabase.init() won't raise on a stale DB.
-    db = CMSDatabase(database_url=cms.database_url, schema_version="")
-    await db.init()
-    try:
-        from starlette_cms.tables import CMSMeta
-
-        rows = await CMSMeta.select().where(CMSMeta.key == "schema_version").run()
-        return rows[0]["value"] if rows else None
-    finally:
-        await db.close()
-
-
-async def _run_migrations(cms: CMS, runner, pending) -> None:
-    """Open DB, attach to cms._db, run migrations, close."""
-    from starlette_cms.db import CMSDatabase
-
-    db = CMSDatabase(database_url=cms.database_url, schema_version="")
-    await db.init()
-    cms._db = db
-    try:
-        await runner.run(pending, dry_run=False)
-    finally:
-        await db.close()
-        cms._db = None
-
-
 async def _validate_documents(cms: CMS) -> list[tuple[str, str, list[str]]]:
     """
     Load all documents and validate each against the registered document model.
@@ -335,7 +193,7 @@ async def _validate_documents(cms: CMS) -> list[tuple[str, str, list[str]]]:
     from starlette_cms.db import CMSDatabase
     from starlette_cms.tables import CMSDocument
 
-    db = CMSDatabase(database_url=cms.database_url, schema_version="")
+    db = CMSDatabase(database_url=cms.database_url)
     await db.init()
     errors: list[tuple[str, str, list[str]]] = []
 

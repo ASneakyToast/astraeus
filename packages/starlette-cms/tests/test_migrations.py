@@ -1,201 +1,203 @@
-"""Tests for the migration runner."""
+"""Tests for the Piccolo-native migration system."""
 
 from __future__ import annotations
 
+import importlib
+import inspect
 import os
+import sys
 import tempfile
+import types
+from contextlib import contextmanager
 
 import pytest
-from starlette_cms import CMS, TextField
-from starlette_cms.migrations import MigrationError, MigrationRunner
+from piccolo.apps.migrations.commands.forwards import ForwardsMigrationManager
+from piccolo.apps.migrations.tables import Migration
+from piccolo.engine.sqlite import SQLiteEngine
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _cms_with_migrations() -> tuple[CMS, str]:
-    """Return a CMS + temp db path pre-loaded with two migration steps."""
+def _temp_engine() -> tuple[SQLiteEngine, str]:
+    """Return a (engine, db_path) pair for a fresh temp SQLite file."""
     f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     f.close()
-    cms = CMS(database_url=f"sqlite:///{f.name}", auth="none")
+    return SQLiteEngine(path=f.name), f.name
 
-    @cms.block("hero")
-    class HeroBlock:
-        title: str = TextField(required=True)
 
-    @cms.migration(from_version="0.1.0", to_version="0.2.0")
-    async def m_0_1_to_0_2(db):
-        pass  # no-op for testing
+async def _set_engine(engine: SQLiteEngine) -> None:
+    """Assign engine to all CMS table classes and the Migration tracker."""
+    from starlette_cms.tables import CMSDocument, CMSMeta, CMSWebhook
 
-    @cms.migration(from_version="0.2.0", to_version="0.3.0")
-    async def m_0_2_to_0_3(db):
-        pass
+    CMSDocument._meta.db = engine
+    CMSMeta._meta.db = engine
+    CMSWebhook._meta.db = engine
+    Migration._meta.db = engine
 
-    return cms, f.name
+
+@contextmanager
+def _piccolo_conf_ctx(engine: SQLiteEngine):
+    """
+    Temporarily inject a piccolo_conf module into sys.modules so that
+    MigrationManager.run() can find the engine via engine_finder().
+
+    Piccolo's engine_finder() imports piccolo_conf and reads its DB attribute.
+    """
+    from piccolo.conf.apps import AppRegistry
+
+    from starlette_cms.piccolo_app import APP_CONFIG
+
+    mock_conf = types.ModuleType("piccolo_conf")
+    mock_conf.DB = engine  # type: ignore[attr-defined]
+    mock_conf.APP_REGISTRY = AppRegistry(apps=["starlette_cms.piccolo_app"])  # type: ignore[attr-defined]
+
+    old = sys.modules.get("piccolo_conf")
+    sys.modules["piccolo_conf"] = mock_conf
+    try:
+        yield
+    finally:
+        if old is None:
+            sys.modules.pop("piccolo_conf", None)
+        else:
+            sys.modules["piccolo_conf"] = old
 
 
 # ---------------------------------------------------------------------------
-# Chain building — pending()
+# 1. APP_CONFIG sanity checks
 # ---------------------------------------------------------------------------
 
 
-def test_pending_empty_when_versions_match():
-    cms, db_path = _cms_with_migrations()
-    try:
-        runner = MigrationRunner(cms)
-        chain = runner.pending(current_version="0.2.0", target_version="0.2.0")
-        assert chain == []
-    finally:
-        os.unlink(db_path)
+def test_piccolo_app_config():
+    from starlette_cms.piccolo_app import APP_CONFIG
 
-
-def test_pending_single_step():
-    cms, db_path = _cms_with_migrations()
-    try:
-        runner = MigrationRunner(cms)
-        chain = runner.pending(current_version="0.1.0", target_version="0.2.0")
-        assert len(chain) == 1
-        assert chain[0].from_version == "0.1.0"
-        assert chain[0].to_version == "0.2.0"
-    finally:
-        os.unlink(db_path)
-
-
-def test_pending_two_steps():
-    cms, db_path = _cms_with_migrations()
-    try:
-        runner = MigrationRunner(cms)
-        chain = runner.pending(current_version="0.1.0", target_version="0.3.0")
-        assert len(chain) == 2
-        assert chain[0].from_version == "0.1.0"
-        assert chain[1].from_version == "0.2.0"
-        assert chain[1].to_version == "0.3.0"
-    finally:
-        os.unlink(db_path)
-
-
-def test_pending_raises_on_broken_chain():
-    cms = CMS(database_url="sqlite:///dummy.db", auth="none")
-
-    @cms.migration(from_version="0.1.0", to_version="0.2.0")
-    async def m(db):
-        pass
-
-    runner = MigrationRunner(cms)
-    with pytest.raises(MigrationError, match="No migration registered from"):
-        runner.pending(current_version="0.2.0", target_version="0.3.0")
-
-
-def test_pending_raises_on_duplicate_from_version():
-    cms = CMS(database_url="sqlite:///dummy.db", auth="none")
-
-    @cms.migration(from_version="0.1.0", to_version="0.2.0")
-    async def m1(db):
-        pass
-
-    @cms.migration(from_version="0.1.0", to_version="0.3.0")
-    async def m2(db):
-        pass
-
-    runner = MigrationRunner(cms)
-    with pytest.raises(MigrationError, match="Ambiguous migration"):
-        runner.pending(current_version="0.1.0", target_version="0.3.0")
+    assert APP_CONFIG.app_name == "starlette_cms"
+    migrations_folder = APP_CONFIG.migrations_folder_path
+    assert migrations_folder.exists(), f"migrations folder does not exist: {migrations_folder}"
+    py_files = [
+        p for p in migrations_folder.iterdir()
+        if p.suffix == ".py" and p.stem != "__init__"
+    ]
+    assert py_files, "No migration .py files found in piccolo_migrations/"
 
 
 # ---------------------------------------------------------------------------
-# Runner — run()
+# 2. Initial migration module is well-formed
 # ---------------------------------------------------------------------------
 
 
-async def test_run_applies_steps_and_updates_version():
-    cms, db_path = _cms_with_migrations()
+def test_initial_migration_module():
+    mod = importlib.import_module(
+        "starlette_cms.piccolo_migrations.2026-06-28T00-00-00-000000"
+    )
+    assert hasattr(mod, "ID"), "migration module must define ID"
+    assert hasattr(mod, "forwards"), "migration module must define forwards()"
+    assert inspect.iscoroutinefunction(mod.forwards), "forwards must be a coroutine function"
+
+
+# ---------------------------------------------------------------------------
+# 3. forwards --fake on an existing DB
+# ---------------------------------------------------------------------------
+
+
+async def test_forwards_fake_on_existing_db():
+    """
+    Running forwards with fake=True on an existing DB records the migration row
+    without re-creating the tables.
+    """
+    from starlette_cms.piccolo_app import APP_CONFIG
+    from starlette_cms.tables import CMSDocument, CMSMeta, CMSWebhook
+
+    engine, db_path = _temp_engine()
     try:
-        async with cms.lifespan_context(None):
-            from starlette_cms.tables import CMSMeta
+        await _set_engine(engine)
 
-            # Manually set stored version to 0.1.0
-            await (
-                CMSMeta.update({CMSMeta.value: "0.1.0"})
-                .where(CMSMeta.key == "schema_version")
-                .run()
-            )
+        # Pre-create tables (simulating an existing install)
+        await CMSDocument.create_table(if_not_exists=True)
+        await CMSMeta.create_table(if_not_exists=True)
+        await CMSWebhook.create_table(if_not_exists=True)
+        await Migration.create_table(if_not_exists=True)
 
-            runner = MigrationRunner(cms)
-            chain = runner.pending(current_version="0.1.0", target_version="0.2.0")
-            await runner.run(chain)
+        # No migration rows yet
+        assert await Migration.count().run() == 0
 
-            rows = await CMSMeta.select().where(CMSMeta.key == "schema_version").run()
-            assert rows[0]["value"] == "0.2.0"
+        # --fake: piccolo skips MigrationManager.run() entirely, so no
+        # engine_finder() is called — safe to run without piccolo_conf.
+        runner = ForwardsMigrationManager(app_name="starlette_cms", fake=True)
+        await runner.run_migrations(APP_CONFIG)
+
+        # Migration row should now be recorded
+        assert await Migration.count().run() == 1
+        row = (await Migration.select().run())[0]
+        assert row["app_name"] == "starlette_cms"
+        assert "2026-06-28" in row["name"]
     finally:
         os.unlink(db_path)
 
 
-async def test_run_dry_run_does_not_update_version():
-    cms, db_path = _cms_with_migrations()
+# ---------------------------------------------------------------------------
+# 4. forwards on a fresh DB creates tables
+# ---------------------------------------------------------------------------
+
+
+async def test_forwards_on_fresh_db():
+    """
+    Running forwards on an empty DB creates all tables and records the
+    migration row.
+    """
+    from starlette_cms.piccolo_app import APP_CONFIG
+    from starlette_cms.tables import CMSDocument, CMSMeta, CMSWebhook
+
+    engine, db_path = _temp_engine()
     try:
-        async with cms.lifespan_context(None):
-            from starlette_cms.tables import CMSMeta
+        await _set_engine(engine)
+        # Only create the Migration tracker (piccolo's own bookkeeping table)
+        await Migration.create_table(if_not_exists=True)
 
-            await (
-                CMSMeta.update({CMSMeta.value: "0.1.0"})
-                .where(CMSMeta.key == "schema_version")
-                .run()
-            )
+        runner = ForwardsMigrationManager(app_name="starlette_cms", fake=False)
+        with _piccolo_conf_ctx(engine):
+            await runner.run_migrations(APP_CONFIG)
 
-            runner = MigrationRunner(cms)
-            chain = runner.pending(current_version="0.1.0", target_version="0.2.0")
-            await runner.run(chain, dry_run=True)
+        # All CMS tables should now exist — verify by counting rows
+        # (will raise if the table doesn't exist)
+        from starlette_cms.tables import CMSDocument, CMSMeta, CMSWebhook
 
-            # Version must still be 0.1.0
-            rows = await CMSMeta.select().where(CMSMeta.key == "schema_version").run()
-            assert rows[0]["value"] == "0.1.0"
+        assert await CMSDocument.count().run() == 0
+        assert await CMSMeta.count().run() == 0
+        assert await CMSWebhook.count().run() == 0
+
+        # Migration row recorded
+        assert await Migration.count().run() == 1
     finally:
         os.unlink(db_path)
 
 
-async def test_run_calls_migration_function():
-    """The migration function is actually invoked."""
-    f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    f.close()
-    db_path = f.name
-    called = []
+# ---------------------------------------------------------------------------
+# 5. forwards is idempotent
+# ---------------------------------------------------------------------------
 
-    cms = CMS(database_url=f"sqlite:///{db_path}", auth="none")
 
-    @cms.block("x")
-    class X:
-        title: str = TextField(required=True)
+async def test_forwards_idempotent():
+    """
+    Running forwards twice produces exactly one migration row and no error.
+    """
+    from starlette_cms.piccolo_app import APP_CONFIG
 
-    @cms.migration(from_version="0.1.0", to_version="0.2.0")
-    async def record(db):
-        called.append(True)
-
+    engine, db_path = _temp_engine()
     try:
-        async with cms.lifespan_context(None):
-            from starlette_cms.tables import CMSMeta
+        await _set_engine(engine)
+        await Migration.create_table(if_not_exists=True)
 
-            await (
-                CMSMeta.update({CMSMeta.value: "0.1.0"})
-                .where(CMSMeta.key == "schema_version")
-                .run()
-            )
+        with _piccolo_conf_ctx(engine):
+            runner = ForwardsMigrationManager(app_name="starlette_cms", fake=False)
+            await runner.run_migrations(APP_CONFIG)
 
-            runner = MigrationRunner(cms)
-            chain = runner.pending(current_version="0.1.0", target_version="0.2.0")
-            await runner.run(chain)
+            # Run again — should be a no-op
+            runner2 = ForwardsMigrationManager(app_name="starlette_cms", fake=False)
+            await runner2.run_migrations(APP_CONFIG)
 
-        assert called == [True]
-    finally:
-        os.unlink(db_path)
-
-
-async def test_run_empty_chain_is_noop():
-    cms, db_path = _cms_with_migrations()
-    try:
-        async with cms.lifespan_context(None):
-            runner = MigrationRunner(cms)
-            result = await runner.run([])
-            assert result == []
+        assert await Migration.count().run() == 1
     finally:
         os.unlink(db_path)

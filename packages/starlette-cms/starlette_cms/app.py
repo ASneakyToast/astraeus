@@ -64,7 +64,6 @@ class CMS:
         self.registry = BlockRegistry()
         self._document_types: dict[str, type] = {}
         self._extension_routes: list[dict[str, Any]] = []
-        self._migrations: list[dict[str, Any]] = []
         self._app: Starlette | None = None  # built lazily on first access
         self._db: Any = None  # CMSDatabase instance, set in lifespan
 
@@ -212,25 +211,6 @@ class CMS:
         )
 
     # ------------------------------------------------------------------
-    # Migrations
-    # ------------------------------------------------------------------
-
-    def migration(self, *, from_version: str, to_version: str):
-        """Register an application migration function."""
-
-        def decorator(fn):
-            self._migrations.append(
-                {
-                    "from_version": from_version,
-                    "to_version": to_version,
-                    "fn": fn,
-                }
-            )
-            return fn
-
-        return decorator
-
-    # ------------------------------------------------------------------
     # Lazy app property
     # ------------------------------------------------------------------
 
@@ -269,10 +249,7 @@ class CMS:
         from starlette_cms.db import CMSDatabase
 
         logger.info("starlette_cms.startup", version=__version__, database_url=self.database_url)
-        self._db = CMSDatabase(
-            database_url=self.database_url,
-            schema_version=__version__,
-        )
+        self._db = CMSDatabase(database_url=self.database_url)
         await self._db.init()
         try:
             yield

@@ -7,7 +7,7 @@ shutdown.
 
 Usage::
 
-    db = CMSDatabase(database_url="sqlite:///content.db", schema_version="0.4.0")
+    db = CMSDatabase(database_url="sqlite:///content.db")
     await db.init()
     # ... serve requests ...
     await db.close()
@@ -27,7 +27,6 @@ from urllib.parse import urlparse
 
 import structlog
 
-from starlette_cms.exceptions import CMSSchemaMismatch
 from starlette_cms.tables import CMSDocument, CMSMeta, CMSWebhook
 
 logger = structlog.get_logger(__name__)
@@ -38,19 +37,16 @@ class CMSDatabase:
     Manages the Piccolo engine lifecycle for starlette-cms.
 
     :param database_url: SQLite or Postgres connection string.
-    :param schema_version: The current package schema version written to
-        ``cms_meta`` on first init (defaults to empty string).
     """
 
-    def __init__(self, database_url: str, schema_version: str = "") -> None:
+    def __init__(self, database_url: str) -> None:
         self.database_url = database_url
-        self.schema_version = schema_version
         self._engine = None
 
     async def init(self) -> None:
         """
         Parse ``database_url``, assign engine to table classes, create tables,
-        and seed ``schema_version`` in ``CMSMeta`` if absent.
+        and enable WAL mode for SQLite.
         """
         engine = self._build_engine(self.database_url)
         self._engine = engine
@@ -69,7 +65,7 @@ class CMSDatabase:
         except Exception:
             pass  # Not all engines support pooling
 
-        # Create tables
+        # Create tables (zero-config dev experience — safe on existing DBs)
         await CMSDocument.create_table(if_not_exists=True)
         await CMSMeta.create_table(if_not_exists=True)
         await CMSWebhook.create_table(if_not_exists=True)
@@ -81,29 +77,6 @@ class CMSDatabase:
                 await engine.run_ddl("PRAGMA journal_mode=WAL")
             except Exception:
                 pass  # Ignore failures on read-only or in-memory databases
-
-        # Schema version check
-        if self.schema_version:
-            rows = await CMSMeta.select().where(CMSMeta.key == "schema_version").run()
-            if not rows:
-                # Fresh database — seed the version and continue
-                await CMSMeta.insert(CMSMeta(key="schema_version", value=self.schema_version)).run()
-                logger.info(
-                    "starlette_cms.db.schema_seeded", schema_version=self.schema_version
-                )
-            else:
-                stored = rows[0]["value"]
-                if stored != self.schema_version:
-                    raise CMSSchemaMismatch(
-                        f"Database schema version {stored!r} does not match "
-                        f"package version {self.schema_version!r}. "
-                        f"Run `cms migrate` to apply pending migrations."
-                    )
-                logger.debug(
-                    "starlette_cms.db.schema_ok",
-                    stored=stored,
-                    expected=self.schema_version,
-                )
 
     async def close(self) -> None:
         """Close the engine connection pool."""
