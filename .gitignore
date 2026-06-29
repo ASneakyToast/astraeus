@@ -27,6 +27,11 @@ htmlcov/
 # Pyright
 pyrightconfig.json
 
+# Node (starlette-editor frontend)
+node_modules/
+package-lock.json
+.vite/
+
 # Compiled editor assets (checked in for distribution)
 # packages/starlette-editor/starlette_editor/static/*.js
 # packages/starlette-editor/starlette_editor/static/*.css

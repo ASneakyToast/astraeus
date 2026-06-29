@@ -2,7 +2,7 @@
 
 Phases are ordered by dependency. A future agent should always start at the earliest incomplete phase.
 
-**Current status:** Phases 0–13 complete (including EPIC-001 VPP MVP primitives, mediakit core+admin+MCP+CLI, starlette-editor Phases 1–3, ADR 017 observability). starlette-cms-gateways package scaffolded (Phase GW-1 complete).
+**Current status:** Phases 0–14 complete (including EPIC-001 VPP MVP primitives, mediakit core+admin+MCP+CLI, starlette-editor Phases 1–3 + Phase 14 polish, ADR 017 observability). starlette-cms-gateways package scaffolded (Phase GW-1 complete). starlette-editor is fully polished and PyPI-ready.
 
 **Use cases:** See `docs/use-cases/` for worked examples of Astraeus applied to real projects. These inform roadmap priorities and surface new primitives.
 
@@ -392,6 +392,21 @@ Together these establish Astraeus as a **governed data platform** — not just a
 - [x] `starlette-cms-gateways`: OTel spans on `gateways.sync` (with `item_count`) and `gateways.client.upsert` (with `action`)
 - [x] `starlette-cms-gateways`: Silent swallow fixed — `bad_last_synced_timestamp`
 - [x] `starlette-editor`: `structlog>=24.0` + `opentelemetry-api>=1.25` added to deps; `NullHandler` installed
+
+---
+
+## Phase 14 — starlette-editor Polish ✅
+
+**Goal:** Polish `starlette-editor` to a production-ready, self-contained, offline-capable state — ready for PyPI release.
+
+- [x] **Build tooling** — `package.json`, `esbuild.config.mjs`, `vitest.config.mjs`, `Makefile`; `npm ci && npm run build` produces `starlette_editor/static/editor.js` (~440KB minified)
+- [x] **Module decomposition** — extracted 1,900-line monolithic `editor.js` into `editor_src/` (11 modules across `api`, `state`, `prosemirror/`, `components/`, `standard/`)
+- [x] **npm-bundled ProseMirror** — replaced `import(https://esm.sh/...)` CDN dynamic imports with static npm imports; `window.PM` shim eliminated; fully offline-capable
+- [x] **Real markdown serialization** — replaced plain-text stubs in `markdownToPmDoc` / `pmDocToMarkdown` with `prosemirror-markdown` (markdownit-based); headings, bold, italic, lists, code fences, blockquotes all round-trip correctly
+- [x] **JS unit tests** — 83 Vitest tests in `editor_src/__tests__/` (utils, fields, markdown round-trips, block canvas operations)
+- [x] **Expanded Python tests** — 19 tests total (+14): auth path tests (sync/async allow/deny), ProseMirrorBridge field-type coverage (RichTextField, ImageField, SelectField, NumberField, BoolField, DocumentRef), empty registry edge case, display_order and label propagation
+- [x] **Vendor cleanup** — deleted `starlette_editor/static/vendor/` directory (all empty/broken stub files)
+- [x] **README rewrite** — accurate docs: installation, config, auth, frontend dev workflow, field type mapping table
 
 ---
 

@@ -79,12 +79,11 @@ def _js_string(value: str | None) -> str:
         return "null"
     # Escape characters that would break the JS string literal
     escaped = (
-        value
-        .replace("\\", "\\\\")
+        value.replace("\\", "\\\\")
         .replace('"', '\\"')
         .replace("\n", "\\n")
         .replace("\r", "\\r")
-        .replace("<", "\\u003c")   # prevent </script> injection
+        .replace("<", "\\u003c")  # prevent </script> injection
         .replace(">", "\\u003e")
         .replace("&", "\\u0026")
     )

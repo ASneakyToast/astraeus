@@ -1,0 +1,29 @@
+{
+  "name": "starlette-editor-frontend",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "build:dev": "node esbuild.config.mjs --dev",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "prosemirror-commands": "^1.5",
+    "prosemirror-example-setup": "^1.2",
+    "prosemirror-history": "^1.4",
+    "prosemirror-inputrules": "^1.4",
+    "prosemirror-keymap": "^1.2",
+    "prosemirror-markdown": "^1.13",
+    "prosemirror-model": "^1.22",
+    "prosemirror-schema-basic": "^1.2",
+    "prosemirror-schema-list": "^1.4",
+    "prosemirror-state": "^1.4",
+    "prosemirror-transform": "^1.10",
+    "prosemirror-view": "^1.36",
+    "markdown-it": "^14"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24",
+    "vitest": "^2.0"
+  }
+}
