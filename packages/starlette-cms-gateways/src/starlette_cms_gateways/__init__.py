@@ -46,4 +46,15 @@ __all__ = [
     "BaseGateway",
     "GatewayItem",
     "SyncResult",
+    "GatewayAdmin",
 ]
+
+
+def __getattr__(name: str):
+    # Lazy import to avoid pulling in Starlette deps at import time for
+    # consumers that only use the gateway base types.
+    if name == "GatewayAdmin":
+        from starlette_cms_gateways.admin import GatewayAdmin as _GatewayAdmin
+
+        return _GatewayAdmin
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
