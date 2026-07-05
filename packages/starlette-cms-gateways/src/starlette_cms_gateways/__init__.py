@@ -34,11 +34,11 @@ from __future__ import annotations
 
 import logging as _logging
 
+from starlette_cms_gateways.base import BaseGateway, GatewayItem, SyncResult
+
 # Library contract: install NullHandler so the host app controls log routing.
 # See ADR 017.
 _logging.getLogger("starlette_cms_gateways").addHandler(_logging.NullHandler())
-
-from starlette_cms_gateways.base import BaseGateway, GatewayItem, SyncResult
 
 __version__ = "0.1.0"
 

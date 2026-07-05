@@ -25,7 +25,6 @@ import asyncio
 import logging
 import os
 import sys
-from importlib.metadata import entry_points
 from typing import Any
 
 import click
@@ -91,23 +90,10 @@ logger = structlog.get_logger(__name__)
 
 
 def _discover_gateways() -> dict[str, Any]:
-    """
-    Return a dict of ``{entry_point_name: gateway_class}`` for all installed
-    gateways registered under ``starlette_cms_gateways.gateways``.
-    """
-    eps = entry_points(group="starlette_cms_gateways.gateways")
-    result: dict[str, Any] = {}
-    for ep in eps:
-        try:
-            cls = ep.load()
-            result[ep.name] = cls
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "starlette_cms_gateways.cli.gateway_load_failed",
-                gateway=ep.name,
-                exc_info=exc,
-            )
-    return result
+    """Thin shim — delegates to :func:`~starlette_cms_gateways.discovery.discover_gateways`."""
+    from starlette_cms_gateways.discovery import discover_gateways
+
+    return discover_gateways()
 
 
 def _cms_url_option(f):
@@ -143,7 +129,7 @@ def _require_cms_url(cms_url: str) -> str:
 
 @click.group()
 @click.option("-v", "--verbose", is_flag=True, default=False, help="Enable DEBUG logging.")
-@click.option("-q", "--quiet", is_flag=True, default=False, help="Suppress INFO logs (WARNING+ only).")
+@click.option("-q", "--quiet", is_flag=True, default=False, help="Suppress INFO logs (WARNING+ only).")  # noqa: E501
 @click.pass_context
 def main(ctx: click.Context, verbose: bool, quiet: bool) -> None:
     """starlette-cms gateway management commands."""

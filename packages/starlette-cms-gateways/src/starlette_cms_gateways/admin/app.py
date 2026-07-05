@@ -1,9 +1,14 @@
 """
 GatewayAdmin — mountable Starlette sub-application for the gateway admin UI.
 
-Extends starlette-cms at init time by registering four API routes on the CMS
-via :meth:`~starlette_cms.app.CMS.register_extension_route`, then serves a
-shell page from its own sub-application.
+Extends starlette-cms at init time by:
+
+1. Auto-registering a ``gateway_sync_job`` block type on the CMS — job records
+   are stored as append-only CMS documents, surviving process restarts and
+   appearing in the editor UI.
+2. Registering four API routes on the CMS via
+   :meth:`~starlette_cms.app.CMS.register_extension_route`.
+3. Serving a shell page from its own sub-application.
 
 Usage::
 
@@ -33,7 +38,7 @@ API:     GET  /cms/api/gateways
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from starlette.applications import Starlette
 
@@ -45,14 +50,22 @@ class GatewayAdmin:
     """
     Mountable Starlette gateway admin sub-application.
 
-    :param cms: The CMS instance to extend.  The four gateway API routes are
-        registered on the CMS via
-        :meth:`~starlette_cms.app.CMS.register_extension_route` at init time.
+    :param cms: The CMS instance to extend.  At init time this registers:
+
+        * A ``gateway_sync_job`` append-only block type for persisting sync
+          job records in the CMS database.
+        * Four gateway API routes via
+          :meth:`~starlette_cms.app.CMS.register_extension_route`.
+
         Must be called before the first access of ``cms.app``.
+
     :param mount_path: The path this admin UI is mounted at (used for shell
-        links).  Defaults to ``"/gateways"``.
+        links and the ``poll_url`` in sync responses).  Defaults to
+        ``"/gateways"``.
     :param auth: Optional auth callable ``(request) -> bool`` protecting the
-        ``/shell`` HTML page only.  API routes use the CMS auth model.
+        ``/shell`` HTML page.  API routes always use the CMS auth model
+        (``Authorization: Bearer <api_key>``).  Defaults to ``None`` (shell
+        is open) — set this when the admin is exposed on a public server.
     """
 
     def __init__(
@@ -66,9 +79,11 @@ class GatewayAdmin:
         self.mount_path = mount_path
         self.auth = auth
 
-        # In-memory job registry: run_id -> _SyncJob
-        # Shared by the API routes so they can read/write job state.
-        self._jobs: dict[str, Any] = {}
+        # Register the gateway_sync_job block type so job records persist in
+        # the CMS database across process restarts.
+        from starlette_cms_gateways.admin.api import register_sync_job_block
+
+        register_sync_job_block(cms)
 
         # Register the four gateway API routes on the CMS.
         # Must happen before cms.app is accessed.

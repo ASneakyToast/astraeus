@@ -130,7 +130,7 @@ async def test_shell_returns_html(admin_app):
 
 
 @patch(
-    "starlette_cms_gateways.admin.api._discover_gateways",
+    "starlette_cms_gateways.admin.api.discover_gateways",
     return_value=_FAKE_ENTRY_POINTS,
 )
 async def test_list_gateways(mock_disc, admin_app):
@@ -147,7 +147,7 @@ async def test_list_gateways(mock_disc, admin_app):
 
 
 @patch(
-    "starlette_cms_gateways.admin.api._discover_gateways",
+    "starlette_cms_gateways.admin.api.discover_gateways",
     return_value={},
 )
 async def test_list_gateways_empty(mock_disc, admin_app):
@@ -163,7 +163,7 @@ async def test_list_gateways_empty(mock_disc, admin_app):
 
 
 @patch(
-    "starlette_cms_gateways.admin.api._discover_gateways",
+    "starlette_cms_gateways.admin.api.discover_gateways",
     return_value=_FAKE_ENTRY_POINTS,
 )
 async def test_get_gateway_found(mock_disc, admin_app):
@@ -175,7 +175,7 @@ async def test_get_gateway_found(mock_disc, admin_app):
 
 
 @patch(
-    "starlette_cms_gateways.admin.api._discover_gateways",
+    "starlette_cms_gateways.admin.api.discover_gateways",
     return_value=_FAKE_ENTRY_POINTS,
 )
 async def test_get_gateway_not_found(mock_disc, admin_app):
@@ -190,7 +190,7 @@ async def test_get_gateway_not_found(mock_disc, admin_app):
 
 
 @patch(
-    "starlette_cms_gateways.admin.api._discover_gateways",
+    "starlette_cms_gateways.admin.api.discover_gateways",
     return_value=_FAKE_ENTRY_POINTS,
 )
 async def test_trigger_sync_returns_202(mock_disc, admin_app):
@@ -210,7 +210,7 @@ async def test_trigger_sync_returns_202(mock_disc, admin_app):
 
 
 @patch(
-    "starlette_cms_gateways.admin.api._discover_gateways",
+    "starlette_cms_gateways.admin.api.discover_gateways",
     return_value=_FAKE_ENTRY_POINTS,
 )
 async def test_trigger_sync_requires_auth(mock_disc, admin_app):
@@ -220,7 +220,7 @@ async def test_trigger_sync_requires_auth(mock_disc, admin_app):
 
 
 @patch(
-    "starlette_cms_gateways.admin.api._discover_gateways",
+    "starlette_cms_gateways.admin.api.discover_gateways",
     return_value=_FAKE_ENTRY_POINTS,
 )
 async def test_trigger_sync_unknown_gateway(mock_disc, admin_app):
@@ -237,7 +237,7 @@ async def test_trigger_sync_unknown_gateway(mock_disc, admin_app):
 
 
 @patch(
-    "starlette_cms_gateways.admin.api._discover_gateways",
+    "starlette_cms_gateways.admin.api.discover_gateways",
     return_value=_FAKE_ENTRY_POINTS,
 )
 async def test_poll_job_not_found(mock_disc, admin_app):
@@ -248,7 +248,7 @@ async def test_poll_job_not_found(mock_disc, admin_app):
 
 
 @patch(
-    "starlette_cms_gateways.admin.api._discover_gateways",
+    "starlette_cms_gateways.admin.api.discover_gateways",
     return_value=_FAKE_ENTRY_POINTS,
 )
 async def test_trigger_and_poll_sync_to_done(mock_disc, admin_app):
@@ -291,7 +291,7 @@ async def test_trigger_and_poll_sync_to_done(mock_disc, admin_app):
 
 
 @patch(
-    "starlette_cms_gateways.admin.api._discover_gateways",
+    "starlette_cms_gateways.admin.api.discover_gateways",
     return_value=_FAKE_ENTRY_POINTS,
 )
 async def test_second_sync_skips_identical(mock_disc, admin_app):
@@ -325,3 +325,52 @@ async def test_second_sync_skips_identical(mock_disc, admin_app):
     assert r2["status"] == "done"
     assert r2["result"]["skipped"] == 1
     assert r2["result"]["created"] == 0
+
+
+@patch(
+    "starlette_cms_gateways.admin.api.discover_gateways",
+    return_value=_FAKE_ENTRY_POINTS,
+)
+async def test_job_persisted_in_cms(mock_disc, admin_app):
+    """
+    Job records are stored as CMS documents, not in-memory.
+
+    After a sync completes, the run_id is still resolvable via the poll
+    endpoint — proving the result came from the database, not a dict that
+    would be cleared on restart.  We verify by also fetching the job document
+    directly from the CMS documents API.
+    """
+    import asyncio
+
+    global _ADMIN_FAKE_DB
+    _ADMIN_FAKE_DB = [{"id": "PERSIST1", "name": "Persistent"}]
+
+    resp = await admin_app["client"].post(
+        "/cms/api/gateways/admin-test/sync",
+        headers=_auth_headers(),
+    )
+    run_id = resp.json()["run_id"]
+
+    # Wait for completion
+    final: dict = {}
+    for _ in range(20):
+        await asyncio.sleep(0.25)
+        poll = await admin_app["client"].get(
+            f"/cms/api/gateways/admin-test/sync/{run_id}"
+        )
+        final = poll.json()
+        if final["status"] != "running":
+            break
+
+    assert final["status"] == "done"
+
+    # Confirm the job start document exists in the CMS documents API
+    docs_resp = await admin_app["client"].get(
+        f"/cms/api/documents?type=gateway_sync_job&import_ref=gateway_sync_job:{run_id}",
+        headers=_auth_headers(),
+    )
+    assert docs_resp.status_code == 200
+    docs = docs_resp.json().get("documents", [])
+    assert len(docs) == 1, "Job start document should be stored in the CMS"
+    assert docs[0]["body"]["gateway_name"] == "admin-test"
+    assert docs[0]["body"]["status"] == "running"  # start doc always says running

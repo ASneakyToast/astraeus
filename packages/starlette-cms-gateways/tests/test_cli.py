@@ -51,7 +51,7 @@ class AnotherGateway:
 def test_list_no_gateways():
     runner = CliRunner()
     with patch(
-        "starlette_cms_gateways.cli.entry_points",
+        "starlette_cms_gateways.discovery.entry_points",
         return_value=[],
     ):
         result = runner.invoke(main, ["list"])
@@ -65,7 +65,7 @@ def test_list_shows_installed_gateways():
         _make_ep("another-gw", AnotherGateway),
     ]
     runner = CliRunner()
-    with patch("starlette_cms_gateways.cli.entry_points", return_value=eps):
+    with patch("starlette_cms_gateways.discovery.entry_points", return_value=eps):
         result = runner.invoke(main, ["list"])
     assert result.exit_code == 0
     assert "dummy-gw" in result.output
@@ -77,7 +77,7 @@ def test_list_shows_installed_gateways():
 def test_list_shows_auto_publish_flag():
     eps = [_make_ep("a-gw", AnotherGateway)]
     runner = CliRunner()
-    with patch("starlette_cms_gateways.cli.entry_points", return_value=eps):
+    with patch("starlette_cms_gateways.discovery.entry_points", return_value=eps):
         result = runner.invoke(main, ["list"])
     assert "auto_publish=False" in result.output
 
@@ -89,7 +89,7 @@ def test_list_shows_auto_publish_flag():
 
 def test_sync_requires_cms_url():
     runner = CliRunner()
-    with patch("starlette_cms_gateways.cli.entry_points", return_value=[]):
+    with patch("starlette_cms_gateways.discovery.entry_points", return_value=[]):
         result = runner.invoke(main, ["sync", "my-gw"])
     assert result.exit_code != 0
     assert "GATEWAYS_CMS_URL" in result.output or "cms-url" in result.output.lower()
@@ -97,7 +97,7 @@ def test_sync_requires_cms_url():
 
 def test_sync_unknown_gateway():
     runner = CliRunner()
-    with patch("starlette_cms_gateways.cli.entry_points", return_value=[]):
+    with patch("starlette_cms_gateways.discovery.entry_points", return_value=[]):
         result = runner.invoke(
             main, ["sync", "unknown-gateway", "--cms-url", "http://localhost"]
         )
@@ -121,7 +121,7 @@ def test_list_handles_load_error_gracefully(caplog):
     import logging
 
     with caplog.at_level(logging.WARNING):
-        with patch("starlette_cms_gateways.cli.entry_points", return_value=[bad_ep, good_ep]):
+        with patch("starlette_cms_gateways.discovery.entry_points", return_value=[bad_ep, good_ep]):
             result = runner.invoke(main, ["list"])
 
     # Should still exit cleanly and show the good gateway
