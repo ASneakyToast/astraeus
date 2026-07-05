@@ -65,6 +65,8 @@ async def admin_app():
     """
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        jobs_db_path = f.name
 
     try:
         cms_instance = CMS(
@@ -78,7 +80,7 @@ async def admin_app():
         class AdminTestItemBlock:
             name: str = TextField(required=True)
 
-        admin_instance = GatewayAdmin(cms=cms_instance)
+        admin_instance = GatewayAdmin(cms=cms_instance, jobs_db_path=jobs_db_path)
 
         root = Starlette(
             routes=[
@@ -98,10 +100,11 @@ async def admin_app():
             finally:
                 await client.aclose()
     finally:
-        try:
-            os.unlink(db_path)
-        except OSError:
-            pass
+        for path in (db_path, jobs_db_path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 def _auth_headers() -> dict[str, str]:
@@ -331,14 +334,14 @@ async def test_second_sync_skips_identical(mock_disc, admin_app):
     "starlette_cms_gateways.admin.api.discover_gateways",
     return_value=_FAKE_ENTRY_POINTS,
 )
-async def test_job_persisted_in_cms(mock_disc, admin_app):
+async def test_job_persisted_in_sqlite(mock_disc, admin_app):
     """
-    Job records are stored as CMS documents, not in-memory.
+    Job records are stored in the SQLite job store, not in the CMS.
 
-    After a sync completes, the run_id is still resolvable via the poll
-    endpoint — proving the result came from the database, not a dict that
-    would be cleared on restart.  We verify by also fetching the job document
-    directly from the CMS documents API.
+    After a sync completes the run_id is readable directly from the JobStore,
+    proving persistence survives beyond any in-memory state.  Also confirms
+    the gateway_sync_job block type is NOT registered in the CMS block registry
+    (it should never appear in the editor).
     """
     import asyncio
 
@@ -351,7 +354,7 @@ async def test_job_persisted_in_cms(mock_disc, admin_app):
     )
     run_id = resp.json()["run_id"]
 
-    # Wait for completion
+    # Wait for completion via poll endpoint
     final: dict = {}
     for _ in range(20):
         await asyncio.sleep(0.25)
@@ -364,13 +367,15 @@ async def test_job_persisted_in_cms(mock_disc, admin_app):
 
     assert final["status"] == "done"
 
-    # Confirm the job start document exists in the CMS documents API
-    docs_resp = await admin_app["client"].get(
-        f"/cms/api/documents?type=gateway_sync_job&import_ref=gateway_sync_job:{run_id}",
-        headers=_auth_headers(),
+    # Read directly from the job store — confirms it's in SQLite
+    job = await admin_app["admin"].jobs.get(run_id)
+    assert job is not None, "Job should be in the SQLite job store"
+    assert job["gateway_name"] == "admin-test"
+    assert job["status"] == "done"
+    assert job["result"]["created"] == 1
+
+    # Confirm gateway_sync_job is NOT in the CMS block registry
+    cms = admin_app["cms"]
+    assert "gateway_sync_job" not in cms.registry._blocks, (
+        "gateway_sync_job block must not appear in the CMS registry or editor"
     )
-    assert docs_resp.status_code == 200
-    docs = docs_resp.json().get("documents", [])
-    assert len(docs) == 1, "Job start document should be stored in the CMS"
-    assert docs[0]["body"]["gateway_name"] == "admin-test"
-    assert docs[0]["body"]["status"] == "running"  # start doc always says running
