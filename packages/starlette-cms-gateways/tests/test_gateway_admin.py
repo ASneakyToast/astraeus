@@ -13,16 +13,13 @@ from collections.abc import AsyncIterator
 from unittest.mock import patch
 
 import httpx
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport
 from starlette.applications import Starlette
 from starlette.routing import Mount
 from starlette_cms import CMS, TextField
-from starlette_cms.fields import NumberField
 from starlette_cms_gateways.admin import GatewayAdmin
 from starlette_cms_gateways.base import BaseGateway, GatewayItem
-
 
 # ---------------------------------------------------------------------------
 # Minimal test gateway (mirrors test_sync_e2e.py)
@@ -147,6 +144,8 @@ async def test_list_gateways(mock_disc, admin_app):
     assert gw["service_name"] == "admin_test_service"
     assert gw["block_type"] == "admin_test_item"
     assert gw["auto_publish"] is True
+    # No runs yet — last_synced must be None
+    assert gw["last_synced"] is None
 
 
 @patch(
@@ -292,6 +291,15 @@ async def test_trigger_and_poll_sync_to_done(mock_disc, admin_app):
     assert result["created"] == 1
     assert result["errors"] == []
 
+    # After sync completes, last_synced should appear in the gateway list
+    list_resp = await admin_app["client"].get("/cms/api/gateways")
+    assert list_resp.status_code == 200
+    gw_after = list_resp.json()["gateways"][0]
+    assert gw_after["last_synced"] is not None, "last_synced must be set after a successful sync"
+    # Must be a parseable ISO datetime string
+    from datetime import datetime
+    datetime.fromisoformat(gw_after["last_synced"])
+
 
 @patch(
     "starlette_cms_gateways.admin.api.discover_gateways",
@@ -378,4 +386,156 @@ async def test_job_persisted_in_sqlite(mock_disc, admin_app):
     cms = admin_app["cms"]
     assert "gateway_sync_job" not in cms.registry._blocks, (
         "gateway_sync_job block must not appear in the CMS registry or editor"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pre-built JobStore acceptance
+# ---------------------------------------------------------------------------
+
+
+async def test_gateway_admin_accepts_pre_built_job_store():
+    """
+    GatewayAdmin should use a pre-built JobStore when passed as job_store=,
+    rather than constructing its own.
+    """
+    import tempfile
+
+    from starlette_cms_gateways.admin import GatewayAdmin
+    from starlette_cms_gateways.jobstore import JobStore
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        cms_db = f.name
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        jobs_db = f.name
+
+    try:
+        cms_instance = CMS(
+            database_url=f"sqlite:///{cms_db}",
+            auth="apikey",
+            api_key="test-secret",
+            mount_path="/cms",
+        )
+
+        @cms_instance.block("pre_built_test_item")
+        class PreBuiltTestItemBlock:
+            name: str = TextField(required=True)
+
+        store = JobStore(jobs_db)
+        admin_instance = GatewayAdmin(cms=cms_instance, job_store=store)
+
+        assert admin_instance.jobs is store, (
+            "admin.jobs should be the pre-built store, not a new one"
+        )
+    finally:
+        for path in (cms_db, jobs_db):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+async def test_gateway_admin_warns_if_both_job_store_and_path_given():
+    """
+    Passing both job_store= and a non-default jobs_db_path should emit a
+    UserWarning.
+    """
+    import tempfile
+    import warnings
+
+    from starlette_cms_gateways.admin import GatewayAdmin
+    from starlette_cms_gateways.jobstore import JobStore
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        cms_db = f.name
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        jobs_db = f.name
+
+    try:
+        cms_instance = CMS(
+            database_url=f"sqlite:///{cms_db}",
+            auth="apikey",
+            api_key="test-secret",
+            mount_path="/cms",
+        )
+
+        @cms_instance.block("warn_test_item")
+        class WarnTestItemBlock:
+            name: str = TextField(required=True)
+
+        store = JobStore(jobs_db)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            GatewayAdmin(
+                cms=cms_instance,
+                job_store=store,
+                jobs_db_path="/some/custom/path.db",
+            )
+        assert any("ignored" in str(warning.message).lower() for warning in w), (
+            "Expected a UserWarning about jobs_db_path being ignored"
+        )
+    finally:
+        for path in (cms_db, jobs_db):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# job_store wired to gateway constructor
+# ---------------------------------------------------------------------------
+
+
+@patch(
+    "starlette_cms_gateways.admin.api.discover_gateways",
+    return_value=_FAKE_ENTRY_POINTS,
+)
+async def test_gateway_construction_passes_job_store(mock_disc, admin_app):
+    """
+    When the admin triggers a sync, the gateway class should be constructed
+    with job_store= and job_store_key= matching the admin's job store and
+    the entry-point name.
+    """
+    import asyncio
+
+    global _ADMIN_FAKE_DB
+    _ADMIN_FAKE_DB = [{"id": "WS1", "name": "WireStore"}]
+
+    constructed_kwargs: dict = {}
+
+    original_init = AdminTestGateway.__init__
+
+    def capturing_init(self, **kwargs):
+        constructed_kwargs.update(kwargs)
+        original_init(self, **kwargs)
+
+    with patch.object(AdminTestGateway, "__init__", capturing_init):
+        resp = await admin_app["client"].post(
+            "/cms/api/gateways/admin-test/sync",
+            headers=_auth_headers(),
+        )
+        assert resp.status_code == 202
+        run_id = resp.json()["run_id"]
+
+        # Wait for the task to finish so __init__ has been called
+        final: dict = {}
+        for _ in range(20):
+            await asyncio.sleep(0.25)
+            poll = await admin_app["client"].get(
+                f"/cms/api/gateways/admin-test/sync/{run_id}"
+            )
+            final = poll.json()
+            if final["status"] != "running":
+                break
+
+    assert final["status"] == "done", f"Sync did not finish: {final}"
+    assert "job_store" in constructed_kwargs, (
+        "gateway constructor must receive job_store= from the admin"
+    )
+    assert constructed_kwargs["job_store"] is admin_app["admin"].jobs, (
+        "job_store must be the admin's shared job store"
+    )
+    assert constructed_kwargs.get("job_store_key") == "admin-test", (
+        "job_store_key must be the entry-point name"
     )

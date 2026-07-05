@@ -46,6 +46,7 @@ from opentelemetry.trace import StatusCode
 
 if TYPE_CHECKING:
     from starlette_cms_gateways.client import CMSClient
+    from starlette_cms_gateways.jobstore import JobStore
 
 tracer = trace.get_tracer(__name__)
 
@@ -174,8 +175,17 @@ class BaseGateway(ABC):
     # Constructor
     # -----------------------------------------------------------------------
 
-    def __init__(self, *, cms_client: CMSClient) -> None:
+    def __init__(
+        self,
+        *,
+        cms_client: CMSClient,
+        job_store: JobStore | None = None,
+        job_store_key: str | None = None,
+    ) -> None:
         self._client = cms_client
+        self._job_store = job_store
+        # Key used for job history lookups — defaults to service_name.
+        self._job_store_key: str = job_store_key or self.service_name
 
     # -----------------------------------------------------------------------
     # Abstract method — gateway authors implement this

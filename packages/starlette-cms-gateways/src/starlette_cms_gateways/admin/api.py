@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from starlette_cms.app import CMS
 
     from starlette_cms_gateways.admin.app import GatewayAdmin
-    from starlette_cms_gateways.admin.jobstore import JobStore
+    from starlette_cms_gateways.jobstore import JobStore
 
 logger = structlog.get_logger(__name__)
 
@@ -95,16 +95,20 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
     async def list_gateways(request: Request) -> JSONResponse:
         """List all gateways discovered via entry points."""
         gateways = discover_gateways()
-        items = [
-            {
-                "name": name,
-                "service_name": getattr(cls, "service_name", None),
-                "block_type": getattr(cls, "block_type", None),
-                "auto_publish": getattr(cls, "auto_publish", False),
-                "immutable": getattr(cls, "immutable", False),
-            }
-            for name, cls in sorted(gateways.items())
-        ]
+        items = []
+        for name, cls in sorted(gateways.items()):
+            # PERF: consider bulk GROUP BY query if N grows large
+            last_synced_dt = await jobs.get_last_synced(name)
+            items.append(
+                {
+                    "name": name,
+                    "service_name": getattr(cls, "service_name", None),
+                    "block_type": getattr(cls, "block_type", None),
+                    "auto_publish": getattr(cls, "auto_publish", False),
+                    "immutable": getattr(cls, "immutable", False),
+                    "last_synced": last_synced_dt.isoformat() if last_synced_dt else None,
+                }
+            )
         return JSONResponse({"gateways": items, "total": len(items)})
 
     # ------------------------------------------------------------------
@@ -169,7 +173,7 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
         async def _run_sync() -> None:
             client = _build_cms_client(cms)
             try:
-                gateway = cls(cms_client=client)
+                gateway = cls(cms_client=client, job_store=jobs, job_store_key=name)
                 result = await gateway.sync()
                 await jobs.finish(
                     run_id,

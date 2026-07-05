@@ -38,6 +38,7 @@ Then sync::
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import datetime
 
 from starlette_cms_gateways import BaseGateway, GatewayItem
 
@@ -47,9 +48,14 @@ class SpotifyLikedSongsGateway(BaseGateway):
     Sync Spotify liked songs into starlette-cms.
 
     Each liked track becomes one document of block type ``spotify_liked_song``.
-    Documents are auto-published on creation.
+    Documents are held as drafts by default; set ``auto_publish = True`` to
+    publish immediately on creation.
 
-    Manages its own cursor state internally if incremental sync is needed.
+    Incremental sync: if a :class:`~starlette_cms_gateways.jobstore.JobStore`
+    is provided (automatically wired when running via ``GatewayAdmin``), the
+    gateway reads the timestamp of the most recent successful sync and stops
+    paginating once it reaches tracks added before that date.  On the first
+    run (no prior successful sync), all tracks are fetched.
     """
 
     service_name = "spotify_liked_songs"
@@ -78,10 +84,19 @@ class SpotifyLikedSongsGateway(BaseGateway):
         """
         Yield liked tracks from Spotify, newest first.
 
+        Stops paginating when it encounters a track added before the last
+        successful sync (incremental sync).  If no prior sync is recorded,
+        all tracks are fetched.
+
         Note: Spotipy's API is synchronous — we call it in a thread-pool via
         ``asyncio.to_thread`` to avoid blocking the event loop.
         """
         import asyncio
+
+        # Determine the cursor for incremental sync.
+        since: datetime | None = None
+        if self._job_store is not None:
+            since = await self._job_store.get_last_synced(self._job_store_key)
 
         offset = 0
         limit = 50  # Spotify's max per request
@@ -101,6 +116,17 @@ class SpotifyLikedSongsGateway(BaseGateway):
             for item in items:
                 track = item.get("track") or {}
                 added_at_str = item.get("added_at", "")
+
+                # Incremental sync: Spotify returns tracks newest-first.
+                # Once we hit a track added before the last sync, we're done.
+                if since is not None and added_at_str:
+                    # Defensive: Python 3.12 fromisoformat handles 'Z', but
+                    # keep the replace() for environments that don't.
+                    added_at = datetime.fromisoformat(
+                        added_at_str.replace("Z", "+00:00")
+                    )
+                    if added_at <= since:
+                        return
 
                 track_id = track.get("id", "")
                 if not track_id:

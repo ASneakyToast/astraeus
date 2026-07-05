@@ -35,13 +35,14 @@ API:     GET  /cms/api/gateways
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from starlette.applications import Starlette
 
-from starlette_cms_gateways.admin.jobstore import JobStore
+from starlette_cms_gateways.jobstore import JobStore
 
 if TYPE_CHECKING:
     from starlette_cms.app import CMS
@@ -66,7 +67,11 @@ class GatewayAdmin:
     :param jobs_db_path: Path to the SQLite database file used to persist sync
         job records.  Defaults to ``gateway_jobs.db`` in the current working
         directory.  Use an absolute path in production (e.g. next to the CMS
-        database file).
+        database file).  Ignored if *job_store* is provided.
+    :param job_store: A pre-built :class:`~starlette_cms_gateways.jobstore.JobStore`
+        instance.  Use this to share a job store across multiple components or
+        to control the database path explicitly.  When provided, *jobs_db_path*
+        is ignored (a warning is emitted if a non-default path was also passed).
     """
 
     def __init__(
@@ -76,11 +81,21 @@ class GatewayAdmin:
         mount_path: str = "/gateways",
         auth: Callable | None = None,
         jobs_db_path: str | Path = DEFAULT_JOBS_DB,
+        job_store: JobStore | None = None,
     ) -> None:
         self.cms = cms
         self.mount_path = mount_path
         self.auth = auth
-        self.jobs = JobStore(jobs_db_path)
+
+        if job_store is not None:
+            if jobs_db_path != DEFAULT_JOBS_DB:
+                warnings.warn(
+                    "jobs_db_path is ignored when job_store is provided",
+                    stacklevel=2,
+                )
+            self.jobs = job_store
+        else:
+            self.jobs = JobStore(jobs_db_path)
 
         # Register the four gateway API routes on the CMS.
         # Must happen before cms.app is accessed.

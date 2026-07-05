@@ -45,6 +45,7 @@ __version__ = "0.1.0"
 __all__ = [
     "BaseGateway",
     "GatewayItem",
+    "JobStore",
     "SyncResult",
     "GatewayAdmin",
 ]
@@ -57,4 +58,8 @@ def __getattr__(name: str):
         from starlette_cms_gateways.admin import GatewayAdmin as _GatewayAdmin
 
         return _GatewayAdmin
+    if name == "JobStore":
+        from starlette_cms_gateways.jobstore import JobStore as _JobStore
+
+        return _JobStore
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

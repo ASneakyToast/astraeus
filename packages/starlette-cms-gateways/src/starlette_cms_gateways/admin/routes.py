@@ -92,9 +92,10 @@ def make_admin_routes(admin: GatewayAdmin) -> list:
     .gateway-meta {{
       font-size: 0.8rem;
       color: #888;
-      margin-bottom: 1rem;
+      margin-bottom: 0.5rem;
     }}
     .gateway-meta span {{ margin-right: 1rem; }}
+    .last-synced {{ font-size: 0.78rem; color: #6b7280; margin-bottom: 0.75rem; }}
     .sync-btn {{
       background: #1d4ed8;
       color: #fff;
@@ -189,6 +190,9 @@ def make_admin_routes(admin: GatewayAdmin) -> list:
               'created=' + r.created + '  updated=' + r.updated +
               '  skipped=' + r.skipped + '  errors=' + (r.errors ? r.errors.length : 0) +
               '</span>';
+            // Update last-synced display live without a page reload
+            var lsEl = document.getElementById('lastsynced-' + CSS.escape(gwName));
+            if (lsEl) {{ lsEl.innerHTML = 'Last synced: ' + esc(new Date().toISOString()); }}
             done = true;
           }} else {{
             statusEl.className = 'job-status status-error';
@@ -204,11 +208,17 @@ def make_admin_routes(admin: GatewayAdmin) -> list:
     }}
 
     function buildCard(gw) {{
+      var lastSyncedVal = gw.last_synced
+        ? esc(gw.last_synced)
+        : '<em>Never</em>';
       var card = document.createElement('div');
       card.className = 'gateway-card';
       card.innerHTML =
         '<div class="gateway-name">' + esc(gw.name) + '</div>' +
         '<div class="gateway-meta">' + renderMeta(gw) + '</div>' +
+        '<div class="last-synced" id="lastsynced-' + esc(gw.name) + '">Last synced: '  # noqa: E501
+        + lastSyncedVal + '</div>' +
+        // TODO: relative time ("2 hours ago") — future enhancement
         '<button class="sync-btn" id="btn-' + esc(gw.name) + '">▶ Sync now</button>' +
         '<div class="job-status" id="status-' + esc(gw.name) + '"></div>';
 
