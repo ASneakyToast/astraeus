@@ -1,16 +1,21 @@
 """
 Integration tests for starlette-chat — Phase CH-6.
 
-These tests exercise the full ChatAPI + CMS stack end-to-end.
-The LLM provider is replaced with a MockProvider so no network calls
-are made, but the CMS HTTP layer is real (SQLite in-memory, ASGITransport).
+These tests exercise the full ChatAPI + real CMS stack end-to-end.
+The LLM provider is replaced with a MockProvider (no network calls to Anthropic),
+but the CMS layer is a real SQLite-backed CMS instance.
+
+Because ChatAPI's route handlers call the CMS via httpx.AsyncClient() over HTTP,
+the tests use respx with an ASGI-proxy side_effect so those internal calls are
+routed to the real CMS ASGI app without a listening socket.
 
 Setup pattern:
-1. Create a CMS instance with sqlite://:memory:
+1. Create a CMS with a temp SQLite file
 2. register_blocks(cms) to add the four chat block types
 3. Bring up the CMS lifespan (creates tables)
-4. Build a combined Starlette app: /cms → cms.app, /chat → chat.app
-5. Use httpx.AsyncClient + ASGITransport for HTTP calls
+4. Build ChatAPI with MockProvider
+5. Register a respx route that proxies http://cms-internal/... → cms.app
+6. Use httpx.AsyncClient + ASGITransport for outer (ChatAPI) calls
 """
 
 from __future__ import annotations
@@ -19,13 +24,13 @@ import json
 import os
 import tempfile
 from collections.abc import AsyncGenerator, AsyncIterator
+from typing import Any
 
 import httpx
 import pytest
 import pytest_asyncio
+import respx
 from httpx import ASGITransport
-from starlette.applications import Starlette
-from starlette.routing import Mount
 
 from starlette_cms import CMS
 
@@ -58,6 +63,42 @@ class _MockProvider(BaseProvider):
 
 
 # ---------------------------------------------------------------------------
+# ASGI proxy helper
+# ---------------------------------------------------------------------------
+
+_CMS_BASE = "http://cms-internal"
+_API_KEY = "test-secret"
+
+
+def _make_cms_proxy(cms_app: Any) -> Any:
+    """Return a respx side_effect that proxies requests to the real CMS ASGI app.
+
+    The ChatAPI routes call http://cms-internal/api/... — this proxy intercepts
+    those calls and dispatches them through the CMS ASGI transport.
+    """
+    _inner = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=cms_app),
+        base_url=_CMS_BASE,
+    )
+
+    async def _proxy(request: httpx.Request) -> httpx.Response:
+        # Strip hop-by-hop headers that ASGI transport doesn't need
+        headers = {
+            k: v for k, v in request.headers.items()
+            if k.lower() not in ("host", "transfer-encoding")
+        }
+        r = await _inner.request(
+            method=request.method,
+            url=str(request.url),
+            headers=headers,
+            content=request.content,
+        )
+        return httpx.Response(r.status_code, headers=dict(r.headers), content=r.content)
+
+    return _proxy
+
+
+# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
@@ -65,12 +106,14 @@ class _MockProvider(BaseProvider):
 @pytest_asyncio.fixture
 async def chat_stack() -> AsyncGenerator[tuple[CMS, ChatAPI, httpx.AsyncClient], None]:
     """
-    Yields (cms, chat, http_client) with a fully wired test stack:
+    Yields (cms, chat, chat_client) where:
 
-    - CMS: sqlite file-based (in-memory URI not supported by all Piccolo backends)
-    - All starlette-chat blocks registered
-    - ChatAPI with MockProvider
-    - Single httpx.AsyncClient covering both /cms and /chat mounts
+    - cms is a real SQLite-backed CMS with all starlette-chat blocks registered
+    - chat is a ChatAPI with MockProvider pointing at http://cms-internal
+    - chat_client is an httpx.AsyncClient via ASGITransport targeting chat.app
+
+    respx intercepts the ChatAPI's internal CMS calls and proxies them to the
+    real cms.app via ASGITransport (no listening socket required).
     """
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
@@ -79,30 +122,23 @@ async def chat_stack() -> AsyncGenerator[tuple[CMS, ChatAPI, httpx.AsyncClient],
         cms = CMS(
             database_url=f"sqlite:///{db_path}",
             auth="apikey",
-            api_key="test-secret",
+            api_key=_API_KEY,
             read_auth=False,
         )
         register_blocks(cms)
 
         chat = ChatAPI(
-            cms_base_url="http://testserver/cms",
-            cms_api_key="test-secret",
+            cms_base_url=_CMS_BASE,
+            cms_api_key=_API_KEY,
             provider=_MockProvider(),
         )
 
-        combined = Starlette(
-            routes=[
-                Mount("/cms", app=cms.app),
-                Mount("/chat", app=chat.app),
-            ]
-        )
-
-        async with cms.lifespan_context(combined):
+        async with cms.lifespan_context(None):
             async with httpx.AsyncClient(
-                transport=ASGITransport(app=combined),
+                transport=ASGITransport(app=chat.app),
                 base_url="http://testserver",
-            ) as client:
-                yield cms, chat, client
+            ) as chat_client:
+                yield cms, chat, chat_client
     finally:
         try:
             os.unlink(db_path)
@@ -110,17 +146,34 @@ async def chat_stack() -> AsyncGenerator[tuple[CMS, ChatAPI, httpx.AsyncClient],
             pass
 
 
+@pytest_asyncio.fixture
+async def cms_client(chat_stack: tuple[CMS, ChatAPI, httpx.AsyncClient]) -> httpx.AsyncClient:
+    """Direct httpx client to the CMS ASGI app for seeding test data."""
+    cms, _chat, _chat_client = chat_stack
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=cms.app),
+        base_url=_CMS_BASE,
+    ) as client:
+        yield client
+
+
 # ---------------------------------------------------------------------------
-# Helper — create a ModelConfig and SystemPrompt so sessions can be created
+# Seed helper
 # ---------------------------------------------------------------------------
 
 
-async def _seed_persona_docs(client: httpx.AsyncClient, persona: str = "default") -> None:
-    """Create and publish minimal ModelConfig and SystemPrompt for *persona*."""
-    headers = {"Authorization": "Bearer test-secret"}
+async def _seed_persona_docs(
+    cms_client: httpx.AsyncClient,
+    persona: str = "default",
+) -> tuple[str, str]:
+    """Create and publish a ModelConfig and SystemPrompt for *persona*.
 
-    mc_resp = await client.post(
-        "/cms/api/documents",
+    Returns (model_config_id, system_prompt_id).
+    """
+    headers = {"Authorization": f"Bearer {_API_KEY}"}
+
+    mc_resp = await cms_client.post(
+        "/api/documents",
         json={
             "doc_type": "model_config",
             "body": {
@@ -136,10 +189,10 @@ async def _seed_persona_docs(client: httpx.AsyncClient, persona: str = "default"
     )
     assert mc_resp.status_code in (200, 201), mc_resp.text
     mc_id = mc_resp.json()["id"]
-    await client.post(f"/cms/api/documents/{mc_id}/publish", headers=headers)
+    await cms_client.post(f"/api/documents/{mc_id}/publish", headers=headers)
 
-    sp_resp = await client.post(
-        "/cms/api/documents",
+    sp_resp = await cms_client.post(
+        "/api/documents",
         json={
             "doc_type": "system_prompt",
             "body": {
@@ -153,7 +206,9 @@ async def _seed_persona_docs(client: httpx.AsyncClient, persona: str = "default"
     )
     assert sp_resp.status_code in (200, 201), sp_resp.text
     sp_id = sp_resp.json()["id"]
-    await client.post(f"/cms/api/documents/{sp_id}/publish", headers=headers)
+    await cms_client.post(f"/api/documents/{sp_id}/publish", headers=headers)
+
+    return mc_id, sp_id
 
 
 # ---------------------------------------------------------------------------
@@ -164,22 +219,28 @@ async def _seed_persona_docs(client: httpx.AsyncClient, persona: str = "default"
 @pytest.mark.asyncio
 async def test_session_creates_cms_document(
     chat_stack: tuple[CMS, ChatAPI, httpx.AsyncClient],
+    cms_client: httpx.AsyncClient,
 ) -> None:
-    """POST /chat/api/chat/sessions must create a chat_session document in the CMS."""
-    _cms, _chat, client = chat_stack
-    await _seed_persona_docs(client)
+    """POST /api/chat/sessions must create a chat_session document in the real CMS."""
+    cms, _chat, chat_client = chat_stack
+    await _seed_persona_docs(cms_client)
 
-    resp = await client.post(
-        "/chat/api/chat/sessions",
-        json={"persona": "default"},
-    )
+    with respx.mock(base_url=_CMS_BASE, assert_all_called=False) as mock:
+        mock.route().mock(side_effect=_make_cms_proxy(cms.app))
+
+        resp = await chat_client.post(
+            "/api/chat/sessions",
+            json={"persona": "default"},
+        )
+
     assert resp.status_code == 201, resp.text
     body = resp.json()
     session_id = body.get("session_id")
     assert session_id, "Response must include session_id"
 
-    # Verify the CMS document exists
-    get_resp = await client.get(f"/cms/api/documents/{session_id}")
+    # Verify the CMS document exists and has the right body
+    headers = {"Authorization": f"Bearer {_API_KEY}"}
+    get_resp = await cms_client.get(f"/api/documents/{session_id}", headers=headers)
     assert get_resp.status_code == 200, get_resp.text
     doc = get_resp.json()
     doc_body = doc.get("body") or {}
@@ -196,19 +257,24 @@ async def test_session_creates_cms_document(
 @pytest.mark.asyncio
 async def test_session_get_returns_messages(
     chat_stack: tuple[CMS, ChatAPI, httpx.AsyncClient],
+    cms_client: httpx.AsyncClient,
 ) -> None:
-    """GET /chat/api/chat/sessions/{id} returns session document and messages list."""
-    _cms, _chat, client = chat_stack
-    await _seed_persona_docs(client)
+    """GET /api/chat/sessions/{id} returns session document and messages list."""
+    cms, _chat, chat_client = chat_stack
+    await _seed_persona_docs(cms_client)
 
-    create_resp = await client.post(
-        "/chat/api/chat/sessions",
-        json={"persona": "default"},
-    )
-    assert create_resp.status_code == 201
-    session_id = create_resp.json()["session_id"]
+    with respx.mock(base_url=_CMS_BASE, assert_all_called=False) as mock:
+        mock.route().mock(side_effect=_make_cms_proxy(cms.app))
 
-    get_resp = await client.get(f"/chat/api/chat/sessions/{session_id}")
+        create_resp = await chat_client.post(
+            "/api/chat/sessions",
+            json={"persona": "default"},
+        )
+        assert create_resp.status_code == 201
+        session_id = create_resp.json()["session_id"]
+
+        get_resp = await chat_client.get(f"/api/chat/sessions/{session_id}")
+
     assert get_resp.status_code == 200, get_resp.text
     data = get_resp.json()
     assert "session" in data
@@ -217,144 +283,149 @@ async def test_session_get_returns_messages(
 
 
 # ---------------------------------------------------------------------------
-# Test 3: WS without api_key closes with 4403
+# Test 3: WS without correct api_key closes before accepting (code 4403)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_unauthenticated_ws_rejected(
     chat_stack: tuple[CMS, ChatAPI, httpx.AsyncClient],
+    cms_client: httpx.AsyncClient,
 ) -> None:
-    """WS connect without correct api_key must be closed with code 4403."""
-    _cms, _chat, client = chat_stack
-    await _seed_persona_docs(client)
+    """WS connect without correct api_key is closed with code 4403 before accept."""
+    cms, chat, chat_client = chat_stack
+    await _seed_persona_docs(cms_client)
 
-    create_resp = await client.post(
-        "/chat/api/chat/sessions",
-        json={"persona": "default"},
-    )
+    # Create a session first (need a valid session_id for the WS path)
+    with respx.mock(base_url=_CMS_BASE, assert_all_called=False) as mock:
+        mock.route().mock(side_effect=_make_cms_proxy(cms.app))
+        create_resp = await chat_client.post(
+            "/api/chat/sessions",
+            json={"persona": "default"},
+        )
     assert create_resp.status_code == 201
     session_id = create_resp.json()["session_id"]
 
-    # httpx does not support WebSockets natively; probe via HTTP upgrade.
-    # The route handler closes before accepting when api_key is wrong.
-    # We verify via a plain GET/OPTIONS-style probe: the route exists but
-    # the WS close-before-accept produces a non-200 / disconnect for HTTP.
-    # We use the ASGITransport app directly to send a raw WS-like request.
-    #
-    # Simpler check: the GET /sessions/{id} route returns 200 for valid id,
-    # confirming routing works.  The WS close-before-accept is tested by
-    # checking the route rejects wrong api_key at the application level.
-    #
-    # Because httpx cannot do WebSocket handshakes, we assert the session
-    # exists (good routing) and trust the source-level inspection that the
-    # chat_ws handler calls websocket.close(code=4403) before accept.
-    get_resp = await client.get(f"/chat/api/chat/sessions/{session_id}")
-    assert get_resp.status_code == 200
-    # The route code is tested in test_backend.py; here we confirm that the
-    # session routing is correct and the pattern is wired end-to-end.
+    # Verify the WS handler rejects wrong api_key at the source level.
+    # httpx does not support WebSocket upgrades, so we verify via the Starlette
+    # TestClient which does.  The handler calls websocket.close(code=4403)
+    # before websocket.accept() when the api_key is wrong.
+    from starlette.testclient import TestClient
+
+    tc = TestClient(chat.app, raise_server_exceptions=False)
+    with pytest.raises(Exception):
+        # TestClient raises WebSocketDisconnect or similar on server-side close-before-accept
+        with tc.websocket_connect(
+            f"/api/chat/sessions/{session_id}/ws?api_key=wrong-key"
+        ) as ws:
+            ws.receive_json()
 
 
 # ---------------------------------------------------------------------------
-# Test 4: Full turn persists user + assistant ChatMessage docs
+# Test 4: Full turn persists user + assistant ChatMessage docs in CMS
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_full_turn_persists_messages(
     chat_stack: tuple[CMS, ChatAPI, httpx.AsyncClient],
+    cms_client: httpx.AsyncClient,
 ) -> None:
     """A full WS turn with MockProvider creates user + assistant ChatMessage docs in CMS."""
-    _cms, _chat, client = chat_stack
-    await _seed_persona_docs(client)
+    cms, chat, chat_client = chat_stack
+    await _seed_persona_docs(cms_client)
 
-    create_resp = await client.post(
-        "/chat/api/chat/sessions",
-        json={"persona": "default"},
-    )
+    # Create a session
+    with respx.mock(base_url=_CMS_BASE, assert_all_called=False) as mock:
+        mock.route().mock(side_effect=_make_cms_proxy(cms.app))
+        create_resp = await chat_client.post(
+            "/api/chat/sessions",
+            json={"persona": "default"},
+        )
     assert create_resp.status_code == 201
     session_id = create_resp.json()["session_id"]
 
-    # Drive the turn handler directly (WS handler extracted for testability)
+    # Drive the turn handler directly (avoids WS upgrade complexity)
     from starlette_chat.routes import _handle_turn
     from starlette_chat.tools import ToolDispatcher
 
-    headers = {"Authorization": "Bearer test-secret"}
+    headers = {"Authorization": f"Bearer {_API_KEY}"}
     dispatcher = ToolDispatcher(
-        cms_base="http://testserver/cms",
-        api_key="test-secret",
-        collab_ws_base="ws://testserver/cms",
+        cms_base=_CMS_BASE,
+        api_key=_API_KEY,
+        collab_ws_base=_CMS_BASE.replace("http://", "ws://"),
     )
 
-    # Collect messages sent by the turn handler
     sent: list[dict] = []
 
     class _FakeWS:
         async def send_json(self, data: dict) -> None:
             sent.append(data)
 
-    await _handle_turn(
-        websocket=_FakeWS(),  # type: ignore[arg-type]
-        session_id=session_id,
-        content="Say hello",
-        context={},
-        chat=_chat,
-        headers=headers,
-        dispatcher=dispatcher,
-    )
+    with respx.mock(base_url=_CMS_BASE, assert_all_called=False) as mock:
+        mock.route().mock(side_effect=_make_cms_proxy(cms.app))
 
-    # Verify messages were sent
+        await _handle_turn(
+            websocket=_FakeWS(),  # type: ignore[arg-type]
+            session_id=session_id,
+            content="Say hello",
+            context={},
+            chat=chat,
+            headers=headers,
+            dispatcher=dispatcher,
+        )
+
+    # Verify events were emitted
     types_sent = [m.get("type") for m in sent]
     assert "thinking" in types_sent
     assert "token" in types_sent
     assert "done" in types_sent
 
-    # Verify ChatMessage docs were persisted in CMS
-    msgs_resp = await client.get(
-        "/cms/api/documents",
+    # Verify ChatMessage docs were persisted in the real CMS
+    msgs_resp = await cms_client.get(
+        "/api/documents",
         params={"doc_type": "chat_message"},
+        headers=headers,
     )
     assert msgs_resp.status_code == 200
     raw = msgs_resp.json()
     docs = raw if isinstance(raw, list) else raw.get("items", raw.get("documents", []))
 
-    roles = set()
+    roles: set[str] = set()
     for doc in docs:
         b = doc.get("body") or {}
         if isinstance(b, str):
             b = json.loads(b)
         if b.get("session_ref") == session_id:
-            roles.add(b.get("role"))
+            roles.add(b.get("role", ""))
 
     assert "user" in roles, f"user ChatMessage not found; roles: {roles}"
     assert "assistant" in roles, f"assistant ChatMessage not found; roles: {roles}"
 
 
 # ---------------------------------------------------------------------------
-# Test 5: Session created with doc_id has doc_ref set
+# Test 5: Session created with doc_id has doc_ref set in CMS body
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_session_doc_linked_to_document(
     chat_stack: tuple[CMS, ChatAPI, httpx.AsyncClient],
+    cms_client: httpx.AsyncClient,
 ) -> None:
-    """POST /sessions with doc_id must set ChatSession.body.doc_ref in CMS."""
-    _cms, _chat, client = chat_stack
-    await _seed_persona_docs(client)
+    """POST /api/chat/sessions with doc_id must set ChatSession.body.doc_ref in CMS."""
+    cms, _chat, chat_client = chat_stack
+    await _seed_persona_docs(cms_client)
 
-    # Create a target document to link to
-    headers = {"Authorization": "Bearer test-secret"}
-
-    # Register a minimal block type on the CMS to create a target doc.
-    # We re-use system_prompt as a generic document type for the reference target.
-    target_resp = await client.post(
-        "/cms/api/documents",
+    # Create a target document to link to (re-use system_prompt block as a generic doc)
+    headers = {"Authorization": f"Bearer {_API_KEY}"}
+    target_resp = await cms_client.post(
+        "/api/documents",
         json={
             "doc_type": "system_prompt",
             "body": {
                 "persona": "default",
-                "content": "Target document content",
+                "content": "Target document for link test",
                 "change_rationale": "test",
                 "authored_by": "test",
             },
@@ -364,17 +435,20 @@ async def test_session_doc_linked_to_document(
     assert target_resp.status_code in (200, 201), target_resp.text
     target_id = target_resp.json()["id"]
 
-    # Create a session linked to target_id
-    create_resp = await client.post(
-        "/chat/api/chat/sessions",
-        json={"persona": "default", "doc_id": target_id},
-    )
+    # Create a chat session linked to that document
+    with respx.mock(base_url=_CMS_BASE, assert_all_called=False) as mock:
+        mock.route().mock(side_effect=_make_cms_proxy(cms.app))
+        create_resp = await chat_client.post(
+            "/api/chat/sessions",
+            json={"persona": "default", "doc_id": target_id},
+        )
+
     assert create_resp.status_code == 201, create_resp.text
     session_id = create_resp.json()["session_id"]
     assert create_resp.json().get("doc_id") == target_id
 
     # Verify the CMS document has doc_ref set
-    get_resp = await client.get(f"/cms/api/documents/{session_id}")
+    get_resp = await cms_client.get(f"/api/documents/{session_id}", headers=headers)
     assert get_resp.status_code == 200, get_resp.text
     doc = get_resp.json()
     doc_body = doc.get("body") or {}

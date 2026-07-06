@@ -29,7 +29,7 @@ class ChatSessionBlock:
     persona: str = SelectField(choices=_PERSONA_CHOICES)
     user_id: str = TextField(required=False)
     title: str = TextField(required=False)
-    doc_ref: str = DocumentRef(block_type="*", on_delete="nullify", required=False)
+    doc_ref: str = DocumentRef(block_type=None, on_delete="nullify", required=False)
     doc_version: int = NumberField(required=False)
     model_config_ref: str = DocumentRef(block_type="model_config", on_delete="nullify")
     prompt_ref: str = DocumentRef(block_type="system_prompt", on_delete="nullify")

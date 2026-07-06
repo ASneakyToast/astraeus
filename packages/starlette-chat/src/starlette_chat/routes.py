@@ -61,7 +61,7 @@ def make_routes(chat: ChatAPI) -> list:
             # --- Find ModelConfig for this persona ---
             mc_resp = await client.get(
                 f"{chat._cms_base}/api/documents",
-                params={"doc_type": "model_config", "published": "true"},
+                params={"type": "model_config", "published": "true"},
                 headers=headers,
             )
             model_config_doc_id: str | None = None
@@ -89,7 +89,7 @@ def make_routes(chat: ChatAPI) -> list:
             # --- Find SystemPrompt for this persona ---
             sp_resp = await client.get(
                 f"{chat._cms_base}/api/documents",
-                params={"doc_type": "system_prompt", "published": "true"},
+                params={"type": "system_prompt", "published": "true"},
                 headers=headers,
             )
             prompt_doc_id: str | None = None
@@ -168,8 +168,8 @@ def make_routes(chat: ChatAPI) -> list:
             msgs_resp = await client.get(
                 f"{chat._cms_base}/api/documents",
                 params={
-                    "doc_type": "chat_message",
-                    "session_ref": session_id,
+                    "type": "chat_message",
+                    "filter[session_ref]": session_id,
                     "limit": "50",
                 },
                 headers=headers,
@@ -335,8 +335,8 @@ async def _handle_turn(
         msgs_resp = await client.get(
             f"{chat._cms_base}/api/documents",
             params={
-                "doc_type": "chat_message",
-                "session_ref": session_id,
+                "type": "chat_message",
+                "filter[session_ref]": session_id,
                 "limit": "50",
             },
             headers=headers,
