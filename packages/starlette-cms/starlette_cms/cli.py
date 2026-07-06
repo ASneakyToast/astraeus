@@ -92,6 +92,65 @@ def main():
 
 
 # ---------------------------------------------------------------------------
+# scheduler group
+# ---------------------------------------------------------------------------
+
+
+@main.group()
+def scheduler():
+    """Scheduler commands — run scheduled changeset publishes."""
+
+
+@scheduler.command("run")
+@click.option(
+    "--database-url",
+    "database_url",
+    required=True,
+    envvar="CMS_DATABASE_URL",
+    show_default="CMS_DATABASE_URL env var",
+    help="Database URL, e.g. sqlite:///content.db",
+)
+def scheduler_run(database_url: str) -> None:
+    """
+    Publish any changesets whose scheduled publish time has passed.
+
+    Designed to be called from cron. Exits 0 on success, 1 on error.
+
+    Examples::
+
+        # Run against a local SQLite DB
+        cms scheduler run --database-url sqlite:///content.db
+
+        # Run via environment variable
+        CMS_DATABASE_URL=sqlite:///content.db cms scheduler run
+    """
+    published_ids = asyncio.run(_run_scheduler(database_url))
+    count = len(published_ids)
+    if count == 0:
+        click.echo("No changesets due for publishing.")
+    else:
+        click.echo(click.style(f"Published {count} changeset(s):", fg="green"))
+        for cs_id in published_ids:
+            click.echo(f"  - {cs_id}")
+
+
+async def _run_scheduler(database_url: str) -> list[str]:
+    """Open the DB and run check_scheduled_changesets."""
+    from starlette_cms.app import CMS
+    from starlette_cms.db import CMSDatabase
+    from starlette_cms.scheduler import check_scheduled_changesets
+
+    # Build a minimal CMS instance — only the database_url matters for the scheduler
+    cms = CMS(database_url=database_url, auth="none")
+    db = CMSDatabase(database_url=database_url)
+    await db.init()
+    try:
+        return await check_scheduled_changesets(cms)
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
 # mcp group
 # ---------------------------------------------------------------------------
 

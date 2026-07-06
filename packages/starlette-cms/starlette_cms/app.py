@@ -227,6 +227,7 @@ class CMS:
 
     def _build_app(self) -> Starlette:
         # Import here to avoid circular imports at module level
+        from starlette_cms.api.changesets import make_changeset_routes
         from starlette_cms.api.documents import make_document_routes
         from starlette_cms.api.schema import make_schema_routes
         from starlette_cms.api.webhooks import make_webhook_routes
@@ -235,6 +236,7 @@ class CMS:
             *make_document_routes(self),
             *make_schema_routes(self),
             *make_webhook_routes(self),
+            *make_changeset_routes(self),
             *[
                 Route(r["path"], endpoint=r["endpoint"], methods=r["methods"], name=r["name"])
                 for r in self._extension_routes

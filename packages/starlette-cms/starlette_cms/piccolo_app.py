@@ -14,10 +14,10 @@ import pathlib
 
 from piccolo.conf.apps import AppConfig
 
-from starlette_cms.tables import CMSDocument, CMSMeta, CMSWebhook
+from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSMeta, CMSWebhook
 
 APP_CONFIG = AppConfig(
     app_name="starlette_cms",
     migrations_folder_path=pathlib.Path(__file__).parent / "piccolo_migrations",
-    table_classes=[CMSDocument, CMSMeta, CMSWebhook],
+    table_classes=[CMSDocument, CMSMeta, CMSWebhook, CMSChangeset, CMSChangesetDocument],
 )

@@ -30,11 +30,13 @@ def _temp_engine() -> tuple[SQLiteEngine, str]:
 
 async def _set_engine(engine: SQLiteEngine) -> None:
     """Assign engine to all CMS table classes and the Migration tracker."""
-    from starlette_cms.tables import CMSDocument, CMSMeta, CMSWebhook
+    from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSMeta, CMSWebhook
 
     CMSDocument._meta.db = engine
     CMSMeta._meta.db = engine
     CMSWebhook._meta.db = engine
+    CMSChangeset._meta.db = engine
+    CMSChangesetDocument._meta.db = engine
     Migration._meta.db = engine
 
 
@@ -63,6 +65,15 @@ def _piccolo_conf_ctx(engine: SQLiteEngine):
             sys.modules.pop("piccolo_conf", None)
         else:
             sys.modules["piccolo_conf"] = old
+
+
+def _migration_file_count() -> int:
+    """Count migration .py files (excludes __init__.py)."""
+    from starlette_cms.piccolo_app import APP_CONFIG
+    return len([
+        p for p in APP_CONFIG.migrations_folder_path.iterdir()
+        if p.suffix == ".py" and p.stem != "__init__"
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -104,11 +115,11 @@ def test_initial_migration_module():
 
 async def test_forwards_fake_on_existing_db():
     """
-    Running forwards with fake=True on an existing DB records the migration rows
+    Running forwards with fake=True on an existing DB records all migration rows
     without re-creating the tables.
     """
     from starlette_cms.piccolo_app import APP_CONFIG
-    from starlette_cms.tables import CMSDocument, CMSMeta, CMSWebhook
+    from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSMeta, CMSWebhook
 
     engine, db_path = _temp_engine()
     try:
@@ -118,6 +129,8 @@ async def test_forwards_fake_on_existing_db():
         await CMSDocument.create_table(if_not_exists=True)
         await CMSMeta.create_table(if_not_exists=True)
         await CMSWebhook.create_table(if_not_exists=True)
+        await CMSChangeset.create_table(if_not_exists=True)
+        await CMSChangesetDocument.create_table(if_not_exists=True)
         await Migration.create_table(if_not_exists=True)
 
         # No migration rows yet
@@ -130,11 +143,9 @@ async def test_forwards_fake_on_existing_db():
 
         # All migration rows should now be recorded (one per migration file)
         rows = await Migration.select().run()
-        assert len(rows) >= 1
+        assert len(rows) == _migration_file_count()
         names = [r["name"] for r in rows]
-        assert any("2026-06-28" in n for n in names), (
-            "Initial migration not recorded"
-        )
+        assert any("2026-06-28" in n for n in names), "Initial migration not recorded"
         assert all(r["app_name"] == "starlette_cms" for r in rows)
     finally:
         os.unlink(db_path)
@@ -147,11 +158,10 @@ async def test_forwards_fake_on_existing_db():
 
 async def test_forwards_on_fresh_db():
     """
-    Running forwards on an empty DB creates all tables and records the
-    migration row.
+    Running forwards on an empty DB creates all tables and records all
+    migration rows.
     """
     from starlette_cms.piccolo_app import APP_CONFIG
-    from starlette_cms.tables import CMSDocument, CMSMeta, CMSWebhook
 
     engine, db_path = _temp_engine()
     try:
@@ -165,21 +175,16 @@ async def test_forwards_on_fresh_db():
 
         # All CMS tables should now exist — verify by counting rows
         # (will raise if the table doesn't exist)
-        from starlette_cms.tables import CMSDocument, CMSMeta, CMSWebhook
+        from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSMeta, CMSWebhook
 
         assert await CMSDocument.count().run() == 0
         assert await CMSMeta.count().run() == 0
         assert await CMSWebhook.count().run() == 0
+        assert await CMSChangeset.count().run() == 0
+        assert await CMSChangesetDocument.count().run() == 0
 
         # One migration row per migration file
-        expected_count = len(
-            [
-                p
-                for p in APP_CONFIG.migrations_folder_path.iterdir()
-                if p.suffix == ".py" and p.stem != "__init__"
-            ]
-        )
-        assert await Migration.count().run() == expected_count
+        assert await Migration.count().run() == _migration_file_count()
     finally:
         os.unlink(db_path)
 
@@ -208,13 +213,7 @@ async def test_forwards_idempotent():
             runner2 = ForwardsMigrationManager(app_name="starlette_cms", fake=False)
             await runner2.run_migrations(APP_CONFIG)
 
-        expected_count = len(
-            [
-                p
-                for p in APP_CONFIG.migrations_folder_path.iterdir()
-                if p.suffix == ".py" and p.stem != "__init__"
-            ]
-        )
-        assert await Migration.count().run() == expected_count
+        # One migration row per migration file — idempotent
+        assert await Migration.count().run() == _migration_file_count()
     finally:
         os.unlink(db_path)

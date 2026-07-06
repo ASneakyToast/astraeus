@@ -61,3 +61,25 @@ class CMSWebhook(Table):
     events = JSON()  # ["document.published", ...]
     created_at = Timestamptz()
     active = Boolean(default=True)
+
+
+class CMSChangeset(Table):
+    """A named group of documents for atomic publish."""
+
+    id = Varchar(length=36, primary_key=True)
+    title = Varchar(length=500, default="")
+    status = Varchar(length=16, default="open")  # "open" | "published" | "scheduled"
+    created_at = Timestamptz()
+    publish_at = Timestamptz(null=True, required=False)
+    # publish_at — NULL = not scheduled
+    published_at = Timestamptz(null=True, required=False)
+    # published_at — NULL = not yet published
+
+
+class CMSChangesetDocument(Table):
+    """Join table: which documents belong to which changeset."""
+
+    changeset_id = Varchar(length=36)
+    document_id = Varchar(length=36)
+    added_at = Timestamptz()
+    # composite primary key enforced at application layer (409 on duplicate)
