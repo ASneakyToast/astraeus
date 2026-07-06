@@ -12,6 +12,13 @@
 const scriptEl = document.currentScript
 const scriptUrl = scriptEl ? new URL(scriptEl.src) : null
 const cmsBase = scriptUrl ? scriptUrl.origin : null
+const mediaBase = scriptEl?.dataset?.cmsMediaBase || null
+const reloadUrl = scriptEl?.dataset?.reloadUrl || null
+
+// Expose config globally so components/image-picker.js and edit-mode.js can read it
+if (cmsBase) {
+  window.__EDITOR_CONFIG__ = { cmsBase, mediaBase }
+}
 
 if (cmsBase) {
   ;(async () => {
@@ -32,7 +39,7 @@ if (cmsBase) {
 
     // Boot the toolbar
     const { EditToolbar } = await import('./toolbar.js')
-    const toolbar = new EditToolbar({ cmsBase, cmsElements })
+    const toolbar = new EditToolbar({ cmsBase, cmsElements, reloadUrl })
     toolbar.mount()
 
     // Boot the changeset panel alongside the toolbar
