@@ -11,7 +11,7 @@ Usage::
 
 from __future__ import annotations
 
-from piccolo.columns import JSON, Boolean, Text, Timestamptz, Varchar
+from piccolo.columns import JSON, Boolean, Integer, Text, Timestamptz, Varchar
 from piccolo.table import Table
 
 
@@ -38,6 +38,12 @@ class CMSDocument(Table):
     # NULL for human-authored documents.  Unique per (doc_type, import_ref) pair
     # enforced at the application layer (409 on collision) so that NULL values
     # (authored documents) are permitted without compound-key complexity.
+    draft_body = JSON(null=True, required=False, default=None)
+    # draft_body — working draft (unpublished edits). NULL means no unpublished
+    # edits exist; non-NULL means the document has unsaved changes not yet in body.
+    draft_version = Integer(default=0)
+    # draft_version — incremented on every PATCH that writes to draft_body.
+    # Reset to 0 on publish or discard-draft.
 
 
 class CMSMeta(Table):

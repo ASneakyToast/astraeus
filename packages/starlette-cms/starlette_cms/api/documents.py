@@ -67,22 +67,43 @@ def _matches_filters(doc: dict, filters: dict[str, Any]) -> bool:
     return True
 
 
-def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
-    """Convert a raw Piccolo row dict to a JSON-serialisable document dict."""
-    body = row.get("body")
-    if isinstance(body, str):
+def _row_to_dict(row: dict[str, Any], *, use_draft: bool = False) -> dict[str, Any]:
+    """Convert a raw Piccolo row dict to a JSON-serialisable document dict.
+
+    When ``use_draft=True`` and a draft exists, the ``body`` field in the
+    returned dict reflects ``draft_body`` instead of the published ``body``.
+    ``has_draft`` and ``draft_version`` are always included.
+    """
+    raw_body = row.get("body")
+    if isinstance(raw_body, str):
         try:
-            body = json.loads(body)
+            raw_body = json.loads(raw_body)
         except (json.JSONDecodeError, TypeError):
             logger.warning(
                 "starlette_cms.documents.body_parse_failed_in_row",
-                body_type=type(body).__name__,
+                body_type=type(raw_body).__name__,
             )
     # Strip null values from body on read — per ADR 016, absence is the
     # canonical representation of "not set"; null is not a valid stored value.
     # This sanitises legacy documents written before exclude_none=True was applied.
-    if isinstance(body, dict):
-        body = {k: v for k, v in body.items() if v is not None}
+    if isinstance(raw_body, dict):
+        raw_body = {k: v for k, v in raw_body.items() if v is not None}
+
+    raw_draft_body = row.get("draft_body")
+    if isinstance(raw_draft_body, str):
+        try:
+            raw_draft_body = json.loads(raw_draft_body)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(
+                "starlette_cms.documents.draft_body_parse_failed_in_row",
+                body_type=type(raw_draft_body).__name__,
+            )
+            raw_draft_body = None
+
+    # Treat None and {} as "no draft" — {} can appear on legacy rows that
+    # predate the explicit default=None fix, or from buggy clients.
+    has_draft = bool(raw_draft_body)
+    effective_body = raw_draft_body if (use_draft and has_draft) else raw_body
 
     meta = row.get("meta", "{}")
     if isinstance(meta, str):
@@ -92,17 +113,26 @@ def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
             logger.warning("starlette_cms.documents.meta_parse_failed_in_row")
             meta = {}
 
-    # Convert datetime objects to ISO strings
+    # Convert datetime objects to ISO strings; emit has_draft + draft_version;
+    # skip raw draft_body from the output (it's consumed above).
     result: dict[str, Any] = {}
     for key, value in row.items():
-        if key in ("body",):
-            result[key] = body
+        if key == "body":
+            result[key] = effective_body
+        elif key == "draft_body":
+            # Omit from output — callers see has_draft instead.
+            continue
         elif key == "meta":
             result[key] = meta
         elif isinstance(value, datetime):
             result[key] = value.isoformat()
         else:
             result[key] = value
+
+    result["has_draft"] = has_draft
+    # draft_version may not exist in older rows (before migration); default to 0.
+    if "draft_version" not in result:
+        result["draft_version"] = 0
     return result
 
 
@@ -278,6 +308,7 @@ def make_document_routes(cms: CMS) -> list[Route]:
         slug = params.get("slug")
         import_ref = params.get("import_ref")
         published_param = params.get("published")
+        has_draft_param = params.get("has_draft")
         resolve_refs_param = params.get("resolve_refs")
         try:
             limit = int(params.get("limit", 20))
@@ -320,6 +351,8 @@ def make_document_routes(cms: CMS) -> list[Route]:
         if published_param is not None:
             published = published_param.lower() in ("true", "1", "yes")
             query = query.where(CMSDocument.published == published)
+        if has_draft_param is not None and has_draft_param.lower() in ("true", "1", "yes"):
+            query = query.where(CMSDocument.draft_body.is_not_null())
 
         query = query.order_by(order_col, ascending=order_asc)
 
@@ -345,6 +378,12 @@ def make_document_routes(cms: CMS) -> list[Route]:
                         count_query = count_query.where(CMSDocument.import_ref == import_ref)
                     if published_param is not None:
                         count_query = count_query.where(CMSDocument.published == published)  # type: ignore[possibly-undefined]
+                    if has_draft_param is not None and has_draft_param.lower() in (
+                        "true",
+                        "1",
+                        "yes",
+                    ):
+                        count_query = count_query.where(CMSDocument.draft_body.is_not_null())
 
                     total = await count_query.run()
                     rows = await query.limit(limit).offset(offset).run()
@@ -515,7 +554,9 @@ def make_document_routes(cms: CMS) -> list[Route]:
         rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
         if not rows:
             return JSONResponse({"error": "Document not found"}, status_code=404)
-        return JSONResponse(_row_to_dict(rows[0]))
+
+        use_draft = request.query_params.get("draft", "").lower() in ("true", "1", "yes")
+        return JSONResponse(_row_to_dict(rows[0], use_draft=use_draft))
 
     async def patch_document(request: Request) -> JSONResponse:
         if (err := await require_auth(request, cms)) is not None:
@@ -552,18 +593,36 @@ def make_document_routes(cms: CMS) -> list[Route]:
         if doc_model is None and doc_type in cms.registry:
             doc_model = cms.registry.get(doc_type)
 
-        # Merge body
-        existing_body = row.get("body", "{}")
-        if isinstance(existing_body, str):
+        # Determine the base body for the draft merge.
+        # If draft_body already exists, merge into it; otherwise initialise from
+        # the published body (so the draft starts as a full copy of the live content).
+        existing_draft_body = row.get("draft_body")
+        if isinstance(existing_draft_body, str):
             try:
-                existing_body = json.loads(existing_body)
+                existing_draft_body = json.loads(existing_draft_body)
             except Exception:
                 logger.warning(
-                    "starlette_cms.documents.body_parse_failed",
+                    "starlette_cms.documents.draft_body_parse_failed",
                     doc_id=doc_id,
                     operation="patch",
                 )
-                existing_body = {}
+                existing_draft_body = None
+
+        if existing_draft_body is None:
+            # No prior draft — seed draft from the published body.
+            base_body = row.get("body", "{}")
+            if isinstance(base_body, str):
+                try:
+                    base_body = json.loads(base_body)
+                except Exception:
+                    logger.warning(
+                        "starlette_cms.documents.body_parse_failed",
+                        doc_id=doc_id,
+                        operation="patch",
+                    )
+                    base_body = {}
+        else:
+            base_body = existing_draft_body
 
         new_body_data = patch_data.get("body", {})
 
@@ -572,7 +631,7 @@ def make_document_routes(cms: CMS) -> list[Route]:
             for field_name in getattr(doc_model, "__immutable_fields__", []):
                 new_body_data.pop(field_name, None)
 
-        merged_body = {**existing_body, **new_body_data}
+        merged_body = {**base_body, **new_body_data}
 
         # Validate merged body if we have a model
         if doc_model is not None:
@@ -603,8 +662,10 @@ def make_document_routes(cms: CMS) -> list[Route]:
             if (err := await _validate_refs(cms, doc_model, new_body_data)) is not None:
                 return err
 
+        current_draft_version = row.get("draft_version") or 0
         update_kwargs: dict[Column | str, Any] = {
-            CMSDocument.body: json.dumps(merged_body),
+            CMSDocument.draft_body: json.dumps(merged_body),
+            CMSDocument.draft_version: current_draft_version + 1,
             CMSDocument.updated_at: datetime.now(UTC),
         }
 
@@ -645,7 +706,9 @@ def make_document_routes(cms: CMS) -> list[Route]:
             fire_event(cms, "document.updated", doc_id, doc_type, updated_row.get("slug", ""))
         )
 
-        return JSONResponse(_row_to_dict(updated_row))
+        # Return the draft body in the PATCH response so callers see what they
+        # just saved, while GET (no ?draft=true) continues to return published body.
+        return JSONResponse(_row_to_dict(updated_row, use_draft=True))
 
     async def delete_document(request: Request) -> Response:
         if (err := await require_auth(request, cms)) is not None:
@@ -717,6 +780,25 @@ def make_document_routes(cms: CMS) -> list[Route]:
                 doc_id=doc_id,
             )
 
+        # If a draft exists, promote it to body before publishing.
+        draft_body_raw = row.get("draft_body")
+        if isinstance(draft_body_raw, str):
+            try:
+                draft_body_raw = json.loads(draft_body_raw)
+            except Exception:
+                logger.warning(
+                    "starlette_cms.documents.draft_body_parse_failed",
+                    doc_id=doc_id,
+                    operation="publish",
+                )
+                draft_body_raw = None
+
+        publish_body_update: dict[Column | str, Any] = {}
+        if draft_body_raw is not None:
+            publish_body_update[CMSDocument.body] = json.dumps(draft_body_raw)
+        publish_body_update[CMSDocument.draft_body] = None
+        publish_body_update[CMSDocument.draft_version] = 0
+
         with tracer.start_as_current_span("cms.documents.publish") as span:
             span.set_attribute("doc_id", doc_id)
             try:
@@ -736,6 +818,7 @@ def make_document_routes(cms: CMS) -> list[Route]:
                                 CMSDocument.published_at: now,
                                 CMSDocument.singleton_status: "active",
                                 CMSDocument.updated_at: now,
+                                **publish_body_update,
                             }
                         )
                         .where(CMSDocument.id == doc_id)
@@ -748,6 +831,7 @@ def make_document_routes(cms: CMS) -> list[Route]:
                                 CMSDocument.published: True,
                                 CMSDocument.published_at: now,
                                 CMSDocument.updated_at: now,
+                                **publish_body_update,
                             }
                         )
                         .where(CMSDocument.id == doc_id)
@@ -814,6 +898,36 @@ def make_document_routes(cms: CMS) -> list[Route]:
         )
 
         return JSONResponse(_row_to_dict(updated_row))
+
+    async def discard_draft(request: Request) -> JSONResponse:
+        if (err := await require_auth(request, cms)) is not None:
+            return err
+
+        doc_id = request.path_params["id"]
+        rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
+        if not rows:
+            return JSONResponse({"error": "Document not found"}, status_code=404)
+
+        with tracer.start_as_current_span("cms.documents.discard_draft") as span:
+            span.set_attribute("doc_id", doc_id)
+            try:
+                await (
+                    CMSDocument.update(
+                        {
+                            CMSDocument.draft_body: None,
+                            CMSDocument.draft_version: 0,
+                            CMSDocument.updated_at: datetime.now(UTC),
+                        }
+                    )
+                    .where(CMSDocument.id == doc_id)
+                    .run()
+                )
+            except Exception as exc:
+                span.set_status(StatusCode.ERROR, str(exc))
+                raise
+
+        updated_rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
+        return JSONResponse(_row_to_dict(updated_rows[0]))
 
     async def get_singleton(request: Request) -> JSONResponse:
         """Return the currently active singleton for a block type, or 404."""
@@ -965,4 +1079,5 @@ def make_document_routes(cms: CMS) -> list[Route]:
         Route("/api/documents/{id}", endpoint=delete_document, methods=["DELETE"]),
         Route("/api/documents/{id}/publish", endpoint=publish_document, methods=["POST"]),
         Route("/api/documents/{id}/unpublish", endpoint=unpublish_document, methods=["POST"]),
+        Route("/api/documents/{id}/discard-draft", endpoint=discard_draft, methods=["POST"]),
     ]

@@ -104,7 +104,7 @@ def test_initial_migration_module():
 
 async def test_forwards_fake_on_existing_db():
     """
-    Running forwards with fake=True on an existing DB records the migration row
+    Running forwards with fake=True on an existing DB records the migration rows
     without re-creating the tables.
     """
     from starlette_cms.piccolo_app import APP_CONFIG
@@ -128,11 +128,14 @@ async def test_forwards_fake_on_existing_db():
         runner = ForwardsMigrationManager(app_name="starlette_cms", fake=True)
         await runner.run_migrations(APP_CONFIG)
 
-        # Migration row should now be recorded
-        assert await Migration.count().run() == 1
-        row = (await Migration.select().run())[0]
-        assert row["app_name"] == "starlette_cms"
-        assert "2026-06-28" in row["name"]
+        # All migration rows should now be recorded (one per migration file)
+        rows = await Migration.select().run()
+        assert len(rows) >= 1
+        names = [r["name"] for r in rows]
+        assert any("2026-06-28" in n for n in names), (
+            "Initial migration not recorded"
+        )
+        assert all(r["app_name"] == "starlette_cms" for r in rows)
     finally:
         os.unlink(db_path)
 
@@ -168,8 +171,15 @@ async def test_forwards_on_fresh_db():
         assert await CMSMeta.count().run() == 0
         assert await CMSWebhook.count().run() == 0
 
-        # Migration row recorded
-        assert await Migration.count().run() == 1
+        # One migration row per migration file
+        expected_count = len(
+            [
+                p
+                for p in APP_CONFIG.migrations_folder_path.iterdir()
+                if p.suffix == ".py" and p.stem != "__init__"
+            ]
+        )
+        assert await Migration.count().run() == expected_count
     finally:
         os.unlink(db_path)
 
@@ -181,7 +191,7 @@ async def test_forwards_on_fresh_db():
 
 async def test_forwards_idempotent():
     """
-    Running forwards twice produces exactly one migration row and no error.
+    Running forwards twice produces one migration row per file and no error.
     """
     from starlette_cms.piccolo_app import APP_CONFIG
 
@@ -198,6 +208,13 @@ async def test_forwards_idempotent():
             runner2 = ForwardsMigrationManager(app_name="starlette_cms", fake=False)
             await runner2.run_migrations(APP_CONFIG)
 
-        assert await Migration.count().run() == 1
+        expected_count = len(
+            [
+                p
+                for p in APP_CONFIG.migrations_folder_path.iterdir()
+                if p.suffix == ".py" and p.stem != "__init__"
+            ]
+        )
+        assert await Migration.count().run() == expected_count
     finally:
         os.unlink(db_path)
