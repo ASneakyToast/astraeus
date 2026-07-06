@@ -15,7 +15,7 @@
  *   Server → client reject: { type: 'reject', version: <int> }
  *   Keep-alive:             { type: 'ping' } → { type: 'pong' }
  */
-import { collab, sendableSteps, receiveTransaction } from 'prosemirror-collab'
+import { collab, sendableSteps, receiveTransaction, getVersion } from 'prosemirror-collab'
 import { Step } from 'prosemirror-transform'
 
 export { collab }
@@ -33,7 +33,30 @@ export class CollabConnection {
     this._reconnectDelay = 1000   // ms, doubles on each failure (max 30000)
     this._destroyed = false
     this._pingInterval = null
+    this._peers = new Map()       // server client_id → peer info dict
+    this._toolbar = null          // set via setToolbar() for peer-presence updates
     this._connect()
+  }
+
+  /** Wire an EditToolbar for peer-presence display callbacks. */
+  setToolbar(toolbar) {
+    this._toolbar = toolbar
+  }
+
+  /** Current ProseMirror document as JSON, or null if no view. */
+  currentDoc() {
+    return this.view?.state.doc.toJSON() ?? null
+  }
+
+  /** Current collab version number from the local ProseMirror state. */
+  currentVersion() {
+    return getVersion(this.view?.state) ?? 0
+  }
+
+  /** Current selection range {from, to}, or null if no view. */
+  currentSelection() {
+    const sel = this.view?.state.selection
+    return sel ? { from: sel.from, to: sel.to } : null
   }
 
   _wsUrl() {
@@ -86,6 +109,30 @@ export class CollabConnection {
       // Server sends current state — handles reconnects where we may have
       // missed steps. Update local version to match server.
       this.version = msg.version
+      // Populate peer map from the server's current peer list
+      this._peers = new Map()
+      for (const p of (msg.peers ?? [])) {
+        this._peers.set(p.client_id, p)
+      }
+      this._toolbar?.updatePeers(this._peers)
+    }
+
+    else if (msg.type === 'peer_joined') {
+      this._peers.set(msg.peer.client_id, msg.peer)
+      this._toolbar?.updatePeers(this._peers)
+    }
+
+    else if (msg.type === 'peer_left') {
+      this._peers.delete(msg.client_id)
+      this._toolbar?.updatePeers(this._peers)
+    }
+
+    else if (msg.type === 'editing') {
+      this._toolbar?.setAiEditing(msg.client_id, true)
+    }
+
+    else if (msg.type === 'editing_done') {
+      this._toolbar?.setAiEditing(msg.client_id, false)
     }
 
     else if (msg.type === 'steps') {

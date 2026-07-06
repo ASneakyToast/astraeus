@@ -185,4 +185,67 @@ export class EditToolbar {
     const count = this._unread || 0
     this._chatBtn.textContent = count > 0 ? `💬 Chat (${count})` : '💬 Chat'
   }
+
+  // ── Peer presence ──────────────────────────────────────────────────────────
+
+  /**
+   * Rebuild the peer-presence strip from the current peers Map.
+   * Inserts/updates a #astraeus-peer-presence container in the toolbar.
+   *
+   * @param {Map<string, {client_id: string, display: string, type?: string, client_type?: string}>} peersMap
+   */
+  updatePeers(peersMap) {
+    // Inject CSS once
+    if (!document.getElementById('astraeus-peer-styles')) {
+      const style = document.createElement('style')
+      style.id = 'astraeus-peer-styles'
+      style.textContent = `
+        .peer-indicator { font-size: 11px; margin: 0 3px; opacity: 0.85; }
+        .peer-indicator.human { color: #a6e3a1; }
+        .peer-indicator.ai { color: #cba6f7; }
+        .peer-indicator.ai.pulsing { animation: ai-pulse 0.8s ease-in-out infinite; }
+        @keyframes ai-pulse { 0%,100% { opacity: 0.85; } 50% { opacity: 0.3; } }
+      `
+      document.head.appendChild(style)
+    }
+
+    if (!this.el) return
+
+    // Find or create the peer-presence container
+    let peerSection = this.el.querySelector('#astraeus-peer-presence')
+    if (!peerSection) {
+      peerSection = document.createElement('div')
+      peerSection.id = 'astraeus-peer-presence'
+      peerSection.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:2px;'
+      this.el.appendChild(peerSection)
+    }
+
+    peerSection.innerHTML = ''
+    for (const [clientId, peer] of peersMap) {
+      const peerType = peer.type ?? peer.client_type ?? 'human'
+      const span = document.createElement('span')
+      span.className = `peer-indicator ${peerType}`
+      span.dataset.clientId = clientId
+      span.textContent = peerType === 'ai' ? `◆ ${peer.display}` : `● ${peer.display}`
+      peerSection.appendChild(span)
+    }
+  }
+
+  /**
+   * Toggle the "pulsing" animation on an AI peer's indicator span.
+   *
+   * @param {string} clientId  The server-assigned client_id of the AI peer.
+   * @param {boolean} isEditing  True to start pulsing; false to stop.
+   */
+  setAiEditing(clientId, isEditing) {
+    const section = this.el?.querySelector('#astraeus-peer-presence')
+    if (!section) return
+    const span = section.querySelector(`[data-client-id="${clientId}"]`)
+    if (!span) return
+    if (isEditing) {
+      span.classList.add('pulsing')
+    } else {
+      span.classList.remove('pulsing')
+    }
+  }
 }

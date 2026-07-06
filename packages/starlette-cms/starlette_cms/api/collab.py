@@ -9,7 +9,9 @@ Routes added by ``make_collab_routes(cms)``:
 
 from __future__ import annotations
 
+import asyncio
 import json
+import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -72,36 +74,125 @@ def make_collab_routes(cms: CMS) -> list:
 
         await websocket.accept()
 
+        # Server-assigned UUID for this connection (used for peer presence).
+        # Distinct from the client-generated clientID in step messages.
+        client_id = str(uuid.uuid4())
+        manager = cms.collab_manager
+
         # Load or create the authority for this document
         try:
-            authority = await cms.collab_manager.get_or_create_authority(document_id)
+            authority = await manager.get_or_create_authority(document_id)
         except KeyError:
             await websocket.send_json({"type": "error", "message": "Document not found"})
             await websocket.close(code=4404)
             return
 
-        # Register connection and send initial state
-        await cms.collab_manager.add_connection(document_id, websocket)
+        # Register connection and bind the server-assigned client_id
+        await manager.add_connection(document_id, websocket)
+        manager._bind_client(websocket, client_id)
+
+        # Send initial state including current peer list
+        peers = manager.get_peers_for_doc(document_id)
         await websocket.send_json(
             {
                 "type": "init",
                 "doc": authority._doc,
                 "version": authority._version,
+                "peers": peers,
             }
         )
 
-        # Message loop
+        # Single try/except/finally covers both the presence phase and the
+        # message loop so that WebSocketDisconnect at any point is handled
+        # cleanly and the finally block always runs.
         try:
+            # ── Presence phase ─────────────────────────────────────────────────
+            # Wait up to 2 s for the client to send a 'presence' message
+            # identifying itself.  Non-presence messages are kept so the main
+            # loop can process them; a timeout results in a silent registration.
+            display: str = client_id
+            peer_type: str = "human"
+            first_msg: dict | None = None
+            send_peer_joined = False
+
+            try:
+                raw = await asyncio.wait_for(websocket.receive_json(), timeout=2.0)
+                if raw.get("type") == "presence":
+                    display = raw.get("display", client_id)
+                    peer_type = raw.get("client_type", "human")
+                    send_peer_joined = True
+                else:
+                    # Non-presence message arrived — keep it for the main loop
+                    first_msg = raw
+            except asyncio.TimeoutError:
+                pass  # No message within 2 s — register silently as human
+
+            manager.register_peer(client_id, display, peer_type)
+            if send_peer_joined:
+                await manager.broadcast_peer_event(
+                    document_id,
+                    {
+                        "type": "peer_joined",
+                        "peer": {
+                            "client_id": client_id,
+                            "type": peer_type,
+                            "display": display,
+                        },
+                    },
+                    exclude=websocket,
+                )
+
+            # ── Message loop ───────────────────────────────────────────────────
             while True:
-                data = await websocket.receive_json()
+                # Drain any buffered message from the presence phase first
+                if first_msg is not None:
+                    data = first_msg
+                    first_msg = None
+                else:
+                    data = await websocket.receive_json()
+
                 msg_type = data.get("type")
 
-                if msg_type == "ping":
+                # ── Peer presence / activity ───────────────────────────────────
+                if msg_type == "presence":
+                    p_display = data.get("display", client_id)
+                    p_type = data.get("client_type", "human")
+                    manager.register_peer(client_id, p_display, p_type)
+                    await manager.broadcast_peer_event(
+                        document_id,
+                        {
+                            "type": "peer_joined",
+                            "peer": {
+                                "client_id": client_id,
+                                "type": p_type,
+                                "display": p_display,
+                            },
+                        },
+                        exclude=websocket,
+                    )
+
+                elif msg_type == "editing":
+                    await manager.broadcast_peer_event(
+                        document_id,
+                        {"type": "editing", "client_id": client_id, "doc_id": document_id},
+                        exclude=websocket,
+                    )
+
+                elif msg_type == "editing_done":
+                    await manager.broadcast_peer_event(
+                        document_id,
+                        {"type": "editing_done", "client_id": client_id},
+                        exclude=websocket,
+                    )
+
+                # ── Keep-alive ─────────────────────────────────────────────────
+                elif msg_type == "ping":
                     await websocket.send_json({"type": "pong"})
 
+                # ── ProseMirror steps ──────────────────────────────────────────
                 elif msg_type == "steps":
                     steps = data.get("steps", [])
-                    client_id = data.get("clientID", "unknown")
+                    step_client_id = data.get("clientID", "unknown")
                     client_version = data.get("version", -1)
                     # Client sends its current doc state after applying steps locally
                     updated_doc = data.get("doc")
@@ -110,7 +201,7 @@ def make_collab_routes(cms: CMS) -> list:
                         base_version = authority._version
                         result = authority.apply_steps(
                             steps,
-                            client_id,
+                            step_client_id,
                             client_version,
                             updated_doc if updated_doc is not None else authority._doc,
                         )
@@ -119,13 +210,13 @@ def make_collab_routes(cms: CMS) -> list:
                         # Persist asynchronously (fire-and-forget is fine here;
                         # in-memory state is already updated)
                         try:
-                            await authority._persist_steps(steps, client_id, base_version)
+                            await authority._persist_steps(steps, step_client_id, base_version)
                         except Exception:
                             pass  # DB persistence failure should not drop the connection
 
                         # Broadcast to ALL connections (including sender — sender
                         # uses this as its confirmation receipt)
-                        await cms.collab_manager.broadcast(
+                        await manager.broadcast(
                             document_id,
                             {
                                 "type": "steps",
@@ -145,8 +236,14 @@ def make_collab_routes(cms: CMS) -> list:
         except Exception:
             pass  # disconnect / receive error
         finally:
-            await cms.collab_manager.remove_connection(document_id, websocket)
-            await cms.collab_manager.gc_if_idle(document_id)
+            manager.unregister_peer(client_id)
+            await manager.remove_connection(document_id, websocket)
+            # Broadcast peer_left to remaining connections after removal
+            await manager.broadcast_peer_event(
+                document_id,
+                {"type": "peer_left", "client_id": client_id},
+            )
+            await manager.gc_if_idle(document_id)
 
     # ------------------------------------------------------------------
     # History endpoint — GET /api/documents/{document_id}/history

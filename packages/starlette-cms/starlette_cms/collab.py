@@ -19,7 +19,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from starlette.websockets import WebSocket
@@ -139,6 +139,8 @@ class CollabManager:
     def __init__(self) -> None:
         self._authorities: dict[str, CollabAuthority] = {}
         self._connections: dict[str, set[WebSocket]] = {}
+        self._peer_info: dict[str, dict] = {}
+        self._ws_to_client_id: dict = {}  # WebSocket → server-assigned client_id
         self._manager_lock = asyncio.Lock()
 
     async def get_or_create_authority(self, document_id: str) -> CollabAuthority:
@@ -209,6 +211,82 @@ class CollabManager:
         :param exclude: If supplied, this WebSocket is skipped.
         """
         conns = set(self._connections.get(document_id, set()))
+        for ws in conns:
+            if ws is exclude:
+                continue
+            try:
+                await ws.send_json(message)
+            except Exception:
+                pass  # stale connection — will be cleaned up on disconnect
+
+    def _bind_client(self, ws: WebSocket, client_id: str) -> None:
+        """Associate a WebSocket connection with its server-assigned client_id.
+
+        Must be called after :meth:`add_connection` so that
+        :meth:`get_peers_for_doc` can map live connections back to peer info.
+
+        :param ws: The active WebSocket connection.
+        :param client_id: The server-generated UUID for this connection.
+        """
+        self._ws_to_client_id[ws] = client_id
+
+    def register_peer(self, client_id: str, display: str, client_type: str) -> None:
+        """Store presence information for a connected peer.
+
+        :param client_id: Server-assigned UUID for the connection.
+        :param display: Human-readable display name sent by the client.
+        :param client_type: ``"human"`` or ``"ai"``.
+        """
+        self._peer_info[client_id] = {
+            "client_id": client_id,
+            "display": display,
+            "type": client_type,
+        }
+
+    def unregister_peer(self, client_id: str) -> None:
+        """Remove a peer's presence information and clean up the reverse WS map.
+
+        :param client_id: Server-assigned UUID for the connection.
+        """
+        self._peer_info.pop(client_id, None)
+        stale = [ws for ws, cid in self._ws_to_client_id.items() if cid == client_id]
+        for ws in stale:
+            self._ws_to_client_id.pop(ws, None)
+
+    def get_peers_for_doc(self, doc_id: str) -> list[dict]:
+        """Return peer-info dicts for all registered connections on *doc_id*.
+
+        Uses ``self._connections[doc_id]`` to find active WebSockets, then
+        maps each to a ``client_id`` via ``_ws_to_client_id``, and finally
+        looks up the full peer dict in ``_peer_info``.
+
+        :param doc_id: The CMS document ID.
+        :returns: List of peer dicts (``client_id``, ``display``, ``type``).
+        """
+        conns = self._connections.get(doc_id, set())
+        peers: list[dict] = []
+        for ws in conns:
+            client_id = self._ws_to_client_id.get(ws)
+            if client_id and client_id in self._peer_info:
+                peers.append(self._peer_info[client_id])
+        return peers
+
+    async def broadcast_peer_event(
+        self,
+        doc_id: str,
+        message: dict,
+        exclude: Any | None = None,
+    ) -> None:
+        """Broadcast a peer-presence event to all connections on *doc_id*.
+
+        Mirrors :meth:`broadcast` but is dedicated to peer events so callers
+        can pass a WebSocket (or any sentinel) to ``exclude``.
+
+        :param doc_id: The CMS document ID.
+        :param message: JSON-serialisable dict to send.
+        :param exclude: If supplied, this WebSocket is skipped.
+        """
+        conns = set(self._connections.get(doc_id, set()))
         for ws in conns:
             if ws is exclude:
                 continue
