@@ -30,13 +30,14 @@ def _temp_engine() -> tuple[SQLiteEngine, str]:
 
 async def _set_engine(engine: SQLiteEngine) -> None:
     """Assign engine to all CMS table classes and the Migration tracker."""
-    from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSMeta, CMSWebhook
+    from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSMeta, CMSStep, CMSWebhook
 
     CMSDocument._meta.db = engine
     CMSMeta._meta.db = engine
     CMSWebhook._meta.db = engine
     CMSChangeset._meta.db = engine
     CMSChangesetDocument._meta.db = engine
+    CMSStep._meta.db = engine
     Migration._meta.db = engine
 
 
@@ -119,7 +120,7 @@ async def test_forwards_fake_on_existing_db():
     without re-creating the tables.
     """
     from starlette_cms.piccolo_app import APP_CONFIG
-    from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSMeta, CMSWebhook
+    from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSMeta, CMSStep, CMSWebhook
 
     engine, db_path = _temp_engine()
     try:
@@ -131,6 +132,7 @@ async def test_forwards_fake_on_existing_db():
         await CMSWebhook.create_table(if_not_exists=True)
         await CMSChangeset.create_table(if_not_exists=True)
         await CMSChangesetDocument.create_table(if_not_exists=True)
+        await CMSStep.create_table(if_not_exists=True)
         await Migration.create_table(if_not_exists=True)
 
         # No migration rows yet
@@ -175,13 +177,14 @@ async def test_forwards_on_fresh_db():
 
         # All CMS tables should now exist — verify by counting rows
         # (will raise if the table doesn't exist)
-        from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSMeta, CMSWebhook
+        from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSMeta, CMSStep, CMSWebhook
 
         assert await CMSDocument.count().run() == 0
         assert await CMSMeta.count().run() == 0
         assert await CMSWebhook.count().run() == 0
         assert await CMSChangeset.count().run() == 0
         assert await CMSChangesetDocument.count().run() == 0
+        assert await CMSStep.count().run() == 0
 
         # One migration row per migration file
         assert await Migration.count().run() == _migration_file_count()

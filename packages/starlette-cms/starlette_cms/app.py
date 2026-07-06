@@ -71,6 +71,9 @@ class CMS:
         self._app: Starlette | None = None  # built lazily on first access
         self._db: Any = None  # CMSDatabase instance, set in lifespan
 
+        from starlette_cms.collab import CollabManager
+        self.collab_manager = CollabManager()
+
         if discover_blocks:
             self._discover_blocks()
 
@@ -247,6 +250,9 @@ class CMS:
         if self.session_secret:
             from starlette_cms.api.auth import make_auth_routes
             routes.extend(make_auth_routes(self))
+
+        from starlette_cms.api.collab import make_collab_routes
+        routes.extend(make_collab_routes(self))
 
         return Starlette(routes=routes)
 

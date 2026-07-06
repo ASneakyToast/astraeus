@@ -83,3 +83,21 @@ class CMSChangesetDocument(Table):
     document_id = Varchar(length=36)
     added_at = Timestamptz()
     # composite primary key enforced at application layer (409 on duplicate)
+
+
+class CMSStep(Table):
+    """Persisted ProseMirror collab step for history and rewind.
+
+    One row per accepted step. The composite index on (document_id, version)
+    should be created manually after migration:
+        CREATE INDEX IF NOT EXISTS idx_cms_step_doc_version
+            ON cms_step (document_id, version);
+    """
+
+    # Piccolo adds a Serial ``id`` auto-increment primary key automatically
+    # when no column is marked primary_key=True.
+    document_id = Varchar(length=36, index=True)
+    client_id = Varchar(length=36)
+    version = Integer()  # version number AFTER this step is applied
+    step_data = Text()   # JSON-serialised ProseMirror step object
+    created_at = Timestamptz()

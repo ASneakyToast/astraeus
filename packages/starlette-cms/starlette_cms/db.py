@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 
 import structlog
 
-from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSMeta, CMSWebhook
+from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSMeta, CMSStep, CMSWebhook
 
 logger = structlog.get_logger(__name__)
 
@@ -57,6 +57,7 @@ class CMSDatabase:
         CMSWebhook._meta.db = engine
         CMSChangeset._meta.db = engine
         CMSChangesetDocument._meta.db = engine
+        CMSStep._meta.db = engine
 
         # SQLite: start connection pool (no-op for SQLite — piccolo emits a
         # warning which we suppress; the call is safe to make)
@@ -73,6 +74,7 @@ class CMSDatabase:
         await CMSWebhook.create_table(if_not_exists=True)
         await CMSChangeset.create_table(if_not_exists=True)
         await CMSChangesetDocument.create_table(if_not_exists=True)
+        await CMSStep.create_table(if_not_exists=True)
         logger.debug("starlette_cms.db.tables_ready", database_url=self.database_url)
 
         # Enable WAL mode for SQLite (improves concurrent read performance)
