@@ -68,3 +68,21 @@ async def require_auth(request: Request, cms: CMS) -> JSONResponse | None:
     if not authorised:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     return None
+
+
+def check_session_auth(request: Request, cms: CMS) -> bool:
+    """
+    Return ``True`` if the request carries a valid ``cms_session`` cookie.
+
+    :param request: The incoming Starlette request.
+    :param cms: The CMS instance (must have ``session_secret`` set).
+    :returns: ``True`` if the session cookie is present and valid, ``False`` otherwise.
+    """
+    from starlette_cms.session import validate_session_token
+
+    if cms.session_secret is None:
+        return False
+    token = request.cookies.get("cms_session")
+    if not token:
+        return False
+    return bool(validate_session_token(token, cms.session_secret))

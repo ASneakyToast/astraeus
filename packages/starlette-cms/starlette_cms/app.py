@@ -53,6 +53,8 @@ class CMS:
         mount_path: str = "/cms",
         discover_blocks: bool = False,
         media_backend: MediaBackend | None = None,
+        session_secret: str | None = None,
+        admin_users: dict[str, str] | None = None,
     ) -> None:
         self.database_url = database_url
         self.auth = auth
@@ -60,6 +62,8 @@ class CMS:
         self.read_auth = read_auth
         self.mount_path = mount_path
         self.media_backend = media_backend
+        self.session_secret = session_secret
+        self.admin_users = admin_users
 
         self.registry = BlockRegistry()
         self._document_types: dict[str, type] = {}
@@ -236,6 +240,12 @@ class CMS:
                 for r in self._extension_routes
             ],
         ]
+
+        # Add session auth routes if a session secret is configured
+        if self.session_secret:
+            from starlette_cms.api.auth import make_auth_routes
+            routes.extend(make_auth_routes(self))
+
         return Starlette(routes=routes)
 
     # ------------------------------------------------------------------
