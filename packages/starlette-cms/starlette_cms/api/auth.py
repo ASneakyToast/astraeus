@@ -156,13 +156,15 @@ def make_auth_routes(cms: CMS) -> list[Route]:
             return RedirectResponse(error_url, status_code=302)
 
         # Valid credentials — issue session cookie.
-        # Omit Secure flag on plain-http localhost so the browser stores it.
+        # On localhost: SameSite=None (no Secure) so cross-origin fetches from the
+        # Astro dev server (different port) can send the cookie. On prod: Lax+Secure.
         is_localhost = request.url.hostname in ("localhost", "127.0.0.1", "::1")
         secure_flag = "" if is_localhost else "Secure; "
+        samesite = "None" if is_localhost else "Lax"
         token = generate_session_token(username, cms.session_secret)
         cookie = (
             f"{_SESSION_COOKIE}={token}; "
-            f"HttpOnly; {secure_flag}SameSite=Lax; "
+            f"HttpOnly; {secure_flag}SameSite={samesite}; "
             f"Max-Age={_COOKIE_MAX_AGE}; Path=/"
         )
 
@@ -183,9 +185,10 @@ def make_auth_routes(cms: CMS) -> list[Route]:
     async def logout(request: Request) -> Response:
         is_localhost = request.url.hostname in ("localhost", "127.0.0.1", "::1")
         secure_flag = "" if is_localhost else "Secure; "
+        samesite = "None" if is_localhost else "Lax"
         clear_cookie = (
             f"{_SESSION_COOKIE}=; "
-            f"HttpOnly; {secure_flag}SameSite=Lax; "
+            f"HttpOnly; {secure_flag}SameSite={samesite}; "
             f"Max-Age=0; Path=/"
         )
         response = RedirectResponse("/api/auth/login", status_code=302)
