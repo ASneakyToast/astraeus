@@ -14,3 +14,16 @@ await esbuild.build({
 })
 
 console.log(`Built starlette_editor/static/editor.js (${dev ? 'dev' : 'prod'})`)
+
+await esbuild.build({
+  entryPoints: ['editor_src/embed/index.js'],
+  bundle: true,
+  minify: !dev,
+  sourcemap: dev ? 'inline' : false,
+  outfile: 'starlette_editor/static/embed.js',
+  format: 'iife',
+  target: ['es2020'],
+  // No globalName — the embed script is self-contained, exports nothing
+})
+
+console.log(`Built starlette_editor/static/embed.js (${dev ? 'dev' : 'prod'})`)
