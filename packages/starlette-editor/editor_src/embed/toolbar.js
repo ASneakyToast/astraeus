@@ -9,9 +9,10 @@
  *   published  — "✓ Published — rebuilding site"
  */
 export class EditToolbar {
-  constructor({ cmsBase, cmsElements }) {
+  constructor({ cmsBase, cmsElements, reloadUrl = null }) {
     this.cmsBase = cmsBase
     this.cmsElements = cmsElements  // all [data-cms-id] elements on page
+    this.reloadUrl = reloadUrl      // optional dev-server reload endpoint
     this.state = 'viewing'          // 'viewing' | 'editing' | 'saving' | 'publishing' | 'published'
     this.activeElement = null       // currently-editing [data-cms-id] element
     this.el = null                  // the toolbar DOM element
@@ -150,6 +151,10 @@ export class EditToolbar {
       credentials: 'include',
     })
     this.setState('published')
+    // In local dev, ping the Astro dev server to trigger a full-page reload
+    if (this.reloadUrl) {
+      try { await fetch(this.reloadUrl, { method: 'POST' }) } catch { /* ignore */ }
+    }
   }
 
   // ── Chat panel wiring ──────────────────────────────────────────────────────
