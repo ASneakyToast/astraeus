@@ -29,9 +29,17 @@ async def check_auth(request: Request, cms: CMS) -> bool:
     """
     Return ``True`` if the request is authorised, ``False`` otherwise.
 
+    A valid session cookie (``cms_session``) always grants access when a
+    ``session_secret`` is configured, regardless of the ``auth`` mode — this
+    allows the inline editor embed to use cookie-based auth for write operations.
+
     :param request: The incoming Starlette request.
     :param cms: The CMS instance whose ``auth`` and ``api_key`` settings apply.
     """
+    # Session cookie takes precedence — used by the inline editor embed.
+    if check_session_auth(request, cms):
+        return True
+
     if cms.auth == "none":
         return True
 
