@@ -40,5 +40,24 @@ if (cmsBase) {
     const changesetPanel = new ChangesetPanel({ cmsBase, toolbar })
     changesetPanel.mount()
     toolbar.changesetPanel = changesetPanel
+
+    // Boot the AI chat panel (bottom-left, peer of the changeset panel)
+    const { ChatPanel } = await import('./chat-panel.js')
+    const apiKey = scriptEl?.dataset?.cmsApiKey ?? null
+    const currentDocId = cmsElements[0]?.dataset?.cmsId ?? null
+
+    // collab is lazily initialised by edit-mode.js; stubs for getDocContext until then
+    let collab = null
+    const chatPanel = new ChatPanel(cmsBase, null, {
+      getDocContext: () => ({
+        doc_id: currentDocId,
+        version: collab?.currentVersion?.() ?? 0,
+        draft_body: collab?.currentDoc?.() ?? null,
+        selection: collab?.currentSelection?.() ?? null,
+      }),
+      apiKey,
+    })
+    chatPanel.mount()
+    toolbar.setChatPanel(chatPanel)
   })()
 }

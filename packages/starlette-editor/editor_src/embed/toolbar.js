@@ -16,6 +16,9 @@ export class EditToolbar {
     this.activeElement = null       // currently-editing [data-cms-id] element
     this.el = null                  // the toolbar DOM element
     this.changesetPanel = null      // set externally by index.js after ChangesetPanel is created
+    this._chatPanel = null          // set via setChatPanel()
+    this._chatBtn = null            // ref to the 💬 button for badge updates
+    this._unread = 0                // unread chat message count
   }
 
   mount() {
@@ -57,6 +60,14 @@ export class EditToolbar {
       if (this.changesetPanel) {
         const csBtn = this._makeButton('📋 Changesets', 'ghost', () => this.changesetPanel.toggle())
         this.el.appendChild(csBtn)
+      }
+      if (this._chatPanel) {
+        this._chatBtn = this._makeButton('💬 Chat', 'ghost', () => {
+          this._unread = 0
+          this._updateChatBadge()
+          this._chatPanel.toggle()
+        })
+        this.el.appendChild(this._chatBtn)
       }
     }
 
@@ -139,5 +150,39 @@ export class EditToolbar {
       credentials: 'include',
     })
     this.setState('published')
+  }
+
+  // ── Chat panel wiring ──────────────────────────────────────────────────────
+
+  /**
+   * Wire a ChatPanel to the toolbar.
+   * Also back-references the toolbar on the panel so it can call _onChatMessage().
+   * Triggers a re-render so the 💬 button appears.
+   * @param {import('./chat-panel.js').ChatPanel} chatPanel
+   */
+  setChatPanel(chatPanel) {
+    this._chatPanel = chatPanel
+    chatPanel.setToolbar(this)
+    this._render()
+  }
+
+  /**
+   * Called by ChatPanel when a 'token' event arrives while the panel is closed.
+   * Increments the unread count and updates the badge on the 💬 button.
+   */
+  _onChatMessage() {
+    if (!this._chatPanel?.isOpen) {
+      this._unread = (this._unread || 0) + 1
+      this._updateChatBadge()
+    }
+  }
+
+  /**
+   * Reflect the current unread count on the 💬 button label.
+   */
+  _updateChatBadge() {
+    if (!this._chatBtn) return
+    const count = this._unread || 0
+    this._chatBtn.textContent = count > 0 ? `💬 Chat (${count})` : '💬 Chat'
   }
 }

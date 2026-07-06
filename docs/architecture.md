@@ -17,6 +17,7 @@ datasets, and curated test cases (see `docs/use-cases/`).
 │  app.mount("/cms",    app=cms.app)    ← starlette-cms               │
 │  app.mount("/editor", app=editor.app) ← starlette-editor            │
 │  app.mount("/media",  app=media)      ← mediakit                    │
+│  app.mount("/chat",   app=chat.app)   ← starlette-chat              │
 └──────────┬────────────────────────────────────────┬─────────────────┘
            │ webhooks on document.published          │ MCP tools
            ▼                                         ▼
@@ -64,6 +65,29 @@ Astro (or any static frontend)
   │  - Admin UI            │        │  agent tools            │
   │  - Picker protocol     │        └─────────────────────────┘
   └────────────────────────┘
+
+  ┌────────────────────────────────────┐
+  │      starlette-chat                │
+  │                                    │
+  │  - ChatAPI Starlette sub-app       │
+  │  - ChatSession/Message blocks      │
+  │  - Python PM builder + differ      │
+  │  - AnthropicProvider (streaming)   │
+  │  - ToolDispatcher (CMS HTTP +      │
+  │    collab WS client)               │
+  │  - ChatPanel JS embed module       │
+  └────────────────────────────────────┘
+
+  starlette-chat DEPENDS ON starlette-cms — never the reverse.
+  starlette-cms has no knowledge of starlette-chat.
+
+  starlette-chat acts as a collab WS CLIENT of starlette-cms:
+  edit_document submits ProseMirror steps to /api/documents/{id}/collab
+  using client_id="claude-assistant", identical to human browser clients.
+
+  starlette-chat uses mediakit indirectly via the CMS HTTP API
+  (search_media tool calls a mediakit assets endpoint if configured);
+  it never imports mediakit directly.
 
   mediakit has NO dependency on starlette-cms.
   starlette-cms references mediakit only via the MediaBackend Protocol —
@@ -194,6 +218,36 @@ Netlify rebuilds — Astro fetches fresh content
 ```
 
 The agent never triggers a build directly. It publishes, and the webhook handles the cascade. This means the agent's `publish_document` tool has the right semantic — it publishes content, not "rebuilds a site."
+
+---
+
+## AI edits go through CollabAuthority
+
+**AI edits go through CollabAuthority.** starlette-chat submits ProseMirror steps via the same
+WS endpoint as human editors. `client_id='claude-assistant'` appears in step history. The
+alternative (REST PATCH) was rejected because connected human editors would not see AI edits
+in real time.
+
+The two WebSocket connections from the browser are independent:
+
+```
+Browser (human editor)
+  │
+  ├─ collab WS ──► /cms/api/documents/{doc_id}/collab
+  │                 (shared ProseMirror step authority for all peers)
+  │
+  └─ chat WS ───► /chat/api/chat/sessions/{session_id}/ws
+                   (streaming turn: tokens, tool chips, edit notices)
+
+Server-side (ToolDispatcher._edit_document)
+  │
+  └─ collab WS ──► /cms/api/documents/{doc_id}/collab
+                    (AI opens its own WS connection, submits steps as
+                     clientID="claude-assistant", then closes it)
+```
+
+This design means the AI's edits propagate to all connected human editors in real time via the
+existing collab broadcast — no special case required in the editor frontend.
 
 ---
 

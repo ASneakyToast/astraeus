@@ -423,6 +423,27 @@ Together these establish Astraeus as a **governed data platform** — not just a
 
 ---
 
+## starlette-chat — Collaborative AI Chat (ADR 019) ✅
+
+**Goal:** A governed AI chat collaborator that participates in live ProseMirror editing sessions
+as a first-class collab peer — submitting steps through the same WS authority as human editors.
+
+| Phase | What was built |
+|-------|----------------|
+| CH-1 | `starlette-chat` package scaffold; `ChatSession`, `ChatMessage`, `SystemPrompt`, `ModelConfig` block types; `BaseProvider` ABC |
+| CH-2 | Python ProseMirror builder (`markdown_to_pm` via mistune, no Node dependency); block-granularity differ (`diff_docs` → replace steps) |
+| CH-3 | `ChatAPI` Starlette sub-app; chat WS endpoint (`/api/chat/sessions/{id}/ws`); `AnthropicProvider` streaming; `ToolDispatcher`; `edit_document` submits PM steps via collab WS with `clientID: "claude-assistant"` |
+| CH-4A | `ChatPanel` JS embed module; streaming token UI; tool chips; edit notices; toolbar chat button + unread badge |
+| CH-4B | Collab WS peer registry; `peers` array in `init` message; `peer_joined`/`peer_left` broadcasts; AI presence indicator (◆) in toolbar |
+| CH-5 | Demo app integration; end-to-end wiring; regression clean |
+| CH-6 | Integration tests (`test_integration.py`); `CLAUDE.md`; roadmap and architecture docs updated |
+
+**Key architectural note:** AI edits go through the collab WS authority, not REST PATCH.
+This keeps connected human editors in sync in real time and writes `"claude-assistant"` into
+step history alongside human client IDs.  See ADR 019 and `docs/architecture.md`.
+
+---
+
 ## North Star (post-v1, don't implement yet)
 
 - Collaborative editing via `cms_steps` table + WebSocket authority endpoint + `prosemirror-collab`

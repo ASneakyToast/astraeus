@@ -1,10 +1,11 @@
 """
 Astraeus demo — minimal full-stack integration.
 
-Shows starlette-cms, starlette-editor, and mediakit working together.
+Shows starlette-cms, starlette-editor, starlette-chat, and mediakit working together.
 Run with: uvicorn app:app --reload
 """
 
+import os
 from contextlib import asynccontextmanager
 
 from starlette.applications import Starlette
@@ -13,6 +14,8 @@ from starlette.routing import Mount
 from starlette_cms import CMS, TextField, RichTextField, ImageField, ListField
 from starlette_editor import Editor
 from mediakit.adapters.starlette import create_media_mount
+from starlette_chat import ChatAPI, register_blocks
+from starlette_chat.providers.anthropic import AnthropicProvider
 
 # --- CMS setup -----------------------------------------------------------
 
@@ -51,6 +54,18 @@ media = create_media_mount(
     auth="none",  # open for demo purposes
 )
 
+# --- Chat setup ----------------------------------------------------------
+# register_blocks must be called BEFORE cms.app is accessed (before Mounts are built)
+
+register_blocks(cms)
+
+_anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+chat = ChatAPI(
+    cms_base_url="http://localhost:8000/cms",
+    cms_api_key=os.environ.get("CMS_API_KEY", "dev-secret"),
+    provider=AnthropicProvider(api_key=_anthropic_key) if _anthropic_key else None,
+)
+
 # --- Editor setup --------------------------------------------------------
 # Editor extends cms here — registers /api/editor-schema before cms.app is built
 
@@ -73,6 +88,7 @@ app = Starlette(
         Mount("/cms", app=cms.app),
         Mount("/media", app=media),
         Mount("/editor", app=editor.app),
+        Mount("/chat", app=chat.app),
     ],
     lifespan=lifespan,
 )
@@ -80,3 +96,4 @@ app = Starlette(
 # StandardEditor at: http://localhost:8000/editor/shell
 # CMS API at:        http://localhost:8000/cms/api/documents
 # Media API at:      http://localhost:8000/media/assets
+# Chat API at:       http://localhost:8000/chat/api/sessions
