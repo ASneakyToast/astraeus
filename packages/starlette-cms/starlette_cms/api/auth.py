@@ -155,16 +155,23 @@ def make_auth_routes(cms: CMS) -> list[Route]:
         if not bcrypt.checkpw(password.encode(), stored_hash.encode()):
             return RedirectResponse(error_url, status_code=302)
 
-        # Valid credentials — issue session cookie
+        # Valid credentials — issue session cookie.
+        # Omit Secure flag on plain-http localhost so the browser stores it.
+        is_localhost = request.url.hostname in ("localhost", "127.0.0.1", "::1")
+        secure_flag = "" if is_localhost else "Secure; "
         token = generate_session_token(username, cms.session_secret)
         cookie = (
             f"{_SESSION_COOKIE}={token}; "
-            f"HttpOnly; Secure; SameSite=Lax; "
+            f"HttpOnly; {secure_flag}SameSite=Lax; "
             f"Max-Age={_COOKIE_MAX_AGE}; Path=/"
         )
 
-        # Validate next URL — must start with "/" to prevent open redirects
-        if next_url and next_url.startswith("/"):
+        # Validate next URL — allow absolute URLs to localhost (dev Astro server)
+        # and any path-only URL starting with "/".
+        if next_url and (
+            next_url.startswith("/")
+            or (is_localhost and next_url.startswith("http://localhost"))
+        ):
             redirect_to = next_url
         else:
             redirect_to = "/"
@@ -174,9 +181,11 @@ def make_auth_routes(cms: CMS) -> list[Route]:
         return response
 
     async def logout(request: Request) -> Response:
+        is_localhost = request.url.hostname in ("localhost", "127.0.0.1", "::1")
+        secure_flag = "" if is_localhost else "Secure; "
         clear_cookie = (
             f"{_SESSION_COOKIE}=; "
-            f"HttpOnly; Secure; SameSite=Lax; "
+            f"HttpOnly; {secure_flag}SameSite=Lax; "
             f"Max-Age=0; Path=/"
         )
         response = RedirectResponse("/api/auth/login", status_code=302)

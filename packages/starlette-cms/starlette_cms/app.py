@@ -19,6 +19,8 @@ from typing import Any
 
 import structlog
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.routing import Route
 
 from starlette_cms.media import MediaBackend
@@ -55,6 +57,7 @@ class CMS:
         media_backend: MediaBackend | None = None,
         session_secret: str | None = None,
         admin_users: dict[str, str] | None = None,
+        cors_origins: list[str] | None = None,
     ) -> None:
         self.database_url = database_url
         self.auth = auth
@@ -64,6 +67,7 @@ class CMS:
         self.media_backend = media_backend
         self.session_secret = session_secret
         self.admin_users = admin_users
+        self.cors_origins = cors_origins or []
 
         self.registry = BlockRegistry()
         self._document_types: dict[str, type] = {}
@@ -254,7 +258,17 @@ class CMS:
         from starlette_cms.api.collab import make_collab_routes
         routes.extend(make_collab_routes(self))
 
-        return Starlette(routes=routes)
+        middleware = []
+        if self.cors_origins:
+            middleware.append(Middleware(
+                CORSMiddleware,
+                allow_origins=self.cors_origins,
+                allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+                allow_headers=["*"],
+                allow_credentials=True,
+            ))
+
+        return Starlette(routes=routes, middleware=middleware)
 
     # ------------------------------------------------------------------
     # Lifespan
