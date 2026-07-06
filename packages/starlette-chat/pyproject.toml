@@ -14,7 +14,10 @@ dependencies = [
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.34"]
-full      = ["starlette-chat[anthropic]"]
+openai    = [
+    "openai>=1.0",
+]
+full      = ["starlette-chat[anthropic,openai]"]
 dev       = ["pytest>=8.0", "pytest-asyncio>=0.23", "httpx>=0.27", "respx>=0.21"]
 
 [build-system]
