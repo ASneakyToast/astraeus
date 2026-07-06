@@ -34,5 +34,11 @@ if (cmsBase) {
     const { EditToolbar } = await import('./toolbar.js')
     const toolbar = new EditToolbar({ cmsBase, cmsElements })
     toolbar.mount()
+
+    // Boot the changeset panel alongside the toolbar
+    const { ChangesetPanel } = await import('./changeset-panel.js')
+    const changesetPanel = new ChangesetPanel({ cmsBase, toolbar })
+    changesetPanel.mount()
+    toolbar.changesetPanel = changesetPanel
   })()
 }

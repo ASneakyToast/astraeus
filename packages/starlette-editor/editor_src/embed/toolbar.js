@@ -15,6 +15,7 @@ export class EditToolbar {
     this.state = 'viewing'          // 'viewing' | 'editing' | 'saving' | 'publishing' | 'published'
     this.activeElement = null       // currently-editing [data-cms-id] element
     this.el = null                  // the toolbar DOM element
+    this.changesetPanel = null      // set externally by index.js after ChangesetPanel is created
   }
 
   mount() {
@@ -53,6 +54,10 @@ export class EditToolbar {
       this.el.appendChild(saveIndicator)
       this.el.appendChild(discardBtn)
       this.el.appendChild(publishBtn)
+      if (this.changesetPanel) {
+        const csBtn = this._makeButton('📋 Changesets', 'ghost', () => this.changesetPanel.toggle())
+        this.el.appendChild(csBtn)
+      }
     }
 
     if (this.state === 'publishing') {

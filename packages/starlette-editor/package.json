@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.24",
+    "happy-dom": "^20.10.6",
     "jsdom": "^29.1.1",
     "vitest": "^2.0"
   }
