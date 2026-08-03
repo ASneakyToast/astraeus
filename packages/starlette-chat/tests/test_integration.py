@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import httpx
@@ -40,7 +40,7 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from pydantic import PrivateAttr
 
 from starlette_chat import ChatAPI, register_blocks
-from starlette_chat.providers.base import BaseProvider, StreamEvent
+from starlette_chat.providers.base import BaseProvider
 
 
 # ---------------------------------------------------------------------------
@@ -86,25 +86,13 @@ class _MockChatModel(BaseChatModel):
 
 
 class _MockProvider(BaseProvider):
-    """LLM stub: emits a single token then done.  Never calls a real API."""
+    """LLM stub: returns a single fixed response.  Never calls a real API."""
 
     def __init__(self, response: str = "Hello from the AI.") -> None:
         self._response = response
 
     def get_model(self) -> BaseChatModel:
         return _MockChatModel(response=self._response)
-
-    async def stream(
-        self,
-        messages: list[dict],
-        system_prompt: str,
-        tools: list[dict],
-        model: str,
-        temperature: float,
-        max_tokens: int,
-    ) -> AsyncIterator[StreamEvent]:
-        yield StreamEvent(type="token", data={"delta": self._response})
-        yield StreamEvent(type="done", data={})
 
 
 # ---------------------------------------------------------------------------

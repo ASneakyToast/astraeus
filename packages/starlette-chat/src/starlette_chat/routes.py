@@ -18,7 +18,10 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket
 
-from .graph import build_graph, build_initial_state
+from langchain_core.messages import HumanMessage
+
+from .graph import build_graph
+from .providers.base import DEFAULT_MODEL
 from .session import generate_session_slug
 from .tools import ToolDispatcher, make_tools
 
@@ -57,6 +60,14 @@ def make_routes(chat: ChatAPI) -> list:
 
         headers = _cms_headers(chat._cms_api_key)
 
+        # Always fetch model config and system prompt from the CMS —
+        # they are editorial content that lives there regardless of
+        # whether a separate session DB is configured.
+        model_config_body: dict[str, Any] = {}
+        system_prompt_body: dict[str, Any] = {}
+        model_config_doc_id: str | None = None
+        prompt_doc_id: str | None = None
+
         async with httpx.AsyncClient() as client:
             # --- Find ModelConfig for this persona ---
             mc_resp = await client.get(
@@ -64,7 +75,6 @@ def make_routes(chat: ChatAPI) -> list:
                 params={"type": "model_config", "published": "true"},
                 headers=headers,
             )
-            model_config_doc_id: str | None = None
             if mc_resp.status_code == 200:
                 mc_items = mc_resp.json()
                 # Support both list and paginated responses
@@ -81,10 +91,13 @@ def make_routes(chat: ChatAPI) -> list:
                             body = {}
                     if body.get("persona") == persona:
                         model_config_doc_id = doc.get("id")
+                        model_config_body = body
                         break
                 if model_config_doc_id is None and docs:
                     # Fall back to first doc (may have persona=="default")
                     model_config_doc_id = docs[0].get("id")
+                    raw = docs[0].get("body") or {}
+                    model_config_body = json.loads(raw) if isinstance(raw, str) else raw
 
             # --- Find SystemPrompt for this persona ---
             sp_resp = await client.get(
@@ -92,7 +105,6 @@ def make_routes(chat: ChatAPI) -> list:
                 params={"type": "system_prompt", "published": "true"},
                 headers=headers,
             )
-            prompt_doc_id: str | None = None
             if sp_resp.status_code == 200:
                 sp_items = sp_resp.json()
                 if isinstance(sp_items, list):
@@ -108,40 +120,56 @@ def make_routes(chat: ChatAPI) -> list:
                             body = {}
                     if body.get("persona") == persona:
                         prompt_doc_id = doc.get("id")
+                        system_prompt_body = body
                         break
                 if prompt_doc_id is None and docs:
                     prompt_doc_id = docs[0].get("id")
+                    raw = docs[0].get("body") or {}
+                    system_prompt_body = json.loads(raw) if isinstance(raw, str) else raw
 
-            # --- Create ChatSession document ---
-            slug = generate_session_slug()
-            session_body: dict[str, Any] = {
-                "persona": persona,
-                "doc_ref": doc_id,
-                "model_config_ref": model_config_doc_id,
-                "prompt_ref": prompt_doc_id,
-                "turn_count": 0,
-            }
-            create_resp = await client.post(
-                f"{chat._cms_base}/api/documents",
-                json={"doc_type": "chat_session", "body": session_body, "slug": slug},
-                headers=headers,
-            )
-            if create_resp.status_code not in (200, 201):
-                return JSONResponse(
-                    {"error": "Failed to create session", "detail": create_resp.text},
-                    status_code=502,
+            if chat._store is not None:
+                # --- Separate session DB path: snapshot config values by value ---
+                session_id = generate_session_slug()
+                await chat._store.create_session(
+                    session_id=session_id,
+                    persona=persona,
+                    doc_ref=doc_id,
+                    model_name=model_config_body.get("model_name", DEFAULT_MODEL),
+                    temperature=model_config_body.get("temperature", 1.0),
+                    max_tokens=model_config_body.get("max_tokens", 4096),
+                    system_prompt=system_prompt_body.get("content", ""),
                 )
-            session_doc = create_resp.json()
-            session_doc_id: str = session_doc["id"]
+            else:
+                # --- CMS path: store refs, let the turn handler resolve them ---
+                slug = generate_session_slug()
+                session_body: dict[str, Any] = {
+                    "persona": persona,
+                    "doc_ref": doc_id,
+                    "model_config_ref": model_config_doc_id,
+                    "prompt_ref": prompt_doc_id,
+                    "turn_count": 0,
+                }
+                create_resp = await client.post(
+                    f"{chat._cms_base}/api/documents",
+                    json={"doc_type": "chat_session", "body": session_body, "slug": slug},
+                    headers=headers,
+                )
+                if create_resp.status_code not in (200, 201):
+                    return JSONResponse(
+                        {"error": "Failed to create session", "detail": create_resp.text},
+                        status_code=502,
+                    )
+                session_doc = create_resp.json()
+                session_id = session_doc["id"]
 
-            # --- Publish the session doc ---
-            await client.post(
-                f"{chat._cms_base}/api/documents/{session_doc_id}/publish",
-                headers=headers,
-            )
+                # --- Publish the session doc ---
+                await client.post(
+                    f"{chat._cms_base}/api/documents/{session_id}/publish",
+                    headers=headers,
+                )
 
         return JSONResponse(
-            {"session_id": session_doc_id, "doc_id": doc_id},
+            {"session_id": session_id, "doc_id": doc_id},
             status_code=201,
         )
 
@@ -151,6 +179,14 @@ def make_routes(chat: ChatAPI) -> list:
 
     async def get_session(request: Request) -> JSONResponse:
         session_id: str = request.path_params["session_id"]
+
+        if chat._store is not None:
+            session = await chat._store.get_session(session_id)
+            if session is None:
+                return JSONResponse({"error": "Session not found"}, status_code=404)
+            messages = await chat._store.list_messages(session_id)
+            return JSONResponse({"session": session, "messages": messages})
+
         headers = _cms_headers(chat._cms_api_key)
 
         async with httpx.AsyncClient() as client:
@@ -273,117 +309,106 @@ async def _handle_turn(
 ) -> None:
     """Process a single conversation turn via the LangGraph ReAct loop."""
     system_prompt = ""
-    model_name = "claude-sonnet-4-5"
+    model_name = DEFAULT_MODEL
+    turn_index = 0
 
-    async with httpx.AsyncClient() as client:
-        # Load session document
-        session_resp = await client.get(
-            f"{chat._cms_base}/api/documents/{session_id}",
-            headers=headers,
-        )
-        if session_resp.status_code != 200:
-            await websocket.send_json(
-                {"type": "error", "message": "Session not found"}
-            )
+    if chat._store is not None:
+        # --- Separate session DB path ---
+        turn_ctx = await chat._store.get_turn_context(session_id)
+        if turn_ctx is None:
+            await websocket.send_json({"type": "error", "message": "Session not found"})
             return
 
-        session_doc = session_resp.json()
-        session_body = session_doc.get("body") or {}
-        if isinstance(session_body, str):
-            try:
-                session_body = json.loads(session_body)
-            except Exception:
-                session_body = {}
-
-        # Load system prompt
-        prompt_ref = session_body.get("prompt_ref")
-        if prompt_ref:
-            sp_resp = await client.get(
-                f"{chat._cms_base}/api/documents/{prompt_ref}",
-                headers=headers,
-            )
-            if sp_resp.status_code == 200:
-                sp_body = sp_resp.json().get("body") or {}
-                if isinstance(sp_body, str):
-                    try:
-                        sp_body = json.loads(sp_body)
-                    except Exception:
-                        sp_body = {}
-                system_prompt = sp_body.get("content", "")
-
-        # Load model config (model_name only — temperature/max_tokens handled by LangGraph)
-        mc_ref = session_body.get("model_config_ref")
-        if mc_ref:
-            mc_resp = await client.get(
-                f"{chat._cms_base}/api/documents/{mc_ref}",
-                headers=headers,
-            )
-            if mc_resp.status_code == 200:
-                mc_body = mc_resp.json().get("body") or {}
-                if isinstance(mc_body, str):
-                    try:
-                        mc_body = json.loads(mc_body)
-                    except Exception:
-                        mc_body = {}
-                model_name = mc_body.get("model_name", model_name)
-
-        # Load message history
-        msgs_resp = await client.get(
-            f"{chat._cms_base}/api/documents",
-            params={
-                "type": "chat_message",
-                "filter[session_ref]": session_id,
-                "limit": "50",
-            },
-            headers=headers,
-        )
-        history_docs: list[dict] = []
-        if msgs_resp.status_code == 200:
-            raw = msgs_resp.json()
-            if isinstance(raw, list):
-                history_docs = raw
-            else:
-                history_docs = raw.get("items", raw.get("documents", []))
-
-        # Build history as plain dicts for build_initial_state
-        history: list[dict[str, Any]] = []
-        for hdoc in history_docs:
-            hbody = hdoc.get("body") or {}
-            if isinstance(hbody, str):
-                try:
-                    hbody = json.loads(hbody)
-                except Exception:
-                    hbody = {}
-            history.append({
-                "role": hbody.get("role", "user"),
-                "content": hbody.get("content", ""),
-            })
-
-        turn_index = len(history_docs)
+        system_prompt = turn_ctx.system_prompt
+        model_name = turn_ctx.model_name
+        turn_index = turn_ctx.turn_index
 
         # Signal thinking to browser
         await websocket.send_json({"type": "thinking"})
 
-        # Persist user ChatMessage
-        await client.post(
-            f"{chat._cms_base}/api/documents",
-            json={
-                "doc_type": "chat_message",
-                "body": {
-                    "session_ref": session_id,
-                    "role": "user",
-                    "content": content,
-                    "turn_index": turn_index,
+        await chat._store.append_message(
+            session_id, "user", content, turn_index
+        )
+        await chat._store.update_turn_count(session_id, turn_index + 1)
+    else:
+        # --- CMS path ---
+        async with httpx.AsyncClient() as client:
+            # Load session document
+            session_resp = await client.get(
+                f"{chat._cms_base}/api/documents/{session_id}",
+                headers=headers,
+            )
+            if session_resp.status_code != 200:
+                await websocket.send_json(
+                    {"type": "error", "message": "Session not found"}
+                )
+                return
+
+            session_doc = session_resp.json()
+            session_body = session_doc.get("body") or {}
+            if isinstance(session_body, str):
+                try:
+                    session_body = json.loads(session_body)
+                except Exception:
+                    session_body = {}
+
+            # Load system prompt
+            prompt_ref = session_body.get("prompt_ref")
+            if prompt_ref:
+                sp_resp = await client.get(
+                    f"{chat._cms_base}/api/documents/{prompt_ref}",
+                    headers=headers,
+                )
+                if sp_resp.status_code == 200:
+                    sp_body = sp_resp.json().get("body") or {}
+                    if isinstance(sp_body, str):
+                        try:
+                            sp_body = json.loads(sp_body)
+                        except Exception:
+                            sp_body = {}
+                    system_prompt = sp_body.get("content", "")
+
+            # Load model config (model_name only — temperature/max_tokens handled by LangGraph)
+            mc_ref = session_body.get("model_config_ref")
+            if mc_ref:
+                mc_resp = await client.get(
+                    f"{chat._cms_base}/api/documents/{mc_ref}",
+                    headers=headers,
+                )
+                if mc_resp.status_code == 200:
+                    mc_body = mc_resp.json().get("body") or {}
+                    if isinstance(mc_body, str):
+                        try:
+                            mc_body = json.loads(mc_body)
+                        except Exception:
+                            mc_body = {}
+                    model_name = mc_body.get("model_name", model_name)
+
+            turn_index = session_body.get("turn_count", 0)
+
+            # Signal thinking to browser
+            await websocket.send_json({"type": "thinking"})
+
+            # Persist user ChatMessage
+            await client.post(
+                f"{chat._cms_base}/api/documents",
+                json={
+                    "doc_type": "chat_message",
+                    "body": {
+                        "session_ref": session_id,
+                        "role": "user",
+                        "content": content,
+                        "turn_index": turn_index,
+                    },
                 },
-            },
-            headers=headers,
-        )
-        # Increment turn count on session
-        await client.patch(
-            f"{chat._cms_base}/api/documents/{session_id}",
-            json={"body": {"turn_count": turn_index + 1}},
-            headers=headers,
-        )
+                headers=headers,
+            )
+            # Increment turn count on session
+            await client.patch(
+                f"{chat._cms_base}/api/documents/{session_id}",
+                json={"body": {"turn_count": turn_index + 1}},
+                headers=headers,
+            )
 
     # Resolve provider
     provider = chat._provider
@@ -401,23 +426,27 @@ async def _handle_turn(
             )
             return
 
-    # Build graph and initial state
+    # Build graph — checkpointer restores prior turn messages automatically.
     tools = make_tools(dispatcher, context)
     lc_model = provider.get_model()
-    graph = build_graph(lc_model, tools)
-    initial_state = build_initial_state(
-        system_prompt=system_prompt,
-        history=history,
-        user_content=content,
-        session_id=session_id,
-        context=context,
-    )
+    graph = build_graph(lc_model, tools, checkpointer=chat._checkpointer)
+    graph_config = {
+        "configurable": {
+            "thread_id": session_id,
+            "system_prompt": system_prompt,
+        }
+    }
+    initial_input = {
+        "messages": [HumanMessage(content=content)],
+        "session_id": session_id,
+        "context": context,
+    }
 
     # Stream LangGraph events → WebSocket wire format
     assistant_content_parts: list[str] = []
     steps_applied = 0
 
-    async for event in graph.astream_events(initial_state, version="v2"):
+    async for event in graph.astream_events(initial_input, config=graph_config, version="v2"):
         ws_msg = _langgraph_event_to_ws(event)
         if ws_msg is None:
             continue
@@ -446,26 +475,36 @@ async def _handle_turn(
     # Persist assistant ChatMessage
     assistant_content = "".join(assistant_content_parts)
     assistant_turn_index = turn_index + 1
+    assistant_msg_id: str | None = None
 
-    async with httpx.AsyncClient() as client:
-        assistant_msg_resp = await client.post(
-            f"{chat._cms_base}/api/documents",
-            json={
-                "doc_type": "chat_message",
-                "body": {
-                    "session_ref": session_id,
-                    "role": "assistant",
-                    "content": assistant_content,
-                    "turn_index": assistant_turn_index,
-                    "model_used": model_name,
-                    "steps_applied": steps_applied,
-                },
-            },
-            headers=headers,
+    if chat._store is not None:
+        assistant_msg_id = await chat._store.append_message(
+            session_id,
+            "assistant",
+            assistant_content,
+            assistant_turn_index,
+            model_used=model_name,
+            steps_applied=steps_applied or None,
         )
-        assistant_msg_id: str | None = None
-        if assistant_msg_resp.status_code in (200, 201):
-            assistant_msg_id = assistant_msg_resp.json().get("id")
+    else:
+        async with httpx.AsyncClient() as client:
+            assistant_msg_resp = await client.post(
+                f"{chat._cms_base}/api/documents",
+                json={
+                    "doc_type": "chat_message",
+                    "body": {
+                        "session_ref": session_id,
+                        "role": "assistant",
+                        "content": assistant_content,
+                        "turn_index": assistant_turn_index,
+                        "model_used": model_name,
+                        "steps_applied": steps_applied,
+                    },
+                },
+                headers=headers,
+            )
+            if assistant_msg_resp.status_code in (200, 201):
+                assistant_msg_id = assistant_msg_resp.json().get("id")
 
     await websocket.send_json({"type": "done", "message_id": assistant_msg_id})
 
