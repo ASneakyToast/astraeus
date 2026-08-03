@@ -33,6 +33,9 @@ class ChatAPI:
         records are stored here instead of the CMS DB — system_prompt and
         model_config remain in the CMS.  When ``None`` (default), all records go
         through the CMS HTTP API as before.
+    :param checkpointer: LangGraph checkpointer for the agent's turn-to-turn
+        memory.  Defaults to an in-process ``MemorySaver`` (resets on restart).
+        Pass a ``SqliteSaver`` or ``PostgresSaver`` for durable memory.
     """
 
     def __init__(
@@ -41,11 +44,15 @@ class ChatAPI:
         cms_api_key: str,
         provider: BaseProvider | None = None,
         session_db_url: str | None = None,
+        checkpointer: object | None = None,
     ) -> None:
+        from langgraph.checkpoint.memory import MemorySaver
+
         self._cms_base = cms_base_url.rstrip("/")
         self._cms_api_key = cms_api_key
         self._provider = provider
         self._session_db_url = session_db_url
+        self._checkpointer = checkpointer if checkpointer is not None else MemorySaver()
         self._store = None
         self._app: Starlette | None = None
 

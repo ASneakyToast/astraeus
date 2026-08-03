@@ -18,7 +18,10 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket
 
-from .graph import build_graph, build_initial_state
+from langchain_core.messages import HumanMessage
+
+from .graph import build_graph
+from .providers.base import DEFAULT_MODEL
 from .session import generate_session_slug
 from .tools import ToolDispatcher, make_tools
 
@@ -131,7 +134,7 @@ def make_routes(chat: ChatAPI) -> list:
                     session_id=session_id,
                     persona=persona,
                     doc_ref=doc_id,
-                    model_name=model_config_body.get("model_name", "claude-sonnet-4-5"),
+                    model_name=model_config_body.get("model_name", DEFAULT_MODEL),
                     temperature=model_config_body.get("temperature", 1.0),
                     max_tokens=model_config_body.get("max_tokens", 4096),
                     system_prompt=system_prompt_body.get("content", ""),
@@ -306,8 +309,7 @@ async def _handle_turn(
 ) -> None:
     """Process a single conversation turn via the LangGraph ReAct loop."""
     system_prompt = ""
-    model_name = "claude-sonnet-4-5"
-    history: list[dict[str, Any]] = []
+    model_name = DEFAULT_MODEL
     turn_index = 0
 
     if chat._store is not None:
@@ -319,7 +321,6 @@ async def _handle_turn(
 
         system_prompt = turn_ctx.system_prompt
         model_name = turn_ctx.model_name
-        history = turn_ctx.history
         turn_index = turn_ctx.turn_index
 
         # Signal thinking to browser
@@ -383,38 +384,7 @@ async def _handle_turn(
                             mc_body = {}
                     model_name = mc_body.get("model_name", model_name)
 
-            # Load message history
-            msgs_resp = await client.get(
-                f"{chat._cms_base}/api/documents",
-                params={
-                    "type": "chat_message",
-                    "filter[session_ref]": session_id,
-                    "limit": "50",
-                },
-                headers=headers,
-            )
-            history_docs: list[dict] = []
-            if msgs_resp.status_code == 200:
-                raw = msgs_resp.json()
-                if isinstance(raw, list):
-                    history_docs = raw
-                else:
-                    history_docs = raw.get("items", raw.get("documents", []))
-
-            # Build history as plain dicts for build_initial_state
-            for hdoc in history_docs:
-                hbody = hdoc.get("body") or {}
-                if isinstance(hbody, str):
-                    try:
-                        hbody = json.loads(hbody)
-                    except Exception:
-                        hbody = {}
-                history.append({
-                    "role": hbody.get("role", "user"),
-                    "content": hbody.get("content", ""),
-                })
-
-            turn_index = len(history_docs)
+            turn_index = session_body.get("turn_count", 0)
 
             # Signal thinking to browser
             await websocket.send_json({"type": "thinking"})
@@ -456,23 +426,27 @@ async def _handle_turn(
             )
             return
 
-    # Build graph and initial state
+    # Build graph — checkpointer restores prior turn messages automatically.
     tools = make_tools(dispatcher, context)
     lc_model = provider.get_model()
-    graph = build_graph(lc_model, tools)
-    initial_state = build_initial_state(
-        system_prompt=system_prompt,
-        history=history,
-        user_content=content,
-        session_id=session_id,
-        context=context,
-    )
+    graph = build_graph(lc_model, tools, checkpointer=chat._checkpointer)
+    graph_config = {
+        "configurable": {
+            "thread_id": session_id,
+            "system_prompt": system_prompt,
+        }
+    }
+    initial_input = {
+        "messages": [HumanMessage(content=content)],
+        "session_id": session_id,
+        "context": context,
+    }
 
     # Stream LangGraph events → WebSocket wire format
     assistant_content_parts: list[str] = []
     steps_applied = 0
 
-    async for event in graph.astream_events(initial_state, version="v2"):
+    async for event in graph.astream_events(initial_input, config=graph_config, version="v2"):
         ws_msg = _langgraph_event_to_ws(event)
         if ws_msg is None:
             continue

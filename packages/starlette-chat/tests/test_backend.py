@@ -29,7 +29,7 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from pydantic import PrivateAttr
 
 from starlette_chat.app import ChatAPI
-from starlette_chat.providers.base import BaseProvider, StreamEvent
+from starlette_chat.providers.base import BaseProvider
 from starlette_chat.tools import ToolDispatcher
 
 
@@ -81,50 +81,17 @@ class MockChatModel(BaseChatModel):
 
 
 class MockProvider(BaseProvider):
-    """Provider that emits a preset list of StreamEvents (kept for session tests).
+    """Provider wrapping a ``MockChatModel`` for use in tests.
 
-    ``get_model()`` returns a single-response ``MockChatModel`` so that the ABC
-    contract is satisfied — the model is not used in tests 1–2 (session creation
-    only).
+    ``responses`` is passed through to ``MockChatModel`` so that tests can
+    control what the model returns turn by turn.
     """
 
-    def __init__(self, events: list[StreamEvent]) -> None:
-        self._events = events
+    def __init__(self, responses: list[AIMessage] | None = None) -> None:
+        self._responses = responses or [AIMessage(content="")]
 
     def get_model(self) -> BaseChatModel:
-        return MockChatModel(responses=[AIMessage(content="")])
-
-    async def stream(
-        self,
-        messages: list[dict],
-        system_prompt: str,
-        tools: list[dict],
-        model: str,
-        temperature: float,
-        max_tokens: int,
-    ) -> AsyncIterator[StreamEvent]:
-        for event in self._events:
-            yield event
-
-
-def _token_events(text: str) -> list[StreamEvent]:
-    return [
-        StreamEvent(type="thinking", data={}),
-        StreamEvent(type="token", data={"delta": text}),
-        StreamEvent(type="done", data={}),
-    ]
-
-
-def _tool_events(tool_name: str, tool_input: dict) -> list[StreamEvent]:
-    return [
-        StreamEvent(type="thinking", data={}),
-        StreamEvent(
-            type="tool_use",
-            data={"tool": tool_name, "tool_use_id": "tu_001", "input": tool_input},
-        ),
-        StreamEvent(type="token", data={"delta": "Done."}),
-        StreamEvent(type="done", data={}),
-    ]
+        return MockChatModel(responses=self._responses)
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +143,7 @@ def chat_api() -> ChatAPI:
     return ChatAPI(
         cms_base_url=CMS_BASE,
         cms_api_key=API_KEY,
-        provider=MockProvider(_token_events("Hello!")),
+        provider=MockProvider(),
     )
 
 
@@ -263,7 +230,7 @@ async def test_create_session_no_config(chat_api: ChatAPI) -> None:
 async def test_ws_streams_tokens() -> None:
     """WS: connect, send message, receive thinking + token + done events in order."""
     model = MockChatModel(responses=[AIMessage(content="Hello there!")])
-    provider = MockProvider(_token_events("Hello there!"))
+    provider = MockProvider()
     provider.get_model = lambda: model  # type: ignore[method-assign]
     api = ChatAPI(cms_base_url=CMS_BASE, cms_api_key=API_KEY, provider=provider)
 
@@ -272,8 +239,6 @@ async def test_ws_streams_tokens() -> None:
         mock.get("/api/documents/sess-1").mock(
             return_value=httpx.Response(200, json=_session_doc("sess-1"))
         )
-        # Message history (empty)
-        mock.get("/api/documents").mock(return_value=httpx.Response(200, json=[]))
         # Persist user + assistant messages
         mock.post("/api/documents").mock(
             return_value=httpx.Response(201, json={"id": "msg-1"})
@@ -339,7 +304,7 @@ async def test_ws_edit_document_tool() -> None:
     final_msg = AIMessage(content="Done.")
 
     model = MockChatModel(responses=[tool_call_msg, final_msg])
-    provider = MockProvider(_token_events(""))
+    provider = MockProvider()
     provider.get_model = lambda: model  # type: ignore[method-assign]
     api = ChatAPI(cms_base_url=CMS_BASE, cms_api_key=API_KEY, provider=provider)
 
@@ -347,7 +312,6 @@ async def test_ws_edit_document_tool() -> None:
         mock.get("/api/documents/sess-2").mock(
             return_value=httpx.Response(200, json=_session_doc("sess-2"))
         )
-        mock.get("/api/documents").mock(return_value=httpx.Response(200, json=[]))
         mock.post("/api/documents").mock(
             return_value=httpx.Response(201, json={"id": "msg-2"})
         )

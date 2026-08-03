@@ -9,89 +9,9 @@ plus the ProseMirror collab WebSocket for edit operations.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import httpx
-
-if TYPE_CHECKING:
-    from starlette_chat.tools import ToolDispatcher
-
-
-# ---------------------------------------------------------------------------
-# Tool definitions — passed to the LLM provider
-# ---------------------------------------------------------------------------
-
-TOOL_DEFINITIONS: list[dict[str, Any]] = [
-    {
-        "name": "edit_document",
-        "description": (
-            "Apply edits to the document being edited. Write changes as Markdown — "
-            "translation to live format is automatic. Other editors see your changes "
-            "in real time."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "markdown_content": {
-                    "type": "string",
-                    "description": "Full document or changed section in Markdown",
-                },
-                "edit_rationale": {
-                    "type": "string",
-                    "description": "Brief description of what changed and why",
-                },
-                "scope": {
-                    "type": "string",
-                    "enum": ["full", "selection"],
-                    "description": (
-                        "Whether markdown_content is the full doc or just the "
-                        "selected section"
-                    ),
-                },
-            },
-            "required": ["markdown_content", "edit_rationale"],
-        },
-    },
-    {
-        "name": "search_documents",
-        "description": "Find existing documents by type or content",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "doc_type": {"type": "string"},
-                "published": {"type": "boolean"},
-                "limit": {"type": "integer", "default": 10},
-            },
-        },
-    },
-    {
-        "name": "publish_document",
-        "description": "Publish the document. This triggers a site rebuild.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"doc_id": {"type": "string"}},
-            "required": ["doc_id"],
-        },
-    },
-    {
-        "name": "get_available_doc_types",
-        "description": "List all document types and their fields",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "create_document",
-        "description": "Create a new document",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "doc_type": {"type": "string"},
-                "body": {"type": "object"},
-                "slug": {"type": "string"},
-            },
-            "required": ["doc_type", "body", "slug"],
-        },
-    },
-]
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +50,7 @@ class ToolDispatcher:
     ) -> dict[str, Any]:
         """Route a tool call to the appropriate implementation.
 
-        :param tool_name: Tool name as defined in ``TOOL_DEFINITIONS``.
+        :param tool_name: Tool name (matches a tool registered in ``make_tools``).
         :param tool_input: Tool input dict from the LLM.
         :param context: Session context — may contain ``doc_id``, ``version``,
             ``draft_body``, ``selection``.

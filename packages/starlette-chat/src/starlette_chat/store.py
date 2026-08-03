@@ -127,9 +127,11 @@ class SQLiteSessionStore:
         messages = await self.list_messages(session_id)
         history = [{"role": m["role"], "content": m["content"]} for m in messages]
 
+        from starlette_chat.providers.base import DEFAULT_MODEL
+
         return TurnContext(
             history=history,
-            model_name=session.get("model_name") or "claude-sonnet-4-5",
+            model_name=session.get("model_name") or DEFAULT_MODEL,
             system_prompt=session.get("system_prompt") or "",
             turn_index=len(messages),
         )

@@ -29,7 +29,7 @@ from starlette_chat.blocks import (
     ModelConfigBlock,
     SystemPromptBlock,
 )
-from starlette_chat.providers.base import BaseProvider, StreamEvent
+from starlette_chat.providers.base import BaseProvider
 
 __version__ = "0.1.0"
 
@@ -57,5 +57,4 @@ __all__ = [
     "SystemPromptBlock",
     "ModelConfigBlock",
     "BaseProvider",
-    "StreamEvent",
 ]
