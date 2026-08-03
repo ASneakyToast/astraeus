@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from starlette_cms.app import CMS
 
 
-def _block_schema(model: type, block_name: str) -> dict[str, Any]:
+def _block_schema(model: type, block_name: str, group: str | None = None) -> dict[str, Any]:
     """
     Return the JSON Schema for a block model, augmented with ``cms:field_meta``
     per field where present.
@@ -38,6 +38,8 @@ def _block_schema(model: type, block_name: str) -> dict[str, Any]:
     }
     if field_meta_map:
         result["field_meta"] = field_meta_map
+    if group:
+        result["group"] = group
     return result
 
 
@@ -50,7 +52,10 @@ def make_schema_routes(cms: CMS) -> list[Route]:
                 return err
 
         blocks = cms.registry.all()
-        return JSONResponse({name: _block_schema(model, name) for name, model in blocks.items()})
+        return JSONResponse({
+            name: _block_schema(model, name, cms.registry.get_registration(name).group)
+            for name, model in blocks.items()
+        })
 
     async def get_block_schema(request: Request) -> JSONResponse:
         if cms.read_auth:
