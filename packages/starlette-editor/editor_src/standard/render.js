@@ -25,7 +25,27 @@ function typeIcon(typeKey) {
 }
 
 /**
+ * Build a single sidebar type item element.
+ *
+ * @param {string} typeKey
+ * @param {function} selectType
+ * @returns {HTMLElement}
+ */
+function buildTypeItem(typeKey, selectType) {
+  return el('div', {
+    class: `sidebar-types__item${state.activeType === typeKey ? ' is-active' : ''}`,
+    onclick: () => selectType(typeKey),
+  },
+    el('span', { class: 'sidebar-types__item-icon' }, typeIcon(typeKey)),
+    el('span', {}, humanizeType(typeKey))
+  );
+}
+
+/**
  * Render the type sidebar list.
+ *
+ * Ungrouped types appear first as a flat list. Types with a `group` value are
+ * rendered under labelled `<details open>` collapsibles, one per group.
  *
  * @param {function} selectType
  */
@@ -46,15 +66,34 @@ export function renderTypeList(selectType) {
     return;
   }
 
-  for (const [typeKey] of Object.entries(state.schema)) {
-    const item = el('div', {
-      class: `sidebar-types__item${state.activeType === typeKey ? ' is-active' : ''}`,
-      onclick: () => selectType(typeKey),
-    },
-      el('span', { class: 'sidebar-types__item-icon' }, typeIcon(typeKey)),
-      el('span', {}, humanizeType(typeKey))
+  // Partition into ungrouped (render first) and by-group maps.
+  const ungrouped = [];
+  /** @type {Map<string, string[]>} group name → ordered type keys */
+  const grouped = new Map();
+
+  for (const [typeKey, typeInfo] of Object.entries(state.schema)) {
+    const group = typeInfo?.group;
+    if (!group) {
+      ungrouped.push(typeKey);
+    } else {
+      if (!grouped.has(group)) grouped.set(group, []);
+      grouped.get(group).push(typeKey);
+    }
+  }
+
+  // Render ungrouped types first
+  for (const typeKey of ungrouped) {
+    container.appendChild(buildTypeItem(typeKey, selectType));
+  }
+
+  // Render each group as a collapsible <details> section
+  for (const [groupName, typeKeys] of grouped) {
+    const items = typeKeys.map(k => buildTypeItem(k, selectType));
+    const section = el('details', { class: 'sidebar-types__group', open: true },
+      el('summary', { class: 'sidebar-types__group-label' }, groupName),
+      ...items
     );
-    container.appendChild(item);
+    container.appendChild(section);
   }
 }
 

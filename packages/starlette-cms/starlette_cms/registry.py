@@ -22,11 +22,12 @@ class BlockRegistration:
     """Metadata stored alongside each registered block model."""
 
     model: type
-    singleton: bool = field(default=False)
     append_only: bool = field(default=False)
+    group: str | None = field(default=None)
+    singleton: bool = field(default=False)
 
 
-def block(name: str, *, singleton: bool = False, append_only: bool = False):
+def block(name: str, *, singleton: bool = False, append_only: bool = False, group: str | None = None):
     """
     Standalone block decorator. Marks a class as a block definition without
     registering it anywhere. Registration is always explicit::
@@ -50,12 +51,20 @@ def block(name: str, *, singleton: bool = False, append_only: bool = False):
         @block("job_audit", append_only=True)
         class JobAudit:
             job_id: str = TextField(required=True)
+
+    Pass ``group`` to organise this block under a named section in the editor
+    sidebar::
+
+        @block("chat_session", group="Chat")
+        class ChatSession:
+            ...
     """
 
     def decorator(cls: type[T]) -> type[T]:
         cls.__block_type__ = name  # type: ignore[attr-defined]
         cls.__singleton__ = singleton  # type: ignore[attr-defined]
         cls.__append_only__ = append_only  # type: ignore[attr-defined]
+        cls.__block_group__ = group  # type: ignore[attr-defined]
         return cls
 
     return decorator
@@ -78,6 +87,7 @@ class BlockRegistry:
         override: bool = False,
         singleton: bool = False,
         append_only: bool = False,
+        group: str | None = None,
     ) -> None:
         """Register a single block class, converting it to a Pydantic model if needed."""
         name = getattr(block_cls, "__block_type__", None)
@@ -91,12 +101,15 @@ class BlockRegistry:
                 f"Use override=True to replace it explicitly."
             )
         # Keyword args to register_block() take precedence; fall back to class attributes
-        # set by the @block() decorator, then default False.
+        # set by the @block() decorator, then default False/None.
         cls_singleton = getattr(block_cls, "__singleton__", False)
         effective_singleton = singleton or cls_singleton
 
         cls_append_only = getattr(block_cls, "__append_only__", False)
         effective_append_only = append_only or cls_append_only
+
+        cls_group = getattr(block_cls, "__block_group__", None)
+        effective_group = group or cls_group
 
         # Convert to Pydantic model if not already one
         import pydantic
@@ -107,6 +120,7 @@ class BlockRegistry:
             model=block_cls,
             singleton=effective_singleton,
             append_only=effective_append_only,
+            group=effective_group,
         )
 
     def register_blocks(self, block_classes: list[type], *, override: bool = False) -> None:
@@ -131,6 +145,12 @@ class BlockRegistry:
         if name not in self._blocks:
             raise BlockNotFound(f'Block type "{name}" is not registered.')
         return self._blocks[name].append_only
+
+    def get_registration(self, name: str) -> BlockRegistration:
+        """Return the full BlockRegistration for a given type name."""
+        if name not in self._blocks:
+            raise BlockNotFound(f'Block type "{name}" is not registered.')
+        return self._blocks[name]
 
     def all(self) -> dict[str, type]:
         """Return all registered block types (as model classes)."""

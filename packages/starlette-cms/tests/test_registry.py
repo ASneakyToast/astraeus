@@ -214,3 +214,51 @@ def test_is_singleton_raises_for_unknown_block():
     registry = BlockRegistry()
     with pytest.raises(BlockNotFound):
         registry.is_singleton("nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# Group flag
+# ---------------------------------------------------------------------------
+
+
+def test_group_flag_stored():
+    """get_registration().group returns the group name set via @block()."""
+    registry = BlockRegistry()
+
+    @block("chat_msg", group="Chat")
+    class ChatMsg:
+        content: str = TextField(required=True)
+
+    registry.register_block(ChatMsg)
+    assert registry.get_registration("chat_msg").group == "Chat"
+
+
+def test_group_none_by_default():
+    """get_registration().group is None when no group is specified."""
+    registry = BlockRegistry()
+
+    @block("plain_block")
+    class PlainBlock:
+        title: str = TextField(required=True)
+
+    registry.register_block(PlainBlock)
+    assert registry.get_registration("plain_block").group is None
+
+
+def test_group_via_register_block_kwarg():
+    """group can be passed directly to register_block(), overriding the decorator."""
+    registry = BlockRegistry()
+
+    @block("override_group_block")
+    class OverrideGroupBlock:
+        title: str = TextField(required=True)
+
+    registry.register_block(OverrideGroupBlock, group="Admin")
+    assert registry.get_registration("override_group_block").group == "Admin"
+
+
+def test_get_registration_raises_for_unknown_block():
+    """get_registration() raises BlockNotFound for unregistered types."""
+    registry = BlockRegistry()
+    with pytest.raises(BlockNotFound):
+        registry.get_registration("nonexistent")

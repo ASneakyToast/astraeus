@@ -22,7 +22,7 @@ from starlette_cms.registry import block
 _PERSONA_CHOICES = ["default", "support", "coding", "creative"]
 
 
-@block("chat_session")
+@block("chat_session", group="Chat")
 class ChatSessionBlock:
     """Mutable conversation session — title and summary can be updated."""
 
@@ -37,7 +37,7 @@ class ChatSessionBlock:
     turn_count: int = NumberField(default=0)
 
 
-@block("chat_message", append_only=True)
+@block("chat_message", append_only=True, group="Chat")
 class ChatMessageBlock:
     """Immutable audit record — written once, never modified."""
 
@@ -56,7 +56,7 @@ class ChatMessageBlock:
     steps_applied: int = NumberField(required=False)
 
 
-@block("system_prompt")
+@block("system_prompt", group="Chat")
 class SystemPromptBlock:
     """Versioned system prompt.  Multiple personas are supported."""
 
@@ -67,7 +67,7 @@ class SystemPromptBlock:
     version_notes: str = TextField(required=False)
 
 
-@block("model_config")
+@block("model_config", group="Chat")
 class ModelConfigBlock:
     """Versioned model configuration.  Multiple personas are supported."""
 
