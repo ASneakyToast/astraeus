@@ -34,8 +34,50 @@ from httpx import ASGITransport
 
 from starlette_cms import CMS
 
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from pydantic import PrivateAttr
+
 from starlette_chat import ChatAPI, register_blocks
 from starlette_chat.providers.base import BaseProvider, StreamEvent
+
+
+# ---------------------------------------------------------------------------
+# Minimal LangChain model stub
+# ---------------------------------------------------------------------------
+
+
+class _MockChatModel(BaseChatModel):
+    """Single-response BaseChatModel for integration tests."""
+
+    response: str = "Hello from the AI."
+    _called: bool = PrivateAttr(default=False)
+
+    @property
+    def _llm_type(self) -> str:
+        return "mock"
+
+    def bind_tools(self, tools: list, **kwargs: Any) -> _MockChatModel:
+        return self
+
+    def _generate(
+        self,
+        messages: list,
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=self.response))])
+
+    async def _astream(
+        self,
+        messages: list,
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ):
+        yield ChatGenerationChunk(message=AIMessageChunk(content=self.response))
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +90,9 @@ class _MockProvider(BaseProvider):
 
     def __init__(self, response: str = "Hello from the AI.") -> None:
         self._response = response
+
+    def get_model(self) -> BaseChatModel:
+        return _MockChatModel(response=self._response)
 
     async def stream(
         self,

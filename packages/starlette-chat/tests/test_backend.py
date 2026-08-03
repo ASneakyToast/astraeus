@@ -23,6 +23,10 @@ import pytest
 import pytest_asyncio
 import respx
 from httpx import ASGITransport
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from pydantic import PrivateAttr
 
 from starlette_chat.app import ChatAPI
 from starlette_chat.providers.base import BaseProvider, StreamEvent
@@ -34,11 +38,61 @@ from starlette_chat.tools import ToolDispatcher
 # ---------------------------------------------------------------------------
 
 
+class MockChatModel(BaseChatModel):
+    """BaseChatModel returning preset AIMessage responses in call order."""
+
+    responses: list[AIMessage]
+    _call_idx: int = PrivateAttr(default=0)
+
+    @property
+    def _llm_type(self) -> str:
+        return "mock"
+
+    def bind_tools(self, tools: list, **kwargs: Any) -> MockChatModel:
+        """No-op tool binding — MockChatModel ignores bound tools."""
+        return self
+
+    def _generate(
+        self,
+        messages: list,
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        msg = self.responses[self._call_idx]
+        self._call_idx += 1
+        return ChatResult(generations=[ChatGeneration(message=msg)])
+
+    async def _astream(
+        self,
+        messages: list,
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ):
+        """Yield the next preset response as a single chunk for streaming."""
+        msg = self.responses[self._call_idx]
+        self._call_idx += 1
+        chunk = AIMessageChunk(
+            content=msg.content if isinstance(msg.content, str) else "",
+            tool_calls=getattr(msg, "tool_calls", []),
+        )
+        yield ChatGenerationChunk(message=chunk)
+
+
 class MockProvider(BaseProvider):
-    """Provider that emits a preset list of StreamEvents."""
+    """Provider that emits a preset list of StreamEvents (kept for session tests).
+
+    ``get_model()`` returns a single-response ``MockChatModel`` so that the ABC
+    contract is satisfied — the model is not used in tests 1–2 (session creation
+    only).
+    """
 
     def __init__(self, events: list[StreamEvent]) -> None:
         self._events = events
+
+    def get_model(self) -> BaseChatModel:
+        return MockChatModel(responses=[AIMessage(content="")])
 
     async def stream(
         self,
@@ -208,7 +262,9 @@ async def test_create_session_no_config(chat_api: ChatAPI) -> None:
 @pytest.mark.asyncio
 async def test_ws_streams_tokens() -> None:
     """WS: connect, send message, receive thinking + token + done events in order."""
+    model = MockChatModel(responses=[AIMessage(content="Hello there!")])
     provider = MockProvider(_token_events("Hello there!"))
+    provider.get_model = lambda: model  # type: ignore[method-assign]
     api = ChatAPI(cms_base_url=CMS_BASE, cms_api_key=API_KEY, provider=provider)
 
     with respx.mock(base_url=CMS_BASE) as mock:
@@ -261,13 +317,30 @@ async def test_ws_streams_tokens() -> None:
 
 @pytest.mark.asyncio
 async def test_ws_edit_document_tool() -> None:
-    """WS: provider emits tool_use(edit_document) → applying_edits event sent to browser."""
-    tool_input = {
-        "markdown_content": "# Hello\n\nWorld.",
-        "edit_rationale": "test edit",
-        "doc_id": "doc-999",
-    }
-    provider = MockProvider(_tool_events("edit_document", tool_input))
+    """WS: LangGraph calls edit_document tool → applying_edits event sent to browser."""
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import tool as lc_tool
+
+    # AIMessage with a tool_call so the graph routes to the tools node
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "edit_document",
+            "args": {
+                "markdown_content": "# Hello\n\nWorld.",
+                "edit_rationale": "test edit",
+                "scope": "full",
+            },
+            "id": "tc_001",
+            "type": "tool_call",
+        }],
+    )
+    # Second LLM response: plain text after tool result
+    final_msg = AIMessage(content="Done.")
+
+    model = MockChatModel(responses=[tool_call_msg, final_msg])
+    provider = MockProvider(_token_events(""))
+    provider.get_model = lambda: model  # type: ignore[method-assign]
     api = ChatAPI(cms_base_url=CMS_BASE, cms_api_key=API_KEY, provider=provider)
 
     with respx.mock(base_url=CMS_BASE) as mock:

@@ -31,9 +31,12 @@ Usage with the OpenAI API::
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from starlette_chat.providers.base import BaseProvider, StreamEvent
+
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
 
 # Models known to support tool calling reliably with local LM Studio installs.
 # This is purely informational — any model string is accepted.
@@ -103,6 +106,16 @@ class OpenAICompatibleProvider(BaseProvider):
             )
         """
         return cls(api_key="lm-studio", base_url=base_url, default_model=model)
+
+    def get_model(self) -> BaseChatModel:
+        """Return a LangChain ChatOpenAI instance for this provider."""
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            api_key=self._client.api_key,
+            base_url=str(self._client.base_url),
+            model=self._default_model,
+        )
 
     async def stream(
         self,

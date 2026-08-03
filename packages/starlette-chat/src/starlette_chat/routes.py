@@ -18,9 +18,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket
 
+from .graph import build_graph, build_initial_state
 from .session import generate_session_slug
-from .streaming import event_to_dict
-from .tools import TOOL_DEFINITIONS, ToolDispatcher
+from .tools import ToolDispatcher, make_tools
 
 if TYPE_CHECKING:
     from .app import ChatAPI
@@ -271,11 +271,9 @@ async def _handle_turn(
     headers: dict[str, str],
     dispatcher: ToolDispatcher,
 ) -> None:
-    """Process a single conversation turn."""
+    """Process a single conversation turn via the LangGraph ReAct loop."""
     system_prompt = ""
-    model = "claude-sonnet-4-5"
-    temperature: float = 1.0
-    max_tokens: int = 4096
+    model_name = "claude-sonnet-4-5"
 
     async with httpx.AsyncClient() as client:
         # Load session document
@@ -313,7 +311,7 @@ async def _handle_turn(
                         sp_body = {}
                 system_prompt = sp_body.get("content", "")
 
-        # Load model config
+        # Load model config (model_name only — temperature/max_tokens handled by LangGraph)
         mc_ref = session_body.get("model_config_ref")
         if mc_ref:
             mc_resp = await client.get(
@@ -327,9 +325,7 @@ async def _handle_turn(
                         mc_body = json.loads(mc_body)
                     except Exception:
                         mc_body = {}
-                model = mc_body.get("model_name", model)
-                temperature = mc_body.get("temperature", temperature)
-                max_tokens = mc_body.get("max_tokens", max_tokens)
+                model_name = mc_body.get("model_name", model_name)
 
         # Load message history
         msgs_resp = await client.get(
@@ -349,8 +345,8 @@ async def _handle_turn(
             else:
                 history_docs = raw.get("items", raw.get("documents", []))
 
-        # Build messages list
-        messages: list[dict[str, Any]] = []
+        # Build history as plain dicts for build_initial_state
+        history: list[dict[str, Any]] = []
         for hdoc in history_docs:
             hbody = hdoc.get("body") or {}
             if isinstance(hbody, str):
@@ -358,19 +354,18 @@ async def _handle_turn(
                     hbody = json.loads(hbody)
                 except Exception:
                     hbody = {}
-            role = hbody.get("role", "user")
-            msg_content = hbody.get("content", "")
-            messages.append({"role": role, "content": msg_content})
+            history.append({
+                "role": hbody.get("role", "user"),
+                "content": hbody.get("content", ""),
+            })
 
-        # Append new user message
         turn_index = len(history_docs)
-        messages.append({"role": "user", "content": content})
 
         # Signal thinking to browser
         await websocket.send_json({"type": "thinking"})
 
         # Persist user ChatMessage
-        user_msg_resp = await client.post(
+        await client.post(
             f"{chat._cms_base}/api/documents",
             json={
                 "doc_type": "chat_message",
@@ -390,7 +385,7 @@ async def _handle_turn(
             headers=headers,
         )
 
-    # Determine provider
+    # Resolve provider
     provider = chat._provider
     if provider is None:
         try:
@@ -406,47 +401,47 @@ async def _handle_turn(
             )
             return
 
-    # Stream from provider and forward events
+    # Build graph and initial state
+    tools = make_tools(dispatcher, context)
+    lc_model = provider.get_model()
+    graph = build_graph(lc_model, tools)
+    initial_state = build_initial_state(
+        system_prompt=system_prompt,
+        history=history,
+        user_content=content,
+        session_id=session_id,
+        context=context,
+    )
+
+    # Stream LangGraph events → WebSocket wire format
     assistant_content_parts: list[str] = []
     steps_applied = 0
 
-    async for event in await _aiter_stream(
-        provider, messages, system_prompt, TOOL_DEFINITIONS, model, temperature, max_tokens
-    ):
-        event_dict = event_to_dict(event)
-        await websocket.send_json(event_dict)
+    async for event in graph.astream_events(initial_state, version="v2"):
+        ws_msg = _langgraph_event_to_ws(event)
+        if ws_msg is None:
+            continue
 
-        if event.type == "token":
-            assistant_content_parts.append(event.data.get("delta", ""))
+        if ws_msg["type"] == "token":
+            assistant_content_parts.append(ws_msg.get("delta", ""))
+            await websocket.send_json(ws_msg)
 
-        elif event.type == "tool_use":
-            tool_name = event.data.get("tool", "")
-            tool_input = event.data.get("input", {})
-            # Inject doc_id from context if missing
-            if "doc_id" not in tool_input and context.get("doc_id"):
-                tool_input = dict(tool_input)
-                tool_input["doc_id"] = context["doc_id"]
+        elif ws_msg["type"] == "tool_result":
+            # Strip internal sentinel keys before forwarding to browser
+            edit_steps = ws_msg.pop("_edit_steps", None)
+            edit_doc_id = ws_msg.pop("_edit_doc_id", None)
+            await websocket.send_json(ws_msg)
+            # Emit applying_edits separately so chat-panel.js can animate it
+            if edit_steps is not None:
+                steps_applied = edit_steps
+                await websocket.send_json({
+                    "type": "applying_edits",
+                    "doc_id": edit_doc_id or "",
+                    "step_count": edit_steps,
+                })
 
-            result = await dispatcher.dispatch(tool_name, tool_input, context)
-
-            # Send tool result to browser
-            await websocket.send_json(
-                {
-                    "type": "tool_result",
-                    "tool": tool_name,
-                    "summary": _summarise_tool_result(result),
-                    "result": result,
-                }
-            )
-            # Send "applying_edits" when edit_document is called
-            if tool_name == "edit_document":
-                await websocket.send_json(
-                    {"type": "applying_edits", "doc_id": tool_input.get("doc_id", "")}
-                )
-                steps_applied = result.get("step_count", 0)
-
-        elif event.type == "done":
-            break
+        else:
+            await websocket.send_json(ws_msg)
 
     # Persist assistant ChatMessage
     assistant_content = "".join(assistant_content_parts)
@@ -462,7 +457,7 @@ async def _handle_turn(
                     "role": "assistant",
                     "content": assistant_content,
                     "turn_index": assistant_turn_index,
-                    "model_used": model,
+                    "model_used": model_name,
                     "steps_applied": steps_applied,
                 },
             },
@@ -472,19 +467,75 @@ async def _handle_turn(
         if assistant_msg_resp.status_code in (200, 201):
             assistant_msg_id = assistant_msg_resp.json().get("id")
 
-    await websocket.send_json(
-        {"type": "done", "message_id": assistant_msg_id}
-    )
+    await websocket.send_json({"type": "done", "message_id": assistant_msg_id})
 
 
-async def _aiter_stream(provider, messages, system_prompt, tools, model, temperature, max_tokens):
-    """Normalise provider.stream() — supports both coroutine and async generator returns."""
-    result = provider.stream(messages, system_prompt, tools, model, temperature, max_tokens)
-    # If the provider returns a coroutine (async def ... -> AsyncIterator), await it first
-    import inspect
-    if inspect.iscoroutine(result):
-        result = await result
-    return result
+def _langgraph_event_to_ws(event: dict[str, Any]) -> dict[str, Any] | None:
+    """Map a LangGraph astream_events v2 event to a WebSocket wire message.
+
+    Returns ``None`` for events that don't produce a WebSocket message.
+    The returned dict is sent directly via ``websocket.send_json()``.
+    """
+    kind = event.get("event", "")
+    name = event.get("name", "")
+
+    # Streaming text tokens from the LLM
+    if kind == "on_chat_model_stream":
+        chunk = event.get("data", {}).get("chunk")
+        if chunk is None:
+            return None
+        # AIMessageChunk — extract text delta
+        delta = ""
+        if hasattr(chunk, "content"):
+            c = chunk.content
+            if isinstance(c, str):
+                delta = c
+            elif isinstance(c, list):
+                # Anthropic-style content blocks: [{"type": "text", "text": "..."}]
+                for block in c:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        delta += block.get("text", "")
+        if not delta:
+            return None
+        return {"type": "token", "delta": delta}
+
+    # Tool invocation starting
+    if kind == "on_tool_start":
+        tool_input = event.get("data", {}).get("input", {})
+        return {"type": "tool_use", "tool": name, "input": tool_input}
+
+    # Tool invocation completed
+    if kind == "on_tool_end":
+        output = event.get("data", {}).get("output", {})
+        # output may be a ToolMessage or a plain dict
+        result: dict[str, Any] = {}
+        if hasattr(output, "content"):
+            import ast
+            try:
+                result = ast.literal_eval(output.content) if isinstance(output.content, str) else {}
+            except Exception:
+                result = {}
+        elif isinstance(output, dict):
+            result = output
+
+        ws_msg: dict[str, Any] = {
+            "type": "tool_result",
+            "tool": name,
+            "summary": _summarise_tool_result(result),
+            "result": result,
+        }
+
+        # Extra "applying_edits" event when edit_document ran
+        if name == "edit_document" and result.get("status") == "accepted":
+            # Caller inspects applying_edits to track steps_applied; we return
+            # tool_result here and the caller emits applying_edits separately
+            # after this function returns. Use a sentinel key to signal it.
+            ws_msg["_edit_steps"] = result.get("step_count", 0)
+            ws_msg["_edit_doc_id"] = result.get("doc_id", "")
+
+        return ws_msg
+
+    return None
 
 
 def _summarise_tool_result(result: dict[str, Any]) -> str:

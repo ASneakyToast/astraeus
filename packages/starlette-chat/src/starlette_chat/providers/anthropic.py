@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from starlette_chat.providers.base import BaseProvider, StreamEvent
+
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
 
 
 class AnthropicProvider(BaseProvider):
@@ -20,9 +23,15 @@ class AnthropicProvider(BaseProvider):
 
     :param api_key: Anthropic API key.  Falls back to the ``ANTHROPIC_API_KEY``
         environment variable when ``None``.
+    :param default_model: Default model identifier. Falls back to
+        ``claude-sonnet-4-5`` when ``None``.
     """
 
-    def __init__(self, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        default_model: str = "claude-sonnet-4-5",
+    ) -> None:
         try:
             import anthropic as _anthropic
 
@@ -31,6 +40,17 @@ class AnthropicProvider(BaseProvider):
             raise ImportError(
                 "Install starlette-chat[anthropic] to use AnthropicProvider"
             ) from exc
+        self._api_key = api_key
+        self._default_model = default_model
+
+    def get_model(self) -> BaseChatModel:
+        """Return a LangChain ChatAnthropic instance for this provider."""
+        from langchain_anthropic import ChatAnthropic
+
+        return ChatAnthropic(
+            api_key=self._api_key,
+            model=self._default_model,
+        )
 
     async def stream(
         self,

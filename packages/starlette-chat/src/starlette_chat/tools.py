@@ -9,9 +9,12 @@ plus the ProseMirror collab WebSocket for edit operations.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from starlette_chat.tools import ToolDispatcher
 
 
 # ---------------------------------------------------------------------------
@@ -375,3 +378,83 @@ class ToolDispatcher:
             if resp.status_code in (200, 201):
                 return {"status": "ok", "result": resp.json()}
             return {"status": "error", "message": resp.text}
+
+
+# ---------------------------------------------------------------------------
+# LangChain tool factory
+# ---------------------------------------------------------------------------
+
+
+def make_tools(dispatcher: ToolDispatcher, context: dict[str, Any]) -> list:
+    """Return a list of LangChain tools backed by *dispatcher*.
+
+    Each tool closes over *context* (the session's ``doc_id``, ``version``,
+    ``draft_body``, etc.) so callers don't need to thread it through every
+    call.  The underlying :class:`ToolDispatcher` methods are unchanged.
+
+    :param dispatcher: Configured dispatcher for this session.
+    :param context: Session context dict forwarded to each dispatcher call.
+    :returns: List of LangChain ``BaseTool`` instances ready for
+        ``model.bind_tools()``.
+    """
+    from langchain_core.tools import tool as lc_tool
+
+    @lc_tool
+    async def edit_document(
+        markdown_content: str,
+        edit_rationale: str,
+        scope: str = "full",
+    ) -> dict:
+        """Apply edits to the document being edited. Write changes as Markdown."""
+        return await dispatcher.dispatch(
+            "edit_document",
+            {
+                "markdown_content": markdown_content,
+                "edit_rationale": edit_rationale,
+                "scope": scope,
+            },
+            context,
+        )
+
+    @lc_tool
+    async def search_documents(
+        doc_type: str = "",
+        published: bool | None = None,
+        limit: int = 10,
+    ) -> dict:
+        """Find existing CMS documents by type or content."""
+        tool_input: dict[str, Any] = {"limit": limit}
+        if doc_type:
+            tool_input["doc_type"] = doc_type
+        if published is not None:
+            tool_input["published"] = published
+        return await dispatcher.dispatch("search_documents", tool_input, context)
+
+    @lc_tool
+    async def publish_document(doc_id: str) -> dict:
+        """Publish a document. This triggers a site rebuild."""
+        return await dispatcher.dispatch(
+            "publish_document", {"doc_id": doc_id}, context
+        )
+
+    @lc_tool
+    async def get_available_doc_types() -> dict:
+        """List all CMS document types and their fields."""
+        return await dispatcher.dispatch("get_available_doc_types", {}, context)
+
+    @lc_tool
+    async def create_document(doc_type: str, body: dict, slug: str) -> dict:
+        """Create a new CMS document."""
+        return await dispatcher.dispatch(
+            "create_document",
+            {"doc_type": doc_type, "body": body, "slug": slug},
+            context,
+        )
+
+    return [
+        edit_document,
+        search_documents,
+        publish_document,
+        get_available_doc_types,
+        create_document,
+    ]

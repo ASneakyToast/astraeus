@@ -3,7 +3,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
 
 
 @dataclass
@@ -23,3 +26,12 @@ class BaseProvider(ABC):
         temperature: float,
         max_tokens: int,
     ) -> AsyncIterator[StreamEvent]: ...
+
+    @abstractmethod
+    def get_model(self) -> BaseChatModel:
+        """Return a LangChain BaseChatModel instance for this provider.
+
+        Used by the LangGraph agent loop in routes.py. The model is constructed
+        with credentials and defaults from this provider's configuration.
+        """
+        ...
