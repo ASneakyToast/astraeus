@@ -21,7 +21,7 @@ import { Step } from 'prosemirror-transform'
 export { collab }
 
 export class CollabConnection {
-  constructor({ view, schema, documentId, cmsBase, initialVersion, toolbar, clientID }) {
+  constructor({ view, schema, documentId, cmsBase, initialVersion, toolbar, clientID, apiKey = null }) {
     this.view = view              // EditorView instance
     this.schema = schema          // ProseMirror Schema
     this.documentId = documentId
@@ -29,6 +29,7 @@ export class CollabConnection {
     this.version = initialVersion
     this.toolbar = toolbar
     this.clientID = clientID      // UUID identifying this client
+    this.apiKey = apiKey          // optional API key for shell (cookie auth not available)
     this.ws = null
     this._reconnectDelay = 1000   // ms, doubles on each failure (max 30000)
     this._destroyed = false
@@ -62,7 +63,8 @@ export class CollabConnection {
   _wsUrl() {
     // Convert https://cms.example.com → wss://cms.example.com
     const base = this.cmsBase.replace(/^https?/, match => match === 'https' ? 'wss' : 'ws')
-    return `${base}/api/documents/${this.documentId}/collab`
+    const url = `${base}/api/documents/${this.documentId}/collab`
+    return this.apiKey ? `${url}?api_key=${this.apiKey}` : url
   }
 
   _connect() {

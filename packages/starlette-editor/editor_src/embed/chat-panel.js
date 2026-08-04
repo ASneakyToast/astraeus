@@ -137,7 +137,7 @@ export class ChatPanel {
       this._ws.send(JSON.stringify({
         type: 'message',
         content,
-        context: this._getDocContext?.() ?? null,
+        context: this._getDocContext?.() ?? {},
       }))
     }
     // Clear textarea (spec step 6 — also clears when called directly, not just from _sendFromInput)
@@ -151,49 +151,62 @@ export class ChatPanel {
 
   /** Lazy session initialisation — POST /api/chat/sessions then open WS. */
   async _ensureSession() {
-    if (this._sessionId) return
-    const res = await fetch(`${this._base}/api/chat/sessions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...this._authHeaders() },
-      body: JSON.stringify({
-        persona: 'default',
-        doc_id: this._getDocContext?.()?.doc_id ?? null,
-      }),
-    })
-    const { session_id } = await res.json()
-    this._sessionId = session_id
-    this._initWs(session_id)
+    // Already have an open connection — nothing to do
+    if (this._ws && this._ws.readyState === WebSocket.OPEN) return
+
+    // If we have a session ID but the WS dropped, reconnect to the same session
+    if (!this._sessionId) {
+      const res = await fetch(`${this._base}/api/chat/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this._authHeaders() },
+        body: JSON.stringify({
+          persona: 'default',
+          doc_id: this._getDocContext?.()?.doc_id ?? null,
+        }),
+      })
+      const { session_id } = await res.json()
+      this._sessionId = session_id
+    }
+
+    await this._initWs(this._sessionId)
   }
 
   /**
-   * Open the chat WebSocket. Called once per session.
-   * On close: sets this._ws = null so next send triggers a reconnect via _ensureSession.
+   * Open the chat WebSocket and wait for it to be ready.
+   * Returns a Promise that resolves when the connection is open.
+   * On close: sets this._ws = null so next send reconnects via _ensureSession.
    * @param {string} sessionId
+   * @returns {Promise<void>}
    */
   _initWs(sessionId) {
-    const wsBase = this._base.replace(/^https?/, match => match === 'https' ? 'wss' : 'ws')
-    const url = this._apiKey
-      ? `${wsBase}/api/chat/sessions/${sessionId}/ws?api_key=${this._apiKey}`
-      : `${wsBase}/api/chat/sessions/${sessionId}/ws`
+    return new Promise((resolve, reject) => {
+      const wsBase = this._base.replace(/^https?/, match => match === 'https' ? 'wss' : 'ws')
+      const url = this._apiKey
+        ? `${wsBase}/api/chat/sessions/${sessionId}/ws?api_key=${this._apiKey}`
+        : `${wsBase}/api/chat/sessions/${sessionId}/ws`
 
-    this._ws = new WebSocket(url)
+      this._ws = new WebSocket(url)
 
-    this._ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data)
-        this._onServerMessage(msg)
-      } catch {
-        // Ignore malformed messages
+      this._ws.onopen = () => resolve()
+
+      this._ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+          this._onServerMessage(msg)
+        } catch {
+          // Ignore malformed messages
+        }
       }
-    }
 
-    this._ws.onclose = () => {
-      this._ws = null
-    }
+      this._ws.onclose = () => {
+        this._ws = null
+      }
 
-    this._ws.onerror = () => {
-      if (this._ws) this._ws.close()
-    }
+      this._ws.onerror = () => {
+        if (this._ws) this._ws.close()
+        reject(new Error('WebSocket connection failed'))
+      }
+    })
   }
 
   /**
