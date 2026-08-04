@@ -11,6 +11,7 @@ import {
   publishDocument,
   unpublishDocument,
   deleteDocument,
+  addDocToChangeset,
 } from '../api.js'
 import { showToast } from '../components/toast.js'
 import { showConfirm } from '../components/confirm.js'
@@ -125,9 +126,11 @@ export async function saveDocument() {
   const slug = __slug || '';
 
   // Flush PM editor content to bodyFields before saving.
-  // RichTextField fields store PM JSON; legacy markdown fields serialise to markdown.
+  // RichTextField fields with an active collab connection are already persisted via WS
+  // steps — skip them here so stale in-memory state doesn't overwrite the server doc.
   for (const [name, view] of Object.entries(state.pmInstances)) {
     const fieldMeta = (state.schema?.[state.activeType]?.field_meta || {})[name] || {};
+    if (fieldMeta.field_type === 'rich_text' && state.collabConnections[name]) continue
     bodyFields[name] = fieldMeta.field_type === 'rich_text'
       ? view.state.doc.toJSON()
       : pmDocToMarkdown(view.state.doc);
@@ -154,6 +157,15 @@ export async function saveDocument() {
     });
 
     showToast('success', 'Saved', docTitle(savedDoc));
+
+    // Auto-link to active changeset
+    if (state.activeChangesetId) {
+      try {
+        await addDocToChangeset(state.activeChangesetId, savedDoc.id);
+      } catch (_err) {
+        showToast('error', 'Could not link to changeset', _err.message);
+      }
+    }
   } catch (err) {
     setState({ isSaving: false });
     showToast('error', 'Save failed', err.message);

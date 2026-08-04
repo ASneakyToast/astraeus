@@ -14,6 +14,9 @@
 import { state, setState, setRenderFn } from './state.js'
 import { fetchSchema } from './api.js'
 import { showToast } from './components/toast.js'
+import { ChatPanel } from './embed/chat-panel.js'
+import { ShellChangesetPanel } from './standard/changeset-panel-shell.js'
+import { getActiveChangesetId } from './changeset-store.js'
 import {
   renderTypeList,
   renderDocList,
@@ -135,6 +138,36 @@ async function boot() {
     showToast('error', 'Failed to load schema', err.message);
     render();
   }
+
+  // Mount ChatPanel — reads config from __EDITOR_CONFIG__ injected by the shell template.
+  // cmsBase is "" when the shell is served same-origin (routes.py injects "" for relative
+  // API calls). Resolve to origin so ChatPanel can build absolute URLs for the chat API.
+  // ChatAPI is mounted at /chat, so chatBase = resolvedBase + '/chat'.
+  const cfg = window.__EDITOR_CONFIG__ || {}
+  const resolvedCmsBase = cfg.cmsBase || window.location.origin
+  const chatPanel = new ChatPanel(resolvedCmsBase + '/chat', null, {
+    apiKey: cfg.apiKey || null,
+    getDocContext: () => {
+      if (!state.activeDocId) return null
+      // Use the first collab connection for version/draft_body if available
+      const conn = Object.values(state.collabConnections)[0] || null
+      return {
+        doc_id: state.activeDocId,
+        version: conn?.currentVersion?.() ?? 0,
+        draft_body: conn?.currentDoc?.() ?? null,
+        selection: conn?.currentSelection?.() ?? null,
+        active_changeset_id: state.activeChangesetId ?? null,
+      }
+    },
+  })
+  chatPanel.mount()
+  setState({ chatPanel }, false)  // store without re-render (header re-renders on doc select)
+
+  // Mount ChangesetPanel
+  const changesetPanel = new ShellChangesetPanel()
+  changesetPanel.mount()
+  const initialCsId = getActiveChangesetId()
+  setState({ changesetPanel, activeChangesetId: initialCsId }, false)
 }
 
 // Start when the DOM is ready

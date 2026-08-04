@@ -30,6 +30,10 @@ export const state = {
   isLoadingDoc: false,
   isSaving: false,
   pmInstances: {},        // { fieldName: ProseMirrorView } — keyed by field name
+  collabConnections: {}, // { fieldName: CollabConnection } — mirrors pmInstances
+  activeChangesetId: null, // string id of the active changeset, or null
+  chatPanel: null,        // ChatPanel instance once mounted
+  changesetPanel: null,   // ShellChangesetPanel instance once mounted
 };
 
 /**

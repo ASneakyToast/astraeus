@@ -10,6 +10,12 @@
  *   panel.toggle()
  */
 
+import {
+  getActiveChangesetId,
+  setActiveChangesetId,
+  onActiveChangesetChange,
+} from '../changeset-store.js'
+
 const PANEL_STYLES = `
   position: fixed;
   bottom: 24px;
@@ -68,6 +74,12 @@ export class ChangesetPanel {
     this.dirtyDocs = []
     /** @type {Array<{id: string, title: string, status: string, document_count: number}>} */
     this.openChangesets = []
+    this.activeChangesetId = getActiveChangesetId()
+
+    onActiveChangesetChange((newId) => {
+      this.activeChangesetId = newId
+      if (this.visible) this._render()
+    })
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -227,15 +239,31 @@ export class ChangesetPanel {
       this.el.appendChild(empty)
     } else {
       this.openChangesets.forEach(cs => {
+        const isActive = cs.id === this.activeChangesetId
         const row = document.createElement('div')
-        row.style.cssText = `${ITEM_STYLES} flex-wrap: wrap; gap: 6px;`
+        row.style.cssText = `${ITEM_STYLES} flex-wrap: wrap; gap: 6px;${isActive ? ' background: #181825;' : ''}`
 
         const csLabel = document.createElement('span')
-        csLabel.style.cssText = 'flex: 1 1 100%; color: #cdd6f4;'
-        csLabel.textContent = `○ "${cs.title || 'Untitled'}" (${cs.document_count ?? 0} docs)`
+        csLabel.style.cssText = `flex: 1 1 100%; color: ${isActive ? '#a6e3a1' : '#cdd6f4'};`
+        csLabel.textContent = `${isActive ? '● ' : '○ '}"${cs.title || 'Untitled'}" (${cs.document_count ?? 0} docs)`
 
         const btnRow = document.createElement('div')
         btnRow.style.cssText = 'display: flex; gap: 6px; flex-wrap: wrap;'
+
+        const activeBtn = document.createElement('button')
+        if (isActive) {
+          activeBtn.style.cssText = `${BTN_BASE} background: #a6e3a1; color: #1e1e2e; opacity: 0.7;`
+          activeBtn.textContent = 'Active'
+          activeBtn.disabled = true
+        } else {
+          activeBtn.style.cssText = `${BTN_BASE} background: #313244; color: #cdd6f4;`
+          activeBtn.textContent = 'Set active'
+          activeBtn.addEventListener('click', () => {
+            setActiveChangesetId(cs.id)
+            this.activeChangesetId = cs.id
+            this._render()
+          })
+        }
 
         const publishBtn = document.createElement('button')
         publishBtn.style.cssText = `${BTN_BASE} background: #a6e3a1; color: #1e1e2e;`
@@ -252,6 +280,7 @@ export class ChangesetPanel {
         deleteBtn.textContent = 'Delete'
         deleteBtn.addEventListener('click', () => this._deleteChangeset(cs.id))
 
+        btnRow.appendChild(activeBtn)
         btnRow.appendChild(publishBtn)
         btnRow.appendChild(scheduleBtn)
         btnRow.appendChild(deleteBtn)
@@ -312,6 +341,8 @@ export class ChangesetPanel {
       body: JSON.stringify({ title }),
     })
     const cs = await res.json()
+    setActiveChangesetId(cs.id)
+    this.activeChangesetId = cs.id
     if (docId) {
       await this._addToChangeset(docId, cs.id)
     } else {
@@ -328,6 +359,10 @@ export class ChangesetPanel {
       method: 'POST',
       credentials: 'include',
     })
+    if (this.activeChangesetId === changesetId) {
+      setActiveChangesetId(null)
+      this.activeChangesetId = null
+    }
     this._showToast('Published — site rebuilding')
     await this.refresh()
   }
@@ -382,6 +417,10 @@ export class ChangesetPanel {
       method: 'DELETE',
       credentials: 'include',
     })
+    if (this.activeChangesetId === changesetId) {
+      setActiveChangesetId(null)
+      this.activeChangesetId = null
+    }
     await this.refresh()
   }
 

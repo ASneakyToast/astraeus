@@ -57,7 +57,7 @@ class ToolDispatcher:
         :returns: Result dict forwarded back to the LLM as a tool result.
         """
         if tool_name == "edit_document":
-            doc_id = tool_input.get("doc_id") or context.get("doc_id")
+            doc_id = tool_input.get("doc_id") or (context or {}).get("doc_id")
             if not doc_id:
                 return {"status": "error", "message": "No doc_id in context or tool input"}
             return await self._edit_document(
@@ -83,10 +83,19 @@ class ToolDispatcher:
             return await self._publish_document(tool_input)
 
         elif tool_name == "create_document":
-            return await self._create_document(tool_input)
+            return await self._create_document(tool_input, context)
 
-        elif tool_name == "add_to_changeset":
-            return await self._add_to_changeset(tool_input)
+        elif tool_name == "update_document":
+            return await self._update_document(tool_input, context)
+
+        elif tool_name == "create_changeset":
+            return await self._create_changeset(tool_input)
+
+        elif tool_name == "list_changesets":
+            return await self._list_changesets()
+
+        elif tool_name == "link_doc_to_changeset":
+            return await self._link_doc_to_changeset(tool_input, context)
 
         else:
             return {"status": "error", "message": f"Unknown tool: {tool_name}"}
@@ -108,7 +117,7 @@ class ToolDispatcher:
 
         import websockets
 
-        current_draft = context.get("draft_body") or await self._fetch_draft(doc_id)
+        current_draft = (context or {}).get("draft_body") or await self._fetch_draft(doc_id)
         new_doc = markdown_to_pm(markdown_content)
         steps = diff_docs(current_draft, new_doc)
 
@@ -161,10 +170,12 @@ class ToolDispatcher:
                 return {"status": "error", "message": str(exc)}
 
             if result.get("type") == "steps":
+                await self._auto_link_changeset(doc_id, context)
                 return {
                     "status": "accepted",
                     "step_count": len(steps),
                     "edit_rationale": edit_rationale,
+                    "doc_id": doc_id,
                 }
 
             # On reject: re-fetch current doc and re-diff
@@ -271,7 +282,32 @@ class ToolDispatcher:
                 return {"status": "published", "doc_id": doc_id}
             return {"status": "error", "message": resp.text}
 
-    async def _create_document(self, tool_input: dict[str, Any]) -> dict[str, Any]:
+    async def _update_document(
+        self, tool_input: dict[str, Any], context: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        doc_id = tool_input.get("doc_id")
+        if not doc_id:
+            return {"status": "error", "message": "doc_id is required"}
+        body = tool_input.get("body", {})
+        slug = tool_input.get("slug")
+        payload: dict[str, Any] = {"body": body}
+        if slug:
+            payload["slug"] = slug
+        async with httpx.AsyncClient() as client:
+            resp = await client.patch(
+                f"{self._cms_base}/api/documents/{doc_id}",
+                json=payload,
+                headers=self._headers,
+            )
+            if resp.status_code == 200:
+                result: dict[str, Any] = {"status": "updated", "document": resp.json()}
+                await self._auto_link_changeset(doc_id, context)
+                return result
+            return {"status": "error", "message": resp.text}
+
+    async def _create_document(
+        self, tool_input: dict[str, Any], context: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{self._cms_base}/api/documents",
@@ -279,24 +315,75 @@ class ToolDispatcher:
                 headers=self._headers,
             )
             if resp.status_code in (200, 201):
-                return {"status": "created", "document": resp.json()}
+                new_doc = resp.json()
+                result: dict[str, Any] = {"status": "created", "document": new_doc}
+                if new_doc_id := new_doc.get("id"):
+                    await self._auto_link_changeset(new_doc_id, context)
+                return result
             return {"status": "error", "message": resp.text}
 
-    async def _add_to_changeset(self, tool_input: dict[str, Any]) -> dict[str, Any]:
-        changeset_id = tool_input.get("changeset_id")
-        if changeset_id:
-            url = f"{self._cms_base}/api/changesets/{changeset_id}/documents"
-        else:
-            url = f"{self._cms_base}/api/changesets"
+    # ------------------------------------------------------------------
+    # Changeset tools
+    # ------------------------------------------------------------------
 
+    async def _auto_link_changeset(
+        self, doc_id: str, context: dict[str, Any] | None
+    ) -> None:
+        """Silently link a doc to the active changeset if one is set in context."""
+        active_cs_id = (context or {}).get("active_changeset_id")
+        if not active_cs_id:
+            return
+        try:
+            await self._link_doc_to_changeset(
+                {"changeset_id": active_cs_id, "doc_id": doc_id}, context
+            )
+        except Exception:
+            pass
+
+    async def _create_changeset(self, tool_input: dict[str, Any]) -> dict[str, Any]:
+        title = tool_input.get("title", "")
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                url,
-                json=tool_input,
+                f"{self._cms_base}/api/changesets",
+                json={"title": title},
                 headers=self._headers,
             )
             if resp.status_code in (200, 201):
-                return {"status": "ok", "result": resp.json()}
+                return {"status": "created", "changeset": resp.json()}
+            return {"status": "error", "message": resp.text}
+
+    async def _list_changesets(self) -> dict[str, Any]:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{self._cms_base}/api/changesets?status=open",
+                headers=self._headers,
+            )
+            if resp.status_code == 200:
+                return {"status": "ok", "changesets": resp.json().get("changesets", [])}
+            return {"status": "error", "message": resp.text}
+
+    async def _link_doc_to_changeset(
+        self, tool_input: dict[str, Any], context: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        changeset_id = tool_input.get("changeset_id") or (context or {}).get(
+            "active_changeset_id"
+        )
+        doc_id = tool_input.get("doc_id") or (context or {}).get("doc_id")
+        if not changeset_id:
+            return {"status": "error", "message": "changeset_id required"}
+        if not doc_id:
+            return {"status": "error", "message": "doc_id required"}
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{self._cms_base}/api/changesets/{changeset_id}/documents/{doc_id}",
+                headers=self._headers,
+            )
+            if resp.status_code in (200, 201, 204):
+                return {
+                    "status": "linked",
+                    "changeset_id": changeset_id,
+                    "doc_id": doc_id,
+                }
             return {"status": "error", "message": resp.text}
 
 
@@ -363,6 +450,14 @@ def make_tools(dispatcher: ToolDispatcher, context: dict[str, Any]) -> list:
         return await dispatcher.dispatch("get_available_doc_types", {}, context)
 
     @lc_tool
+    async def update_document(doc_id: str, body: dict, slug: str = "") -> dict:
+        """Update fields on an existing CMS document. Use for structured docs (experience, projects, etc.) where fields like company, title, start_date need to be set directly. Do NOT use edit_document for these — that tool is only for rich_text prose fields."""
+        tool_input: dict[str, Any] = {"doc_id": doc_id, "body": body}
+        if slug:
+            tool_input["slug"] = slug
+        return await dispatcher.dispatch("update_document", tool_input, context)
+
+    @lc_tool
     async def create_document(doc_type: str, body: dict, slug: str) -> dict:
         """Create a new CMS document."""
         return await dispatcher.dispatch(
@@ -371,10 +466,35 @@ def make_tools(dispatcher: ToolDispatcher, context: dict[str, Any]) -> list:
             context,
         )
 
+    @lc_tool
+    async def create_changeset(title: str = "") -> dict:
+        """Create a new changeset for grouping document edits for atomic publish."""
+        return await dispatcher.dispatch("create_changeset", {"title": title}, context)
+
+    @lc_tool
+    async def list_changesets() -> dict:
+        """List all currently open changesets."""
+        return await dispatcher.dispatch("list_changesets", {}, context)
+
+    @lc_tool
+    async def link_doc_to_changeset(
+        changeset_id: str = "", doc_id: str = ""
+    ) -> dict:
+        """Add a document to a changeset. Falls back to the active changeset from context if changeset_id is omitted."""
+        return await dispatcher.dispatch(
+            "link_doc_to_changeset",
+            {"changeset_id": changeset_id, "doc_id": doc_id},
+            context,
+        )
+
     return [
         edit_document,
+        update_document,
         search_documents,
         publish_document,
         get_available_doc_types,
         create_document,
+        create_changeset,
+        list_changesets,
+        link_doc_to_changeset,
     ]

@@ -61,6 +61,7 @@ if (cmsBase) {
         version: collab?.currentVersion?.() ?? 0,
         draft_body: collab?.currentDoc?.() ?? null,
         selection: collab?.currentSelection?.() ?? null,
+        active_changeset_id: changesetPanel.activeChangesetId ?? null,
       }),
       apiKey,
     })

@@ -126,3 +126,117 @@ export async function deleteDocument(id) {
   if (!res.ok) throw new ApiError(res.status, data);
   return data;
 }
+
+// ── Changeset API helpers ──────────────────────────────────────────────────
+
+/** @returns {Promise<{documents: object[]}>} */
+export async function fetchDirtyDocs() {
+  const res = await apiFetch('/api/documents?has_draft=true');
+  if (!res.ok) throw new ApiError(res.status, await res.json());
+  return res.json();
+}
+
+/** @returns {Promise<{changesets: object[]}>} */
+export async function fetchOpenChangesets() {
+  const res = await apiFetch('/api/changesets?status=open');
+  if (!res.ok) throw new ApiError(res.status, await res.json());
+  return res.json();
+}
+
+/**
+ * @param {string} title
+ * @returns {Promise<object>}
+ */
+export async function createChangeset(title) {
+  const res = await apiFetch('/api/changesets', {
+    method: 'POST',
+    body: JSON.stringify({ title }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(res.status, data);
+  return data;
+}
+
+/**
+ * @param {string} changesetId
+ * @returns {Promise<object>}
+ */
+export async function fetchChangeset(changesetId) {
+  const res = await apiFetch(`/api/changesets/${changesetId}`);
+  if (!res.ok) throw new ApiError(res.status, await res.json());
+  return res.json();
+}
+
+/**
+ * @param {string} changesetId
+ * @param {string} docId
+ * @returns {Promise<null>}
+ */
+export async function addDocToChangeset(changesetId, docId) {
+  const res = await apiFetch(`/api/changesets/${changesetId}/documents/${docId}`, {
+    method: 'POST',
+  });
+  if (res.status === 204 || res.status === 201) return null;
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, data);
+  }
+  return null;
+}
+
+/**
+ * @param {string} changesetId
+ * @param {string} docId
+ * @returns {Promise<null>}
+ */
+export async function removeDocFromChangeset(changesetId, docId) {
+  const res = await apiFetch(`/api/changesets/${changesetId}/documents/${docId}`, {
+    method: 'DELETE',
+  });
+  if (res.status === 204) return null;
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, data);
+  }
+  return null;
+}
+
+/**
+ * @param {string} changesetId
+ * @returns {Promise<object>}
+ */
+export async function publishChangeset(changesetId) {
+  const res = await apiFetch(`/api/changesets/${changesetId}/publish`, { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(res.status, data);
+  return data;
+}
+
+/**
+ * @param {string} changesetId
+ * @param {string} publishAt — ISO 8601 datetime
+ * @returns {Promise<object>}
+ */
+export async function scheduleChangeset(changesetId, publishAt) {
+  const res = await apiFetch(`/api/changesets/${changesetId}/schedule`, {
+    method: 'POST',
+    body: JSON.stringify({ publish_at: publishAt }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(res.status, data);
+  return data;
+}
+
+/**
+ * @param {string} changesetId
+ * @returns {Promise<null>}
+ */
+export async function deleteChangeset(changesetId) {
+  const res = await apiFetch(`/api/changesets/${changesetId}`, { method: 'DELETE' });
+  if (res.status === 204) return null;
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, data);
+  }
+  return null;
+}

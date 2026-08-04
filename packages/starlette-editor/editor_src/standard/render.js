@@ -198,6 +198,32 @@ export function renderHeader(togglePublish, saveDocument, deleteActiveDoc) {
     saveBtn.disabled = state.isSaving;
     saveBtn.textContent = state.isSaving ? 'Saving…' : 'Save';
   }
+
+  // Changeset button — shows active changeset badge when one is set
+  const actionsEl = document.querySelector('.editor-header__actions');
+  const existingCsBtn = document.getElementById('changeset-btn');
+  if (existingCsBtn) existingCsBtn.remove();
+  if (actionsEl && state.changesetPanel) {
+    const label = state.activeChangesetId ? '📋 Changeset ●' : '📋 Changesets';
+    const csBtn = el('button', {
+      class: 'btn btn--ghost',
+      id: 'changeset-btn',
+      onclick: () => state.changesetPanel.toggle(),
+    }, label);
+    actionsEl.appendChild(csBtn);
+  }
+
+  // Chat button — only when a doc is active and the ChatPanel is ready
+  const existingChatBtn = document.getElementById('chat-btn');
+  if (existingChatBtn) existingChatBtn.remove();
+  if (actionsEl && state.chatPanel) {
+    const chatBtn = el('button', {
+      class: 'btn btn--ghost',
+      id: 'chat-btn',
+      onclick: () => state.chatPanel.toggle(),
+    }, '💬 Chat');
+    actionsEl.appendChild(chatBtn);
+  }
 }
 
 /**
@@ -272,6 +298,12 @@ export function renderForm(onFieldChange, render) {
 
   formArea.appendChild(form);
 
-  // Mount ProseMirror editors after the DOM is in place
-  mountProseMirrorEditors(fields, onFieldChange);
+  // Mount ProseMirror editors after the DOM is in place.
+  // Pass collab params from __EDITOR_CONFIG__ so rich_text fields use the collab WS path.
+  const cfg = window.__EDITOR_CONFIG__ || {}
+  mountProseMirrorEditors(fields, onFieldChange, {
+    cmsBase: cfg.cmsBase || '',
+    docId: state.activeDocId,
+    apiKey: cfg.apiKey || null,
+  });
 }
