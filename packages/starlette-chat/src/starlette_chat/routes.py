@@ -29,6 +29,34 @@ if TYPE_CHECKING:
     from .app import ChatAPI
 
 
+def _check_chat_auth(request: Request, chat: ChatAPI) -> bool:
+    """Return True if the request is authorised to use the chat API.
+
+    Accepts either:
+    - ``Authorization: Bearer <api_key>`` header, or
+    - ``?api_key=<api_key>`` query param (WebSocket upgrades can't set headers), or
+    - A valid ``cms_session`` cookie (browser-based auth — same cookie the
+      editor embed uses; requires ``session_secret`` to be set on ChatAPI).
+    """
+    # Bearer header (HTTP routes)
+    header = request.headers.get("Authorization", "")
+    if header.startswith("Bearer ") and header[len("Bearer "):] == chat._cms_api_key:
+        return True
+
+    # Query param (WebSocket upgrades)
+    if request.query_params.get("api_key") == chat._cms_api_key:
+        return True
+
+    # Session cookie (browser embed — no credentials exposed in HTML)
+    if chat._session_secret is not None:
+        from starlette_cms.session import validate_session_token
+        token = request.cookies.get("cms_session", "")
+        if token and validate_session_token(token, chat._session_secret):
+            return True
+
+    return False
+
+
 def _cms_headers(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 
@@ -50,6 +78,9 @@ def make_routes(chat: ChatAPI) -> list:
     # ------------------------------------------------------------------
 
     async def create_session(request: Request) -> JSONResponse:
+        if not _check_chat_auth(request, chat):
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
         try:
             data = await request.json()
         except Exception:
@@ -178,6 +209,9 @@ def make_routes(chat: ChatAPI) -> list:
     # ------------------------------------------------------------------
 
     async def get_session(request: Request) -> JSONResponse:
+        if not _check_chat_auth(request, chat):
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
         session_id: str = request.path_params["session_id"]
 
         if chat._store is not None:
@@ -233,9 +267,9 @@ def make_routes(chat: ChatAPI) -> list:
         """Handle a streaming chat WebSocket connection."""
         session_id: str = websocket.path_params["session_id"]
 
-        # Auth: check ?api_key= query param
-        api_key = websocket.query_params.get("api_key", "")
-        if api_key != chat._cms_api_key:
+        # Auth: session cookie (browser embed) or ?api_key= query param (server / testing).
+        # WebSocket upgrade requests carry cookies automatically; they cannot set headers.
+        if not _check_chat_auth(websocket, chat):
             await websocket.close(code=4403)
             return
 

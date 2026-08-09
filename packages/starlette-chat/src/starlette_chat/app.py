@@ -33,6 +33,11 @@ class ChatAPI:
         records are stored here instead of the CMS DB — system_prompt and
         model_config remain in the CMS.  When ``None`` (default), all records go
         through the CMS HTTP API as before.
+    :param session_secret: Optional HMAC secret used to validate ``cms_session``
+        cookies for browser-based auth.  When set, authenticated editor users
+        can use the chat API without any credentials in the page HTML — the
+        browser sends the session cookie automatically.  Must match the
+        ``session_secret`` configured on the CMS instance.
     :param checkpointer: LangGraph checkpointer for the agent's turn-to-turn
         memory.  Defaults to an in-process ``MemorySaver`` (resets on restart).
         Pass a ``SqliteSaver`` or ``PostgresSaver`` for durable memory.
@@ -44,6 +49,7 @@ class ChatAPI:
         cms_api_key: str,
         provider: BaseProvider | None = None,
         session_db_url: str | None = None,
+        session_secret: str | None = None,
         checkpointer: object | None = None,
     ) -> None:
         from langgraph.checkpoint.memory import MemorySaver
@@ -52,6 +58,7 @@ class ChatAPI:
         self._cms_api_key = cms_api_key
         self._provider = provider
         self._session_db_url = session_db_url
+        self._session_secret = session_secret
         self._checkpointer = checkpointer if checkpointer is not None else MemorySaver()
         self._store = None
         self._app: Starlette | None = None
