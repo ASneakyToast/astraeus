@@ -38,6 +38,10 @@ class ChatAPI:
         can use the chat API without any credentials in the page HTML — the
         browser sends the session cookie automatically.  Must match the
         ``session_secret`` configured on the CMS instance.
+    :param cors_origins: List of allowed CORS origins (e.g. ``["http://localhost:4321"]``).
+        Required when the chat sub-app is served from a different origin than the
+        frontend (cross-origin cookie auth needs ``allow_credentials=True``).
+        Pass the same list you give to :class:`~starlette_cms.app.CMS`.
     :param checkpointer: LangGraph checkpointer for the agent's turn-to-turn
         memory.  Defaults to an in-process ``MemorySaver`` (resets on restart).
         Pass a ``SqliteSaver`` or ``PostgresSaver`` for durable memory.
@@ -50,6 +54,7 @@ class ChatAPI:
         provider: BaseProvider | None = None,
         session_db_url: str | None = None,
         session_secret: str | None = None,
+        cors_origins: list[str] | None = None,
         checkpointer: object | None = None,
     ) -> None:
         from langgraph.checkpoint.memory import MemorySaver
@@ -59,6 +64,7 @@ class ChatAPI:
         self._provider = provider
         self._session_db_url = session_db_url
         self._session_secret = session_secret
+        self._cors_origins = cors_origins or []
         self._checkpointer = checkpointer if checkpointer is not None else MemorySaver()
         self._store = None
         self._app: Starlette | None = None
@@ -77,6 +83,9 @@ class ChatAPI:
     def _build_app(self) -> Starlette:
         from contextlib import asynccontextmanager
 
+        from starlette.middleware import Middleware
+        from starlette.middleware.cors import CORSMiddleware
+
         from .routes import make_routes
 
         store = self._store
@@ -87,5 +96,15 @@ class ChatAPI:
                 await store.init_db()
             yield
 
+        middleware = []
+        if self._cors_origins:
+            middleware.append(Middleware(
+                CORSMiddleware,
+                allow_origins=self._cors_origins,
+                allow_methods=["GET", "POST", "OPTIONS"],
+                allow_headers=["*"],
+                allow_credentials=True,
+            ))
+
         routes = make_routes(self)
-        return Starlette(routes=routes, lifespan=lifespan)
+        return Starlette(routes=routes, middleware=middleware, lifespan=lifespan)

@@ -158,6 +158,7 @@ export class ChatPanel {
     if (!this._sessionId) {
       const res = await fetch(`${this._base}/api/chat/sessions`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json', ...this._authHeaders() },
         body: JSON.stringify({
           persona: 'default',
