@@ -1,0 +1,269 @@
+import { state } from '../state.js'
+import { setActiveChangesetId } from '../changeset-store.js'
+import { setState } from '../state.js'
+
+const LS_KEY = 'cms-editor-toolbar-geometry'
+
+export class EditorToolbar {
+  constructor({ changesetPanel, chatPanel }) {
+    this._changesetPanel = changesetPanel
+    this._chatPanel = chatPanel
+    this._el = null
+    this._unread = 0
+  }
+
+  mount() {
+    this._el = document.createElement('div')
+    this._el.style.cssText = `
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      gap: 0;
+      height: 36px;
+      background: var(--bg-elevated, #1a1a1a);
+      border: 1px solid var(--border-default, #2a2a2a);
+      border-radius: 20px;
+      font-family: var(--font-sans, system-ui, sans-serif);
+      font-size: 12px;
+      color: var(--text-secondary, #8a8a8a);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      user-select: none;
+      cursor: default;
+    `
+
+    document.body.appendChild(this._el)
+    this._render()
+    this._restoreGeometry()
+    this._wireUnreadListener()
+  }
+
+  update() {
+    this._render()
+  }
+
+  _render() {
+    if (!this._el) return
+    this._el.innerHTML = ''
+
+    this._el.appendChild(this._buildChangesetSegment())
+
+    if (this._chatPanel) {
+      this._el.appendChild(this._buildDivider())
+      this._el.appendChild(this._buildChatSegment())
+    }
+
+    this._el.appendChild(this._buildDivider())
+    this._el.appendChild(this._buildDragGrip())
+  }
+
+  _buildChangesetSegment() {
+    const seg = document.createElement('button')
+    seg.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 14px;
+      height: 100%;
+      background: none;
+      border: none;
+      color: var(--text-secondary, #8a8a8a);
+      font: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+      border-radius: 20px 0 0 20px;
+    `
+
+    const hasActive = !!state.activeChangesetId
+    const title = hasActive
+      ? (state.activeChangesetTitle || 'Changeset')
+      : 'Changesets'
+    const count = state.activeChangesetDocCount || 0
+
+    let label = `📋 ${title}`
+    if (hasActive && count > 0) {
+      label += ` (${count})`
+    }
+    seg.textContent = label
+
+    if (hasActive && count > 0) {
+      seg.style.color = 'var(--text-primary, #e8e8e8)'
+    }
+
+    seg.addEventListener('mouseenter', () => {
+      seg.style.background = 'var(--bg-hover, #202020)'
+    })
+    seg.addEventListener('mouseleave', () => {
+      seg.style.background = 'none'
+    })
+    seg.addEventListener('click', (e) => {
+      e.stopPropagation()
+      this._changesetPanel?.toggle()
+    })
+
+    return seg
+  }
+
+  _buildChatSegment() {
+    const seg = document.createElement('button')
+    seg.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 0 12px;
+      height: 100%;
+      background: none;
+      border: none;
+      color: var(--text-secondary, #8a8a8a);
+      font: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+      position: relative;
+    `
+    seg.textContent = '💬 Chat'
+
+    if (this._unread > 0) {
+      const dot = document.createElement('span')
+      dot.style.cssText = `
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--accent, #4c6ef5);
+      `
+      seg.appendChild(dot)
+    }
+
+    seg.addEventListener('mouseenter', () => {
+      seg.style.background = 'var(--bg-hover, #202020)'
+    })
+    seg.addEventListener('mouseleave', () => {
+      seg.style.background = 'none'
+    })
+    seg.addEventListener('click', (e) => {
+      e.stopPropagation()
+      this._unread = 0
+      this._chatPanel?.toggle()
+      this._render()
+    })
+
+    return seg
+  }
+
+  _buildDivider() {
+    const d = document.createElement('div')
+    d.style.cssText = `
+      width: 1px;
+      height: 18px;
+      background: var(--border-subtle, #222222);
+      flex-shrink: 0;
+    `
+    return d
+  }
+
+  _buildDragGrip() {
+    const grip = document.createElement('div')
+    grip.style.cssText = `
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      height: 100%;
+      cursor: grab;
+      color: var(--text-muted, #555555);
+      font-size: 14px;
+      border-radius: 0 20px 20px 0;
+    `
+    grip.textContent = '⠿'
+    grip.title = 'Drag to reposition'
+
+    grip.addEventListener('mouseenter', () => {
+      grip.style.background = 'var(--bg-hover, #202020)'
+    })
+    grip.addEventListener('mouseleave', () => {
+      grip.style.background = 'none'
+    })
+    grip.addEventListener('mousedown', (e) => this._startDrag(e))
+
+    return grip
+  }
+
+  // ── Drag ──
+
+  _startDrag(e) {
+    if (!this._el) return
+    e.preventDefault()
+
+    const rect = this._el.getBoundingClientRect()
+    this._el.style.left = rect.left + 'px'
+    this._el.style.top = rect.top + 'px'
+    this._el.style.bottom = 'auto'
+    this._el.style.transform = 'none'
+
+    const offsetX = e.clientX - rect.left
+    const offsetY = e.clientY - rect.top
+
+    const onMove = (ev) => {
+      const maxLeft = window.innerWidth - this._el.offsetWidth
+      const maxTop = window.innerHeight - this._el.offsetHeight
+      this._el.style.left = Math.max(0, Math.min(ev.clientX - offsetX, maxLeft)) + 'px'
+      this._el.style.top = Math.max(0, Math.min(ev.clientY - offsetY, maxTop)) + 'px'
+    }
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      this._persistGeometry()
+    }
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  // ── Geometry persistence ──
+
+  _persistGeometry() {
+    if (!this._el) return
+    const rect = this._el.getBoundingClientRect()
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify({ left: rect.left, top: rect.top }))
+    } catch { /* quota / private mode */ }
+  }
+
+  _restoreGeometry() {
+    if (!this._el) return
+    let geo = null
+    try { geo = JSON.parse(localStorage.getItem(LS_KEY) || 'null') } catch { geo = null }
+    if (!geo) return
+
+    const left = Math.max(0, Math.min(geo.left ?? 0, window.innerWidth - this._el.offsetWidth))
+    const top = Math.max(0, Math.min(geo.top ?? 0, window.innerHeight - this._el.offsetHeight))
+
+    this._el.style.left = left + 'px'
+    this._el.style.top = top + 'px'
+    this._el.style.bottom = 'auto'
+    this._el.style.transform = 'none'
+  }
+
+  // ── Unread chat badge ──
+
+  _wireUnreadListener() {
+    if (!this._chatPanel) return
+    this._chatPanel.setToolbar(this)
+  }
+
+  _onChatMessage() {
+    if (!this._chatPanel?.isOpen) {
+      this._unread++
+      this._render()
+    }
+  }
+
+  _updateChatBadge() {
+    this._render()
+  }
+}

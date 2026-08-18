@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import pathlib
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,17 @@ if TYPE_CHECKING:
     from starlette_editor.app import Editor
 
 STATIC_DIR = pathlib.Path(__file__).parent / "static"
+
+
+def _file_hash(path: pathlib.Path) -> str:
+    """Return first 8 chars of the file's MD5 for cache-busting."""
+    if not path.exists():
+        return "0"
+    return hashlib.md5(path.read_bytes()).hexdigest()[:8]
+
+
+_CSS_HASH = _file_hash(STATIC_DIR / "editor.css")
+_JS_HASH = _file_hash(STATIC_DIR / "editor.js")
 
 
 def make_editor_routes(editor: Editor) -> list:
@@ -44,7 +56,7 @@ def make_editor_routes(editor: Editor) -> list:
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CMS Editor</title>
-  <link rel="stylesheet" href="{mount}/static/editor.css" />
+  <link rel="stylesheet" href="{mount}/static/editor.css?v={_CSS_HASH}" />
 </head>
 <body>
   <div id="app"></div>
@@ -59,7 +71,7 @@ def make_editor_routes(editor: Editor) -> list:
   }};
   </script>
 
-  <script src="{mount}/static/editor.js"></script>
+  <script src="{mount}/static/editor.js?v={_JS_HASH}"></script>
 </body>
 </html>"""
         return HTMLResponse(html)

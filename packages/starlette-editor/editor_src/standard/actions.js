@@ -8,13 +8,12 @@ import {
   fetchDocument,
   createDocument,
   patchDocument,
-  publishDocument,
-  unpublishDocument,
-  deleteDocument,
+  setDraftPublishState,
+  setDraftDeleted,
   addDocToChangeset,
 } from '../api.js'
+import { setActiveChangesetId } from '../changeset-store.js'
 import { showToast } from '../components/toast.js'
-import { showConfirm } from '../components/confirm.js'
 import { destroyPmInstances } from '../prosemirror/mount.js'
 import { pmDocToMarkdown } from '../prosemirror/markdown.js'
 import { docTitle } from './utils.js'
@@ -139,9 +138,37 @@ export async function saveDocument() {
   try {
     let savedDoc;
     if (state.activeDocId) {
-      savedDoc = await patchDocument(state.activeDocId, { body: bodyFields, slug });
+      const { data, headers } = await patchDocument(
+        state.activeDocId,
+        { body: bodyFields, slug },
+        { activeChangesetId: state.activeChangesetId || undefined },
+      );
+      savedDoc = data;
+
+      // Server auto-created a changeset — adopt it
+      const newCsId = headers.get('x-changeset-id');
+      if (newCsId) {
+        const csTitle = headers.get('x-changeset-title') || 'Untitled';
+        setActiveChangesetId(newCsId);
+        setState({
+          activeChangesetId: newCsId,
+          activeChangesetTitle: csTitle,
+          activeChangesetDocCount: 1,
+        }, false);
+        showToast('info', `Created changeset '${csTitle}'`, 'Your edits are tracked');
+      }
     } else {
       savedDoc = await createDocument(state.activeType, bodyFields, slug);
+
+      // Auto-link new doc to active changeset
+      if (state.activeChangesetId) {
+        try {
+          await addDocToChangeset(state.activeChangesetId, savedDoc.id);
+          setState({ activeChangesetDocCount: (state.activeChangesetDocCount || 0) + 1 }, false);
+        } catch (_err) {
+          showToast('error', 'Could not link to changeset', _err.message);
+        }
+      }
     }
 
     const result = await fetchDocuments(state.activeType);
@@ -157,15 +184,6 @@ export async function saveDocument() {
     });
 
     showToast('success', 'Saved', docTitle(savedDoc));
-
-    // Auto-link to active changeset
-    if (state.activeChangesetId) {
-      try {
-        await addDocToChangeset(state.activeChangesetId, savedDoc.id);
-      } catch (_err) {
-        showToast('error', 'Could not link to changeset', _err.message);
-      }
-    }
   } catch (err) {
     setState({ isSaving: false });
     showToast('error', 'Save failed', err.message);
@@ -179,14 +197,20 @@ export async function togglePublish() {
   const doc = state.activeDoc;
   if (!doc) return;
 
+  const intended = doc.draft_published ?? doc.published;
+  const newIntended = !intended;
+  const draftPublished = (newIntended !== doc.published) ? newIntended : null;
+
   try {
-    let updated;
-    if (doc.published) {
-      updated = await unpublishDocument(doc.id);
-      showToast('info', 'Unpublished', docTitle(doc));
-    } else {
-      updated = await publishDocument(doc.id);
-      showToast('success', 'Published', docTitle(doc));
+    const { data: updated, headers } = await setDraftPublishState(
+      doc.id, draftPublished, state.activeChangesetId
+    );
+
+    const newCsId = headers.get('X-Changeset-Id');
+    const newCsTitle = headers.get('X-Changeset-Title');
+    if (newCsId) {
+      setActiveChangesetId(newCsId);
+      setState({ activeChangesetId: newCsId, activeChangesetTitle: newCsTitle });
     }
 
     const result = await fetchDocuments(state.activeType);
@@ -196,40 +220,52 @@ export async function togglePublish() {
       documents: result.documents || [],
       docsTotal: result.total || 0,
     });
+
+    if (draftPublished != null) {
+      showToast('info', draftPublished ? 'Will publish with changeset' : 'Will unpublish with changeset', docTitle(doc));
+    } else {
+      showToast('info', 'Publish change cancelled', docTitle(doc));
+    }
   } catch (err) {
     showToast('error', 'Failed to change publish state', err.message);
   }
 }
 
 /**
- * Delete the active document after user confirmation.
+ * Toggle staged deletion of the active document.
+ * First click stages the delete; second click cancels it.
  */
 export async function deleteActiveDoc() {
   const doc = state.activeDoc;
   if (!doc) return;
 
-  const confirmed = await showConfirm(
-    'Delete document',
-    `Are you sure you want to delete "${docTitle(doc)}"? This cannot be undone.`
-  );
-  if (!confirmed) return;
+  const willDelete = !doc.draft_deleted;
 
   try {
-    await deleteDocument(doc.id);
+    const { data: updated, headers } = await setDraftDeleted(
+      doc.id, willDelete ? true : null, state.activeChangesetId
+    );
 
-    destroyPmInstances();
+    const newCsId = headers.get('X-Changeset-Id');
+    const newCsTitle = headers.get('X-Changeset-Title');
+    if (newCsId) {
+      setActiveChangesetId(newCsId);
+      setState({ activeChangesetId: newCsId, activeChangesetTitle: newCsTitle });
+    }
 
     const result = await fetchDocuments(state.activeType);
     setState({
-      activeDocId: null,
-      activeDoc: null,
-      formData: {},
-      isDirty: false,
+      activeDoc: updated,
+      formData: { ...(updated.body || {}), __slug: updated.slug || '' },
       documents: result.documents || [],
       docsTotal: result.total || 0,
     });
 
-    showToast('success', 'Deleted', docTitle(doc));
+    if (willDelete) {
+      showToast('info', 'Will delete with changeset', docTitle(doc));
+    } else {
+      showToast('info', 'Delete cancelled', docTitle(doc));
+    }
   } catch (err) {
     showToast('error', 'Delete failed', err.message);
   }

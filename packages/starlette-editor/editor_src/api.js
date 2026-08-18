@@ -81,16 +81,22 @@ export async function createDocument(docType, body, slug = '') {
 /**
  * @param {string} id
  * @param {object} patch
- * @returns {Promise<object>}
+ * @param {{activeChangesetId?: string}} [options]
+ * @returns {Promise<{data: object, headers: Headers}>}
  */
-export async function patchDocument(id, patch) {
+export async function patchDocument(id, patch, { activeChangesetId } = {}) {
+  const extraHeaders = {};
+  if (activeChangesetId) {
+    extraHeaders['X-Active-Changeset-Id'] = activeChangesetId;
+  }
   const res = await apiFetch(`/api/documents/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
+    headers: extraHeaders,
   });
   const data = await res.json();
   if (!res.ok) throw new ApiError(res.status, data);
-  return data;
+  return { data, headers: res.headers };
 }
 
 /**
@@ -127,18 +133,78 @@ export async function deleteDocument(id) {
   return data;
 }
 
+/**
+ * @param {string} id
+ * @returns {Promise<object>}
+ */
+export async function discardDraft(id) {
+  const res = await apiFetch(`/api/documents/${id}/discard-draft`, { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(res.status, data);
+  return data;
+}
+
+/**
+ * @param {string} id
+ * @param {boolean|null} published
+ * @param {string} [activeChangesetId]
+ * @returns {Promise<{data: object, headers: Headers}>}
+ */
+export async function setDraftPublishState(id, published, activeChangesetId) {
+  const extraHeaders = {};
+  if (activeChangesetId) {
+    extraHeaders['X-Active-Changeset-Id'] = activeChangesetId;
+  }
+  const res = await apiFetch(`/api/documents/${id}/draft-publish-state`, {
+    method: 'POST',
+    body: JSON.stringify({ published }),
+    headers: extraHeaders,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(res.status, data);
+  return { data, headers: res.headers };
+}
+
+/**
+ * @param {string} id
+ * @param {boolean|null} deleted
+ * @param {string} [activeChangesetId]
+ * @returns {Promise<{data: object, headers: Headers}>}
+ */
+export async function setDraftDeleted(id, deleted, activeChangesetId) {
+  const extraHeaders = {};
+  if (activeChangesetId) {
+    extraHeaders['X-Active-Changeset-Id'] = activeChangesetId;
+  }
+  const res = await apiFetch(`/api/documents/${id}/draft-delete`, {
+    method: 'POST',
+    body: JSON.stringify({ deleted }),
+    headers: extraHeaders,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(res.status, data);
+  return { data, headers: res.headers };
+}
+
 // ── Changeset API helpers ──────────────────────────────────────────────────
 
 /** @returns {Promise<{documents: object[]}>} */
 export async function fetchDirtyDocs() {
-  const res = await apiFetch('/api/documents?has_draft=true');
+  const res = await apiFetch('/api/documents?has_draft=true&exclude_types=chat_session,chat_message');
+  if (!res.ok) throw new ApiError(res.status, await res.json());
+  return res.json();
+}
+
+/** @returns {Promise<{documents: object[]}>} */
+export async function fetchUnpublishedDocs() {
+  const res = await apiFetch('/api/documents?published=false&exclude_types=chat_session,chat_message');
   if (!res.ok) throw new ApiError(res.status, await res.json());
   return res.json();
 }
 
 /** @returns {Promise<{changesets: object[]}>} */
 export async function fetchOpenChangesets() {
-  const res = await apiFetch('/api/changesets?status=open');
+  const res = await apiFetch('/api/changesets?status=open&include_documents=true');
   if (!res.ok) throw new ApiError(res.status, await res.json());
   return res.json();
 }
@@ -222,6 +288,46 @@ export async function scheduleChangeset(changesetId, publishAt) {
     method: 'POST',
     body: JSON.stringify({ publish_at: publishAt }),
   });
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(res.status, data);
+  return data;
+}
+
+/**
+ * @param {string} changesetId
+ * @param {{title?: string, status?: string}} fields
+ * @returns {Promise<object>}
+ */
+export async function patchChangeset(changesetId, fields) {
+  const res = await apiFetch(`/api/changesets/${changesetId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(fields),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(res.status, data);
+  return data;
+}
+
+/**
+ * @param {string} changesetId
+ * @returns {Promise<object>}
+ */
+export async function fetchChangesetDiff(changesetId) {
+  const res = await apiFetch(`/api/changesets/${changesetId}/diff`);
+  if (!res.ok) throw new ApiError(res.status, await res.json());
+  return res.json();
+}
+
+/**
+ * @param {string} changesetId
+ * @param {string} [docId] — if provided, revert only this doc
+ * @returns {Promise<object>}
+ */
+export async function revertChangeset(changesetId, docId) {
+  const path = docId
+    ? `/api/changesets/${changesetId}/revert/${docId}`
+    : `/api/changesets/${changesetId}/revert`;
+  const res = await apiFetch(path, { method: 'POST' });
   const data = await res.json();
   if (!res.ok) throw new ApiError(res.status, data);
   return data;

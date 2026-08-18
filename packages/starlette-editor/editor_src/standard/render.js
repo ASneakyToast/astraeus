@@ -133,15 +133,30 @@ export function renderDocList(selectDoc, openNewDoc) {
 
   for (const doc of state.documents) {
     const isActive = doc.id === state.activeDocId;
+    const isDraftDeleted = doc.draft_deleted;
+
+    let badge;
+    if (isDraftDeleted) {
+      badge = el('span', { class: 'badge badge--danger' }, 'Will delete');
+    } else if (doc.draft_published != null) {
+      badge = el('span', { class: 'badge badge--pending', style: 'font-style: italic' },
+        doc.draft_published ? 'Will publish' : 'Will unpublish'
+      );
+    } else {
+      badge = el('span', { class: `badge ${doc.published ? 'badge--published' : 'badge--draft'}` },
+        doc.published ? 'Published' : 'Draft'
+      );
+    }
+
+    const titleStyle = isDraftDeleted ? 'opacity: 0.5; text-decoration: line-through;' : '';
+
     const item = el('div', {
       class: `sidebar-docs__item${isActive ? ' is-active' : ''}`,
       onclick: () => selectDoc(doc.id),
     },
-      el('span', { class: 'sidebar-docs__item-title' }, docTitle(doc)),
+      el('span', { class: 'sidebar-docs__item-title', style: titleStyle }, docTitle(doc)),
       el('div', { class: 'sidebar-docs__item-meta' },
-        el('span', { class: `badge ${doc.published ? 'badge--published' : 'badge--draft'}` },
-          doc.published ? 'Published' : 'Draft'
-        ),
+        badge,
         el('span', { class: 'sidebar-docs__item-date' }, formatDate(doc.updated_at || doc.created_at))
       )
     );
@@ -183,47 +198,43 @@ export function renderHeader(togglePublish, saveDocument, deleteActiveDoc) {
   if (saveBtn) saveBtn.style.display = '';
   if (deleteBtn) deleteBtn.style.display = doc ? '' : 'none';
 
-  // Update publish toggle
+  const isDraftDeleted = doc && doc.draft_deleted;
+
+  // Update publish toggle — reflect pending draft_published state
   const toggleInput = $('publish-toggle-input');
   const toggleLabel = $('publish-toggle-label');
   if (toggleInput && doc) {
-    toggleInput.checked = !!doc.published;
+    const effectivePublished = doc.draft_published ?? doc.published;
+    toggleInput.checked = !!effectivePublished;
+    toggleInput.disabled = !!isDraftDeleted;
   }
   if (toggleLabel && doc) {
-    toggleLabel.textContent = doc.published ? 'Published' : 'Draft';
+    if (doc.draft_published != null) {
+      toggleLabel.textContent = doc.draft_published ? 'Will publish' : 'Will unpublish';
+      toggleLabel.style.fontStyle = 'italic';
+    } else {
+      toggleLabel.textContent = doc.published ? 'Published' : 'Draft';
+      toggleLabel.style.fontStyle = '';
+    }
   }
 
-  // Save button state
+  // Save button state — disabled when staged for deletion
   if (saveBtn) {
-    saveBtn.disabled = state.isSaving;
+    saveBtn.disabled = state.isSaving || !!isDraftDeleted;
     saveBtn.textContent = state.isSaving ? 'Saving…' : 'Save';
   }
 
-  // Changeset button — shows active changeset badge when one is set
-  const actionsEl = document.querySelector('.editor-header__actions');
-  const existingCsBtn = document.getElementById('changeset-btn');
-  if (existingCsBtn) existingCsBtn.remove();
-  if (actionsEl && state.changesetPanel) {
-    const label = state.activeChangesetId ? '📋 Changeset ●' : '📋 Changesets';
-    const csBtn = el('button', {
-      class: 'btn btn--ghost',
-      id: 'changeset-btn',
-      onclick: () => state.changesetPanel.toggle(),
-    }, label);
-    actionsEl.appendChild(csBtn);
+  // Delete button — toggle between "Delete" and "Cancel delete"
+  if (deleteBtn && doc) {
+    if (isDraftDeleted) {
+      deleteBtn.textContent = 'Cancel delete';
+      deleteBtn.className = 'btn btn--ghost';
+    } else {
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.className = 'btn btn--danger';
+    }
   }
 
-  // Chat button — only when a doc is active and the ChatPanel is ready
-  const existingChatBtn = document.getElementById('chat-btn');
-  if (existingChatBtn) existingChatBtn.remove();
-  if (actionsEl && state.chatPanel) {
-    const chatBtn = el('button', {
-      class: 'btn btn--ghost',
-      id: 'chat-btn',
-      onclick: () => state.chatPanel.toggle(),
-    }, '💬 Chat');
-    actionsEl.appendChild(chatBtn);
-  }
 }
 
 /**

@@ -80,6 +80,8 @@ export class ChangesetPanel {
       this.activeChangesetId = newId
       if (this.visible) this._render()
     })
+
+    window.addEventListener('cms:chat-turn-done', () => this.refresh())
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -110,11 +112,21 @@ export class ChangesetPanel {
    */
   async refresh() {
     try {
-      const [docsRes, csRes] = await Promise.all([
-        fetch(`${this.cmsBase}/api/documents?has_draft=true`, { credentials: 'include' }),
+      const [dirtyRes, unpubRes, csRes] = await Promise.all([
+        fetch(`${this.cmsBase}/api/documents?has_draft=true&exclude_types=chat_session,chat_message`, { credentials: 'include' }),
+        fetch(`${this.cmsBase}/api/documents?published=false&exclude_types=chat_session,chat_message`, { credentials: 'include' }),
         fetch(`${this.cmsBase}/api/changesets?status=open`, { credentials: 'include' }),
       ])
-      this.dirtyDocs = (await docsRes.json()).documents ?? []
+      const dirtyDocs = (await dirtyRes.json()).documents ?? []
+      const unpubDocs = (await unpubRes.json()).documents ?? []
+      const seen = new Set()
+      this.dirtyDocs = []
+      for (const doc of dirtyDocs) {
+        if (!seen.has(doc.id)) { seen.add(doc.id); this.dirtyDocs.push(doc); }
+      }
+      for (const doc of unpubDocs) {
+        if (!seen.has(doc.id)) { seen.add(doc.id); this.dirtyDocs.push(doc); }
+      }
       this.openChangesets = (await csRes.json()).changesets ?? []
     } catch (_err) {
       this.dirtyDocs = []
@@ -351,20 +363,180 @@ export class ChangesetPanel {
   }
 
   /**
-   * Atomically publish a changeset, then show a success toast.
+   * Fetch diff and show review modal before publishing.
    * @param {string} changesetId
    */
   async _publishChangeset(changesetId) {
-    await fetch(`${this.cmsBase}/api/changesets/${changesetId}/publish`, {
-      method: 'POST',
-      credentials: 'include',
-    })
-    if (this.activeChangesetId === changesetId) {
-      setActiveChangesetId(null)
-      this.activeChangesetId = null
+    try {
+      const res = await fetch(`${this.cmsBase}/api/changesets/${changesetId}/diff`, {
+        credentials: 'include',
+      })
+      if (!res.ok) {
+        this._showToast('Failed to load diff')
+        return
+      }
+      const diffData = await res.json()
+      this._showReviewModal(changesetId, diffData)
+    } catch (_err) {
+      this._showToast('Failed to load diff')
     }
-    this._showToast('Published — site rebuilding')
-    await this.refresh()
+  }
+
+  /**
+   * Show a modal with per-doc diffs and a confirm publish button.
+   * @param {string} changesetId
+   * @param {object} diffData
+   */
+  _showReviewModal(changesetId, diffData) {
+    document.querySelectorAll('[data-publish-review-modal]').forEach(el => el.remove())
+
+    const overlay = document.createElement('div')
+    overlay.setAttribute('data-publish-review-modal', '')
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 10000;
+      background: rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, -apple-system, sans-serif;
+    `
+
+    const modal = document.createElement('div')
+    modal.style.cssText = `
+      background: #1e1e2e; color: #cdd6f4; border: 1px solid #313244;
+      border-radius: 12px; width: 560px; max-height: 80vh; overflow-y: auto;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    `
+
+    const header = document.createElement('div')
+    header.style.cssText = 'padding: 16px 20px; border-bottom: 1px solid #313244; display: flex; align-items: center; justify-content: space-between;'
+    const title = document.createElement('span')
+    title.style.cssText = 'font-weight: 700; font-size: 15px;'
+    title.textContent = 'Review & Publish'
+    const closeBtn = document.createElement('button')
+    closeBtn.style.cssText = `${BTN_BASE} background: transparent; color: #6c7086; font-size: 18px; padding: 0 4px;`
+    closeBtn.textContent = '×'
+    closeBtn.addEventListener('click', () => overlay.remove())
+    header.appendChild(title)
+    header.appendChild(closeBtn)
+    modal.appendChild(header)
+
+    const diffs = diffData.diffs || []
+    if (diffs.length === 0) {
+      const empty = document.createElement('div')
+      empty.style.cssText = 'padding: 20px; color: #6c7086; text-align: center;'
+      empty.textContent = 'No documents in this changeset.'
+      modal.appendChild(empty)
+    } else {
+      diffs.forEach(d => {
+        const row = document.createElement('div')
+        row.style.cssText = 'padding: 10px 20px; border-bottom: 1px solid #181825;'
+
+        const topLine = document.createElement('div')
+        topLine.style.cssText = 'display: flex; align-items: center; justify-content: space-between; gap: 8px;'
+
+        const label = document.createElement('span')
+        label.style.cssText = 'flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'
+        label.textContent = `${d.doc_type}: ${d.slug || '(no slug)'}`
+
+        const badges = document.createElement('span')
+        badges.style.cssText = 'flex-shrink: 0; display: flex; gap: 4px; font-size: 11px;'
+
+        if (d.is_new) {
+          const tag = document.createElement('span')
+          tag.style.cssText = 'background: #a6e3a1; color: #1e1e2e; padding: 1px 6px; border-radius: 4px;'
+          tag.textContent = 'NEW'
+          badges.appendChild(tag)
+        } else if (d.has_changes) {
+          const tag = document.createElement('span')
+          tag.style.cssText = 'background: #89b4fa; color: #1e1e2e; padding: 1px 6px; border-radius: 4px;'
+          tag.textContent = `+${d.additions} -${d.deletions}`
+          badges.appendChild(tag)
+        } else {
+          const tag = document.createElement('span')
+          tag.style.cssText = 'background: #45475a; color: #cdd6f4; padding: 1px 6px; border-radius: 4px;'
+          tag.textContent = 'No changes'
+          badges.appendChild(tag)
+        }
+
+        topLine.appendChild(label)
+        topLine.appendChild(badges)
+        row.appendChild(topLine)
+
+        if (d.also_in && d.also_in.length > 0) {
+          const warn = document.createElement('div')
+          warn.style.cssText = 'margin-top: 4px; color: #fab387; font-size: 11px;'
+          const names = d.also_in.map(c => `"${c.title || 'Untitled'}"`).join(', ')
+          warn.textContent = `⚠ Also in: ${names}`
+          row.appendChild(warn)
+        }
+
+        if (d.has_changes && d.diff) {
+          const toggle = document.createElement('button')
+          toggle.style.cssText = `${BTN_BASE} background: transparent; color: #89b4fa; font-size: 11px; padding: 2px 0; margin-top: 4px;`
+          toggle.textContent = 'Show diff ▸'
+          const diffBlock = document.createElement('pre')
+          diffBlock.style.cssText = `
+            display: none; margin-top: 6px; padding: 8px; background: #11111b;
+            border-radius: 6px; font-size: 11px; line-height: 1.4;
+            overflow-x: auto; white-space: pre-wrap; color: #a6adc8;
+          `
+          diffBlock.textContent = d.diff
+
+          toggle.addEventListener('click', () => {
+            const show = diffBlock.style.display === 'none'
+            diffBlock.style.display = show ? 'block' : 'none'
+            toggle.textContent = show ? 'Hide diff ▾' : 'Show diff ▸'
+          })
+
+          row.appendChild(toggle)
+          row.appendChild(diffBlock)
+        }
+
+        modal.appendChild(row)
+      })
+    }
+
+    const footer = document.createElement('div')
+    footer.style.cssText = 'padding: 14px 20px; border-top: 1px solid #313244; display: flex; justify-content: flex-end; gap: 8px;'
+
+    const cancelBtn = document.createElement('button')
+    cancelBtn.style.cssText = `${BTN_BASE} background: #313244; color: #cdd6f4;`
+    cancelBtn.textContent = 'Cancel'
+    cancelBtn.addEventListener('click', () => overlay.remove())
+
+    const confirmBtn = document.createElement('button')
+    confirmBtn.style.cssText = `${BTN_BASE} background: #a6e3a1; color: #1e1e2e; font-weight: 600;`
+    confirmBtn.textContent = 'Confirm Publish'
+    confirmBtn.addEventListener('click', async () => {
+      confirmBtn.disabled = true
+      confirmBtn.textContent = 'Publishing…'
+      try {
+        await fetch(`${this.cmsBase}/api/changesets/${changesetId}/publish`, {
+          method: 'POST',
+          credentials: 'include',
+        })
+        if (this.activeChangesetId === changesetId) {
+          setActiveChangesetId(null)
+          this.activeChangesetId = null
+        }
+        overlay.remove()
+        this._showToast('Published — site rebuilding')
+        await this.refresh()
+      } catch (_err) {
+        confirmBtn.disabled = false
+        confirmBtn.textContent = 'Confirm Publish'
+        this._showToast('Publish failed')
+      }
+    })
+
+    footer.appendChild(cancelBtn)
+    footer.appendChild(confirmBtn)
+    modal.appendChild(footer)
+
+    overlay.appendChild(modal)
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.remove()
+    })
+    document.body.appendChild(overlay)
   }
 
   /**

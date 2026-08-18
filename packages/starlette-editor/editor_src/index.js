@@ -15,6 +15,8 @@ import { state, setState, setRenderFn } from './state.js'
 import { fetchSchema } from './api.js'
 import { showToast } from './components/toast.js'
 import { ChatPanel } from './embed/chat-panel.js'
+import { DocumentEventsSubscriber } from './events.js'
+import { EditorToolbar } from './standard/editor-toolbar.js'
 import { ShellChangesetPanel } from './standard/changeset-panel-shell.js'
 import { getActiveChangesetId } from './changeset-store.js'
 import {
@@ -41,6 +43,7 @@ function render() {
   renderTypeList(selectType);
   renderDocList(selectDoc, openNewDoc);
   renderHeader(togglePublish, saveDocument, deleteActiveDoc);
+  state.editorToolbar?.update();
   renderForm(onFieldChange, render);
 }
 
@@ -148,11 +151,11 @@ async function boot() {
   const chatPanel = new ChatPanel(resolvedCmsBase + '/chat', null, {
     apiKey: cfg.apiKey || null,
     getDocContext: () => {
-      if (!state.activeDocId) return null
-      // Use the first collab connection for version/draft_body if available
-      const conn = Object.values(state.collabConnections)[0] || null
+      const conn = state.activeDocId
+        ? (Object.values(state.collabConnections)[0] || null)
+        : null
       return {
-        doc_id: state.activeDocId,
+        doc_id: state.activeDocId ?? null,
         version: conn?.currentVersion?.() ?? 0,
         draft_body: conn?.currentDoc?.() ?? null,
         selection: conn?.currentSelection?.() ?? null,
@@ -163,11 +166,23 @@ async function boot() {
   chatPanel.mount()
   setState({ chatPanel }, false)  // store without re-render (header re-renders on doc select)
 
+  // Subscribe to live document-list events (create/update/delete/publish) so the
+  // list stays in sync with any writer — human in another tab, or the AI chat.
+  // Uses resolvedCmsBase (not the /chat base) since /api/events is a CMS route.
+  const eventsSubscriber = new DocumentEventsSubscriber(resolvedCmsBase, cfg.apiKey || null)
+  setState({ eventsSubscriber }, false)
+
   // Mount ChangesetPanel
   const changesetPanel = new ShellChangesetPanel()
   changesetPanel.mount()
   const initialCsId = getActiveChangesetId()
   setState({ changesetPanel, activeChangesetId: initialCsId }, false)
+  if (initialCsId) changesetPanel._syncActiveChangesetInfo(initialCsId)
+
+  // Mount floating toolbar pill
+  const editorToolbar = new EditorToolbar({ changesetPanel, chatPanel })
+  editorToolbar.mount()
+  setState({ editorToolbar }, false)
 }
 
 // Start when the DOM is ready

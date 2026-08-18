@@ -32,6 +32,9 @@ export const state = {
   pmInstances: {},        // { fieldName: ProseMirrorView } — keyed by field name
   collabConnections: {}, // { fieldName: CollabConnection } — mirrors pmInstances
   activeChangesetId: null, // string id of the active changeset, or null
+  activeChangesetTitle: null, // title of the active changeset
+  activeChangesetDocCount: 0, // number of docs in the active changeset
+  activeChangesetDocs: [],    // [{id, doc_type, slug, has_draft}] for tooltip
   chatPanel: null,        // ChatPanel instance once mounted
   changesetPanel: null,   // ShellChangesetPanel instance once mounted
 };
