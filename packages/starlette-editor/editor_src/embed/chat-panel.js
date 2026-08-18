@@ -14,13 +14,25 @@
  *   panel.toggle()
  */
 
+import markdownit from 'markdown-it'
+
+// markdown-it defaults to html:false, so LLM output is escaped (safe — no DOMPurify needed).
+const md = markdownit()
+
+// localStorage key for persisted panel geometry {left, top, width, height}.
+const LS_GEOMETRY_KEY = 'cms-chat-panel-geometry'
+
+// Minimum panel dimensions when resizing.
+const MIN_WIDTH = 300
+const MIN_HEIGHT = 260
+
 const PANEL_STYLES = `
   position: fixed;
   bottom: 80px;
   left: 24px;
   z-index: 9998;
   width: 360px;
-  max-height: 540px;
+  height: 540px;
   background: #1e1e2e;
   color: #cdd6f4;
   border: 1px solid #313244;
@@ -31,6 +43,31 @@ const PANEL_STYLES = `
   overflow: hidden;
   display: flex;
   flex-direction: column;
+`
+
+// Spacing/styling for markdown-rendered elements inside assistant bubbles.
+// Injected once (scoped to the panel) so tokens can render as real block markup.
+const MARKDOWN_STYLES = `
+  [data-cms-chat-panel] .cms-md > :first-child { margin-top: 0; }
+  [data-cms-chat-panel] .cms-md > :last-child { margin-bottom: 0; }
+  [data-cms-chat-panel] .cms-md p { margin: 0 0 8px; }
+  [data-cms-chat-panel] .cms-md ul,
+  [data-cms-chat-panel] .cms-md ol { margin: 4px 0; padding-left: 20px; }
+  [data-cms-chat-panel] .cms-md li { margin: 2px 0; }
+  [data-cms-chat-panel] .cms-md pre {
+    background: #181825;
+    padding: 8px 10px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 6px 0;
+  }
+  [data-cms-chat-panel] .cms-md code {
+    font-family: monospace;
+    font-size: 12px;
+  }
+  [data-cms-chat-panel] .cms-md h1,
+  [data-cms-chat-panel] .cms-md h2,
+  [data-cms-chat-panel] .cms-md h3 { margin: 8px 0 4px; font-size: 14px; }
 `
 
 const BTN_BASE = `
@@ -77,6 +114,14 @@ export class ChatPanel {
 
   /** Append panel to document.body, initially hidden. */
   mount() {
+    // Inject markdown styling once (shared across any panel instances).
+    if (!document.querySelector('style[data-cms-chat-md]')) {
+      const style = document.createElement('style')
+      style.setAttribute('data-cms-chat-md', '')
+      style.textContent = MARKDOWN_STYLES
+      document.head.appendChild(style)
+    }
+
     this._el = document.createElement('div')
     this._el.setAttribute('data-cms-chat-panel', '')
     this._el.style.cssText = PANEL_STYLES
@@ -91,8 +136,11 @@ export class ChatPanel {
     this._el.appendChild(divider)
 
     this._el.appendChild(this._buildInputArea())
+    this._el.appendChild(this._buildResizeHandle())
 
     document.body.appendChild(this._el)
+
+    this._restoreGeometry()
   }
 
   /** Toggle panel visibility and reset unread badge via toolbar. */
@@ -251,6 +299,7 @@ export class ChatPanel {
       case 'done':
         this._setState('idle')
         this._finalizeAssistantBubble()
+        window.dispatchEvent(new CustomEvent('cms:chat-turn-done'))
         break
     }
   }
@@ -332,6 +381,7 @@ export class ChatPanel {
   _startAssistantBubble() {
     if (!this._messagesEl) return
     const bubble = document.createElement('div')
+    bubble.className = 'cms-md'
     bubble.style.cssText = `
       ${BUBBLE_COMMON}
       align-self: flex-start;
@@ -339,21 +389,24 @@ export class ChatPanel {
       color: #cdd6f4;
       border-radius: 2px 12px 12px 12px;
     `
+    // Raw markdown buffer — re-rendered to innerHTML on each token.
+    bubble._raw = ''
     this._messagesEl.appendChild(bubble)
     this._currentAssistantBubble = bubble
     this._scrollToBottom()
   }
 
   /**
-   * Append a token delta to the active streaming assistant bubble.
-   * If no bubble exists yet, starts one first.
+   * Append a token delta to the active streaming assistant bubble and
+   * re-render it as markdown. If no bubble exists yet, starts one first.
    * @param {string} delta
    */
   _appendToken(delta) {
     if (!this._currentAssistantBubble) {
       this._startAssistantBubble()
     }
-    this._currentAssistantBubble.textContent += delta
+    this._currentAssistantBubble._raw += delta
+    this._currentAssistantBubble.innerHTML = md.render(this._currentAssistantBubble._raw)
     this._scrollToBottom()
   }
 
@@ -377,14 +430,20 @@ export class ChatPanel {
       max-width: 90%;
       word-break: break-all;
     `
-    chip.textContent = `🔍 ${tool} ${this._summarizeInput(input)}`
+    chip.textContent = `🔍 ${tool} ${this._summarizeInput(input)}`.trimEnd()
     this._messagesEl.appendChild(chip)
     this._activeToolChips[tool] = chip
+
+    // End the current LLM turn: the next token starts a fresh bubble so each
+    // ReAct turn renders as its own paragraph instead of one concatenated blob.
+    this._currentAssistantBubble = null
+
     this._scrollToBottom()
   }
 
   /**
-   * Resolve a pending tool chip to "✓ result summary".
+   * Resolve a pending tool chip to "✓ tool — summary".
+   * Keeps the tool name; falls back to the tool name alone when summary is empty.
    * @param {string} tool
    * @param {string} summary
    */
@@ -392,7 +451,7 @@ export class ChatPanel {
     const chip = this._activeToolChips[tool]
     if (!chip) return
     chip.style.color = '#a6e3a1'
-    chip.textContent = `✓ ${summary}`
+    chip.textContent = summary ? `✓ ${tool} — ${summary}` : `✓ ${tool}`
     delete this._activeToolChips[tool]
   }
 
@@ -435,7 +494,7 @@ export class ChatPanel {
   _summarizeInput(input) {
     if (!input || typeof input !== 'object') return ''
     const entries = Object.entries(input).slice(0, 2)
-    if (entries.length === 0) return '{}'
+    if (entries.length === 0) return ''
     const inner = entries
       .map(([k, v]) => `${k}: ${JSON.stringify(v).slice(0, 30)}`)
       .join(', ')
@@ -459,6 +518,8 @@ export class ChatPanel {
       align-items: center;
       justify-content: space-between;
       flex-shrink: 0;
+      cursor: move;
+      user-select: none;
     `
 
     const title = document.createElement('span')
@@ -470,9 +531,145 @@ export class ChatPanel {
     closeBtn.textContent = '×'
     closeBtn.addEventListener('click', () => this.toggle())
 
+    // Drag the panel by its header (ignore drags starting on the close button).
+    header.addEventListener('mousedown', (e) => this._startDrag(e, closeBtn))
+
     header.appendChild(title)
     header.appendChild(closeBtn)
     return header
+  }
+
+  // ── Private — drag / resize / geometry ─────────────────────────────────────
+
+  /**
+   * Begin dragging the panel from a header mousedown.
+   * @param {MouseEvent} e
+   * @param {HTMLElement} closeBtn - close button; drags starting on it are ignored
+   */
+  _startDrag(e, closeBtn) {
+    if (!this._el || (closeBtn && closeBtn.contains(e.target))) return
+    e.preventDefault()
+
+    // Switch from bottom/left to top/left anchoring so left/top drive position.
+    const rect = this._el.getBoundingClientRect()
+    this._el.style.top = rect.top + 'px'
+    this._el.style.left = rect.left + 'px'
+    this._el.style.bottom = 'auto'
+
+    const offsetX = e.clientX - rect.left
+    const offsetY = e.clientY - rect.top
+
+    const onMove = (ev) => {
+      const maxLeft = window.innerWidth - this._el.offsetWidth
+      const maxTop = window.innerHeight - this._el.offsetHeight
+      const left = Math.max(0, Math.min(ev.clientX - offsetX, maxLeft))
+      const top = Math.max(0, Math.min(ev.clientY - offsetY, maxTop))
+      this._el.style.left = left + 'px'
+      this._el.style.top = top + 'px'
+    }
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      this._persistGeometry()
+    }
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  /** Build the bottom-right resize handle that drives width/height. */
+  _buildResizeHandle() {
+    const handle = document.createElement('div')
+    handle.setAttribute('data-cms-chat-resize', '')
+    handle.style.cssText = `
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 16px;
+      height: 16px;
+      cursor: nwse-resize;
+      background:
+        linear-gradient(135deg, transparent 50%, #45475a 50%, #45475a 60%, transparent 60%, transparent 70%, #45475a 70%, #45475a 80%, transparent 80%);
+    `
+    handle.addEventListener('mousedown', (e) => this._startResize(e))
+    return handle
+  }
+
+  /**
+   * Begin resizing the panel from a handle mousedown.
+   * @param {MouseEvent} e
+   */
+  _startResize(e) {
+    if (!this._el) return
+    e.preventDefault()
+    e.stopPropagation()
+
+    const startX = e.clientX
+    const startY = e.clientY
+    const startW = this._el.offsetWidth
+    const startH = this._el.offsetHeight
+
+    const onMove = (ev) => {
+      const width = Math.max(MIN_WIDTH, startW + (ev.clientX - startX))
+      const height = Math.max(MIN_HEIGHT, startH + (ev.clientY - startY))
+      this._el.style.width = width + 'px'
+      this._el.style.height = height + 'px'
+    }
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      this._persistGeometry()
+    }
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  /** Save current geometry {left, top, width, height} to localStorage. */
+  _persistGeometry() {
+    if (!this._el) return
+    const rect = this._el.getBoundingClientRect()
+    try {
+      localStorage.setItem(
+        LS_GEOMETRY_KEY,
+        JSON.stringify({
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+        }),
+      )
+    } catch {
+      // localStorage unavailable (private mode / quota) — geometry just won't persist
+    }
+  }
+
+  /**
+   * Restore geometry from localStorage, clamped to the viewport.
+   * Falls back to the default PANEL_STYLES anchoring if none is saved.
+   */
+  _restoreGeometry() {
+    if (!this._el) return
+    let geo = null
+    try {
+      geo = JSON.parse(localStorage.getItem(LS_GEOMETRY_KEY) || 'null')
+    } catch {
+      geo = null
+    }
+    if (!geo) return
+
+    const width = Math.max(MIN_WIDTH, geo.width || MIN_WIDTH)
+    const height = Math.max(MIN_HEIGHT, geo.height || MIN_HEIGHT)
+    const left = Math.max(0, Math.min(geo.left ?? 0, window.innerWidth - width))
+    const top = Math.max(0, Math.min(geo.top ?? 0, window.innerHeight - height))
+
+    this._el.style.width = width + 'px'
+    this._el.style.height = height + 'px'
+    this._el.style.left = left + 'px'
+    this._el.style.top = top + 'px'
+    this._el.style.bottom = 'auto'
   }
 
   _buildMessagesArea() {
@@ -484,8 +681,7 @@ export class ChatPanel {
       display: flex;
       flex-direction: column;
       gap: 8px;
-      min-height: 200px;
-      max-height: 380px;
+      min-height: 0;
     `
     return el
   }

@@ -9,6 +9,7 @@ plus the ProseMirror collab WebSocket for edit operations.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -329,14 +330,31 @@ class ToolDispatcher:
     async def _auto_link_changeset(
         self, doc_id: str, context: dict[str, Any] | None
     ) -> None:
-        """Silently link a doc to the active changeset if one is set in context."""
-        active_cs_id = (context or {}).get("active_changeset_id")
-        if not active_cs_id:
+        """Link a doc to the active changeset, creating one if needed."""
+        ctx = context or {}
+        active_cs_id = ctx.get("active_changeset_id")
+
+        if active_cs_id:
+            try:
+                await self._link_doc_to_changeset(
+                    {"changeset_id": active_cs_id, "doc_id": doc_id}, context
+                )
+            except Exception:
+                pass
             return
+
+        # No active changeset — auto-create one
         try:
-            await self._link_doc_to_changeset(
-                {"changeset_id": active_cs_id, "doc_id": doc_id}, context
-            )
+            today = datetime.now(UTC)
+            auto_title = today.strftime("%b %-d")
+            result = await self._create_changeset({"title": auto_title})
+            if result.get("status") == "created":
+                new_cs = result["changeset"]
+                new_cs_id = new_cs["id"]
+                ctx["active_changeset_id"] = new_cs_id
+                await self._link_doc_to_changeset(
+                    {"changeset_id": new_cs_id, "doc_id": doc_id}, context
+                )
         except Exception:
             pass
 

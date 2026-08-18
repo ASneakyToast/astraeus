@@ -18,6 +18,9 @@ class MockWebSocket {
     this.readyState = MockWebSocket.OPEN
     this.sent = []
     MockWebSocket.instances.push(this)
+    // Fire onopen on the next tick so _initWs()'s open-promise resolves
+    // (handlers are assigned synchronously right after construction).
+    setTimeout(() => this.onopen?.(), 0)
   }
 
   send(data) {
@@ -121,6 +124,39 @@ describe('ChatPanel.mount() and toggle()', () => {
   })
 })
 
+describe('ChatPanel — geometry persistence', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('persists geometry to localStorage on drag/resize end', () => {
+    const panel = makePanel()
+    panel.mount()
+    Object.assign(panel._el.style, { left: '40px', top: '60px', width: '400px', height: '320px' })
+
+    panel._persistGeometry()
+
+    const saved = JSON.parse(localStorage.getItem('cms-chat-panel-geometry'))
+    expect(saved).toBeTruthy()
+    expect(saved).toHaveProperty('left')
+    expect(saved).toHaveProperty('width')
+  })
+
+  it('restores saved geometry on mount, clamped into the viewport', () => {
+    localStorage.setItem(
+      'cms-chat-panel-geometry',
+      JSON.stringify({ left: 50, top: 70, width: 420, height: 300 }),
+    )
+    const panel = makePanel()
+    panel.mount()
+
+    expect(panel._el.style.width).toBe('420px')
+    expect(panel._el.style.height).toBe('300px')
+    expect(panel._el.style.left).toBe('50px')
+    expect(panel._el.style.top).toBe('70px')
+    // Switched to top/left anchoring
+    expect(panel._el.style.bottom).toBe('auto')
+  })
+})
+
 describe('ChatPanel.send()', () => {
   it('appends a user message bubble to the messages area', async () => {
     vi.stubGlobal('fetch', makeFetch())
@@ -201,13 +237,13 @@ describe('ChatPanel._onServerMessage() — thinking', () => {
 })
 
 describe('ChatPanel._onServerMessage() — token streaming', () => {
-  it('builds a streaming assistant bubble from token deltas', () => {
+  it('builds a streaming assistant bubble from token deltas (raw buffer)', () => {
     const panel = makeMountedPanel()
     panel._onServerMessage({ type: 'token', delta: 'Hello ' })
     panel._onServerMessage({ type: 'token', delta: 'world' })
 
     expect(panel._currentAssistantBubble).toBeTruthy()
-    expect(panel._currentAssistantBubble.textContent).toBe('Hello world')
+    expect(panel._currentAssistantBubble._raw).toBe('Hello world')
   })
 
   it('sets state to "streaming"', () => {
@@ -220,7 +256,48 @@ describe('ChatPanel._onServerMessage() — token streaming', () => {
     const panel = makeMountedPanel()
     panel._onServerMessage({ type: 'token', delta: 'Sure' })
     expect(panel._currentAssistantBubble).toBeTruthy()
-    expect(panel._currentAssistantBubble.textContent).toBe('Sure')
+    expect(panel._currentAssistantBubble._raw).toBe('Sure')
+  })
+
+  it('renders markdown to HTML in the bubble (lists, emphasis)', () => {
+    const panel = makeMountedPanel()
+    panel._onServerMessage({ type: 'token', delta: '- one\n' })
+    panel._onServerMessage({ type: 'token', delta: '- two\n' })
+
+    const html = panel._currentAssistantBubble.innerHTML
+    expect(html).toContain('<ul>')
+    expect(html).toContain('<li>one</li>')
+    expect(html).toContain('<li>two</li>')
+  })
+
+  it('escapes raw HTML in LLM output (markdown-it html:false)', () => {
+    const panel = makeMountedPanel()
+    panel._onServerMessage({ type: 'token', delta: '<img src=x onerror=alert(1)>' })
+
+    const html = panel._currentAssistantBubble.innerHTML
+    expect(html).not.toContain('<img')
+    expect(html).toContain('&lt;img')
+  })
+})
+
+describe('ChatPanel — per-turn bubble splitting', () => {
+  it('starts a fresh bubble after a tool chip so each ReAct turn is separate', () => {
+    const panel = makeMountedPanel()
+
+    // Turn 1: assistant text
+    panel._onServerMessage({ type: 'token', delta: 'Let me search.' })
+    const firstBubble = panel._currentAssistantBubble
+    expect(firstBubble._raw).toBe('Let me search.')
+
+    // Tool call ends the turn
+    panel._onServerMessage({ type: 'tool_use', tool: 'search_documents', input: { query: 'x' } })
+    expect(panel._currentAssistantBubble).toBeNull()
+
+    // Turn 2: new text → new bubble, not appended to the first
+    panel._onServerMessage({ type: 'token', delta: 'Found it.' })
+    expect(panel._currentAssistantBubble).not.toBe(firstBubble)
+    expect(panel._currentAssistantBubble._raw).toBe('Found it.')
+    expect(firstBubble._raw).toBe('Let me search.')
   })
 })
 
@@ -239,7 +316,7 @@ describe('ChatPanel._onServerMessage() — tool_use / tool_result', () => {
     expect(chip.textContent).toContain('search_documents')
   })
 
-  it('resolves chip to ✓ summary on tool_result and removes from activeToolChips', () => {
+  it('resolves chip to "✓ tool — summary" on tool_result and removes from activeToolChips', () => {
     const panel = makeMountedPanel()
     panel._onServerMessage({
       type: 'tool_use',
@@ -255,9 +332,32 @@ describe('ChatPanel._onServerMessage() — tool_use / tool_result', () => {
     const chip = panel._messagesEl.querySelector('div[style*="monospace"]')
     expect(chip).toBeTruthy()
     expect(chip.textContent).toContain('✓')
+    // Keeps the tool name alongside the summary
+    expect(chip.textContent).toContain('search_documents')
     expect(chip.textContent).toContain('Found 3 documents')
+    expect(chip.textContent).toContain('—')
     // Removed from activeToolChips after resolution
     expect(panel._activeToolChips['search_documents']).toBeUndefined()
+  })
+
+  it('falls back to "✓ tool" (no bare {}) when the summary is empty', () => {
+    const panel = makeMountedPanel()
+    panel._onServerMessage({ type: 'tool_use', tool: 'create_document', input: {} })
+    panel._onServerMessage({ type: 'tool_result', tool: 'create_document', summary: '' })
+
+    const chip = panel._messagesEl.querySelector('div[style*="monospace"]')
+    expect(chip.textContent).toContain('✓ create_document')
+    expect(chip.textContent).not.toContain('{}')
+    expect(chip.textContent).not.toContain('—')
+  })
+
+  it('renders an empty-input tool chip without a bare {}', () => {
+    const panel = makeMountedPanel()
+    panel._onServerMessage({ type: 'tool_use', tool: 'list_types', input: {} })
+
+    const chip = panel._activeToolChips['list_types']
+    expect(chip.textContent).toContain('🔍 list_types')
+    expect(chip.textContent).not.toContain('{}')
   })
 
   it('does nothing on tool_result for an unknown tool name', () => {

@@ -9,6 +9,7 @@ Three routes:
 
 from __future__ import annotations
 
+import ast
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -583,11 +584,18 @@ def _langgraph_event_to_ws(event: dict[str, Any]) -> dict[str, Any] | None:
         # output may be a ToolMessage or a plain dict
         result: dict[str, Any] = {}
         if hasattr(output, "content"):
-            import ast
-            try:
-                result = ast.literal_eval(output.content) if isinstance(output.content, str) else {}
-            except Exception:
-                result = {}
+            content = output.content
+            if isinstance(content, str):
+                # Tool output is JSON (true/false/null); json.loads handles it.
+                # Fall back to ast.literal_eval for Python-repr'd dicts.
+                try:
+                    parsed = json.loads(content)
+                except (json.JSONDecodeError, TypeError):
+                    try:
+                        parsed = ast.literal_eval(content)
+                    except (ValueError, SyntaxError):
+                        parsed = {}
+                result = parsed if isinstance(parsed, dict) else {}
         elif isinstance(output, dict):
             result = output
 
@@ -628,7 +636,9 @@ def _summarise_tool_result(result: dict[str, Any]) -> str:
         return f"Published {result.get('doc_id', '')}"
     if status == "created":
         doc = result.get("document", {})
-        return f"Created document {doc.get('id', '')}"
+        # Prefer a human-readable name (body.title or slug) over the raw id.
+        label = doc.get("body", {}).get("title") or doc.get("slug") or doc.get("id", "")
+        return f'Created "{label}"' if label else "Created document"
     if status == "ok":
         return "OK"
     return str(result)
