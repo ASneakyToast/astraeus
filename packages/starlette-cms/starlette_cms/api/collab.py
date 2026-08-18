@@ -246,6 +246,36 @@ def make_collab_routes(cms: CMS) -> list:
             await manager.gc_if_idle(document_id)
 
     # ------------------------------------------------------------------
+    # Document-events WebSocket — WS /api/events
+    # ------------------------------------------------------------------
+
+    async def events_ws(websocket: WebSocket) -> None:
+        """Broadcast document-list events (create/update/delete/publish) to subscribers.
+
+        Reuses the same auth as the collab socket. The shell opens one of these
+        on boot to keep its document list live regardless of who wrote (human or AI).
+        """
+        if not _check_ws_auth(websocket, cms):
+            await websocket.close(code=4401)
+            return
+
+        await websocket.accept()
+        cms.event_bus.add(websocket)
+
+        try:
+            # Hold the connection open. We only need to read to detect
+            # disconnects and answer keep-alive pings; all data flows outbound
+            # via event_bus.broadcast().
+            while True:
+                data = await websocket.receive_json()
+                if data.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+        except Exception:
+            pass  # disconnect / receive error
+        finally:
+            cms.event_bus.remove(websocket)
+
+    # ------------------------------------------------------------------
     # History endpoint — GET /api/documents/{document_id}/history
     # ------------------------------------------------------------------
 
@@ -425,6 +455,7 @@ def make_collab_routes(cms: CMS) -> list:
         )
 
     return [
+        WebSocketRoute("/api/events", endpoint=events_ws),
         WebSocketRoute("/api/documents/{document_id}/collab", endpoint=collab_ws),
         Route(
             "/api/documents/{document_id}/history",

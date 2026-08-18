@@ -490,3 +490,60 @@ async def test_delivery_failure_does_not_affect_response(wh_client):
         assert create_resp.status_code == 201
 
         await asyncio.sleep(0.1)
+
+
+# ---------------------------------------------------------------------------
+# Event bus: fire_event broadcasts to in-process subscribers (live doc list)
+# ---------------------------------------------------------------------------
+
+
+class _FakeEventWS:
+    """Minimal WebSocket stand-in that records broadcast payloads."""
+
+    def __init__(self) -> None:
+        self.received: list[dict] = []
+
+    async def send_json(self, payload: dict) -> None:
+        self.received.append(payload)
+
+
+async def test_fire_event_broadcasts_to_event_bus(wh_cms, wh_client):
+    """Creating a document broadcasts a document.created payload to event-bus subscribers."""
+    sub = _FakeEventWS()
+    wh_cms.event_bus.add(sub)
+
+    create_resp = await wh_client.post(
+        "/api/documents",
+        json={"doc_type": "page", "slug": "live", "body": {"title": "Live", "slug": "live"}},
+    )
+    doc_id = create_resp.json()["id"]
+
+    # fire_event is created as a task; give it a quantum to run.
+    await asyncio.sleep(0.1)
+
+    assert any(
+        p["event"] == "document.created"
+        and p["document_id"] == doc_id
+        and p["document_type"] == "page"
+        for p in sub.received
+    )
+
+
+async def test_event_bus_broadcast_drops_failed_connection():
+    """A subscriber whose send_json raises is removed and does not block others."""
+    from starlette_cms.collab import DocumentEventBus
+
+    class _Bad:
+        async def send_json(self, payload):
+            raise RuntimeError("boom")
+
+    bus = DocumentEventBus()
+    good = _FakeEventWS()
+    bad = _Bad()
+    bus.add(bad)
+    bus.add(good)
+
+    await bus.broadcast({"event": "document.updated", "document_id": "x"})
+
+    assert good.received == [{"event": "document.updated", "document_id": "x"}]
+    assert bad not in bus._connections  # dropped after failure

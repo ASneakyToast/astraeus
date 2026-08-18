@@ -66,7 +66,7 @@ async def _deliver(url: str, payload: dict[str, Any]) -> None:
 
 
 async def fire_event(
-    cms: CMS,  # noqa: ARG001 — kept for future use (per-cms filtering)
+    cms: CMS,
     event: str,
     doc_id: str,
     doc_type: str,
@@ -75,12 +75,14 @@ async def fire_event(
     extra: dict[str, Any] | None = None,
 ) -> None:
     """
-    Dispatch *event* to all matching active webhooks as fire-and-forget tasks.
+    Dispatch *event* to all matching active webhooks as fire-and-forget tasks,
+    and broadcast it to in-process document-event subscribers (the shell's
+    live document list).
 
     Piccolo doesn't support native JSON-contains queries on SQLite, so we
     fetch all active webhooks and filter in Python.
 
-    :param cms: The CMS instance (reserved for future per-instance filtering).
+    :param cms: The CMS instance (webhook filtering + event-bus broadcast).
     :param event: Event name, e.g. ``"document.published"``.
     :param doc_id: The document's nanoid.
     :param doc_type: The registered document type name.
@@ -99,6 +101,10 @@ async def fire_event(
     }
     if extra:
         payload.update(extra)
+
+    # Single chokepoint → browsers (live list) and webhooks stay in sync,
+    # covering AI and human writes alike.
+    await cms.event_bus.broadcast(payload)
 
     loop = asyncio.get_running_loop()
     for row in rows:

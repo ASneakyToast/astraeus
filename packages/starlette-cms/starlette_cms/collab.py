@@ -308,3 +308,34 @@ class CollabManager:
                     self._authorities.pop(document_id, None)
 
         asyncio.ensure_future(_gc())
+
+
+class DocumentEventBus:
+    """
+    In-process pub/sub for document-list events (create/update/delete/publish).
+
+    Unlike :class:`CollabManager`, which is keyed per-document, this is a single
+    list-level channel: the shell subscribes once over ``/api/events`` and
+    receives every document event so it can refresh its document list live.
+
+    A single instance lives on the :class:`~starlette_cms.app.CMS` object.
+    """
+
+    def __init__(self) -> None:
+        self._connections: set[WebSocket] = set()
+
+    def add(self, ws: WebSocket) -> None:
+        """Register a subscriber WebSocket."""
+        self._connections.add(ws)
+
+    def remove(self, ws: WebSocket) -> None:
+        """Unregister a subscriber WebSocket."""
+        self._connections.discard(ws)
+
+    async def broadcast(self, payload: dict) -> None:
+        """Send *payload* as JSON to every subscriber; drop failed connections."""
+        for ws in set(self._connections):
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                self._connections.discard(ws)  # stale connection

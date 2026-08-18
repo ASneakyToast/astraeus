@@ -75,8 +75,9 @@ class CMS:
         self._app: Starlette | None = None  # built lazily on first access
         self._db: Any = None  # CMSDatabase instance, set in lifespan
 
-        from starlette_cms.collab import CollabManager
+        from starlette_cms.collab import CollabManager, DocumentEventBus
         self.collab_manager = CollabManager()
+        self.event_bus = DocumentEventBus()
 
         if discover_blocks:
             self._discover_blocks()
