@@ -27,7 +27,15 @@ from urllib.parse import urlparse
 
 import structlog
 
-from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSMeta, CMSStep, CMSWebhook
+from starlette_cms.tables import (
+    CMSChangeset,
+    CMSChangesetDocument,
+    CMSDocument,
+    CMSDocumentVersion,
+    CMSMeta,
+    CMSStep,
+    CMSWebhook,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -53,6 +61,7 @@ class CMSDatabase:
 
         # Assign to all table classes
         CMSDocument._meta.db = engine
+        CMSDocumentVersion._meta.db = engine
         CMSMeta._meta.db = engine
         CMSWebhook._meta.db = engine
         CMSChangeset._meta.db = engine
@@ -70,6 +79,7 @@ class CMSDatabase:
 
         # Create tables (zero-config dev experience — safe on existing DBs)
         await CMSDocument.create_table(if_not_exists=True)
+        await CMSDocumentVersion.create_table(if_not_exists=True)
         await CMSMeta.create_table(if_not_exists=True)
         await CMSWebhook.create_table(if_not_exists=True)
         await CMSChangeset.create_table(if_not_exists=True)

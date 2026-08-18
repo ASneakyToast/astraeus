@@ -16,9 +16,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from nanoid import generate as nanoid_generate
+from starlette_cms.api.changesets import _snapshot_document_version
 from starlette_cms.api.webhooks import fire_event
 from starlette_cms.auth import require_auth
-from starlette_cms.tables import CMSDocument
+from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSDocumentVersion
 
 if TYPE_CHECKING:
     from starlette_cms.app import CMS
@@ -102,8 +104,8 @@ def _row_to_dict(row: dict[str, Any], *, use_draft: bool = False) -> dict[str, A
 
     # Treat None and {} as "no draft" — {} can appear on legacy rows that
     # predate the explicit default=None fix, or from buggy clients.
-    has_draft = bool(raw_draft_body)
-    effective_body = raw_draft_body if (use_draft and has_draft) else raw_body
+    has_draft = bool(raw_draft_body) or (row.get("draft_published") is not None) or (row.get("draft_deleted") is True)
+    effective_body = raw_draft_body if (use_draft and bool(raw_draft_body)) else raw_body
 
     meta = row.get("meta", "{}")
     if isinstance(meta, str):
@@ -352,7 +354,17 @@ def make_document_routes(cms: CMS) -> list[Route]:
             published = published_param.lower() in ("true", "1", "yes")
             query = query.where(CMSDocument.published == published)
         if has_draft_param is not None and has_draft_param.lower() in ("true", "1", "yes"):
-            query = query.where(CMSDocument.draft_body.is_not_null())
+            query = query.where(
+                CMSDocument.draft_body.is_not_null()
+                | CMSDocument.draft_published.is_not_null()
+                | (CMSDocument.draft_deleted == True)  # noqa: E712
+            )
+
+        exclude_types_param = params.get("exclude_types")
+        if exclude_types_param:
+            excluded = [t.strip() for t in exclude_types_param.split(",") if t.strip()]
+            if excluded:
+                query = query.where(CMSDocument.doc_type.not_in(excluded))
 
         query = query.order_by(order_col, ascending=order_asc)
 
@@ -383,7 +395,16 @@ def make_document_routes(cms: CMS) -> list[Route]:
                         "1",
                         "yes",
                     ):
-                        count_query = count_query.where(CMSDocument.draft_body.is_not_null())
+                        count_query = count_query.where(
+                            CMSDocument.draft_body.is_not_null()
+                            | CMSDocument.draft_published.is_not_null()
+                            | (CMSDocument.draft_deleted == True)  # noqa: E712
+                        )
+
+                    if exclude_types_param:
+                        excluded_for_count = [t.strip() for t in exclude_types_param.split(",") if t.strip()]
+                        if excluded_for_count:
+                            count_query = count_query.where(CMSDocument.doc_type.not_in(excluded_for_count))
 
                     total = await count_query.run()
                     rows = await query.limit(limit).offset(offset).run()
@@ -706,9 +727,94 @@ def make_document_routes(cms: CMS) -> list[Route]:
             fire_event(cms, "document.updated", doc_id, doc_type, updated_row.get("slug", ""))
         )
 
-        # Return the draft body in the PATCH response so callers see what they
-        # just saved, while GET (no ?draft=true) continues to return published body.
-        return JSONResponse(_row_to_dict(updated_row, use_draft=True))
+        # Auto-link to changeset — skip non-content doc types
+        CHANGESET_EXCLUDED_TYPES = {"chat_session", "chat_message"}
+        response_headers: dict[str, str] = {}
+        active_cs_id = request.headers.get("x-active-changeset-id")
+
+        if doc_type in CHANGESET_EXCLUDED_TYPES:
+            pass
+        elif active_cs_id:
+            # Verify changeset exists and is open, then link
+            cs_rows = await CMSChangeset.select().where(CMSChangeset.id == active_cs_id).run()
+            if cs_rows and cs_rows[0]["status"] in ("open", "review"):
+                existing = (
+                    await CMSChangesetDocument.select()
+                    .where(
+                        CMSChangesetDocument.changeset_id == active_cs_id,
+                        CMSChangesetDocument.document_id == doc_id,
+                    )
+                    .run()
+                )
+                if not existing:
+                    await CMSChangesetDocument.insert(
+                        CMSChangesetDocument(
+                            changeset_id=active_cs_id,
+                            document_id=doc_id,
+                            added_at=datetime.now(UTC),
+                        )
+                    ).run()
+        else:
+            # Check if doc is already in an open changeset
+            in_cs = (
+                await CMSChangesetDocument.select(CMSChangesetDocument.changeset_id)
+                .where(CMSChangesetDocument.document_id == doc_id)
+                .run()
+            )
+            already_in_open = False
+            if in_cs:
+                cs_ids = [r["changeset_id"] for r in in_cs]
+                open_cs = (
+                    await CMSChangeset.select(CMSChangeset.id)
+                    .where(
+                        CMSChangeset.id.is_in(cs_ids),
+                        CMSChangeset.status.is_in(["open", "review"]),
+                    )
+                    .run()
+                )
+                already_in_open = len(open_cs) > 0
+
+            if not already_in_open:
+                today = datetime.now(UTC)
+                auto_title = today.strftime("%b %-d")
+
+                # Handle collisions: "Aug 9" → "Aug 9 (2)"
+                existing_today = (
+                    await CMSChangeset.select(CMSChangeset.title)
+                    .where(CMSChangeset.title.like(f"{auto_title}%"))
+                    .run()
+                )
+                if existing_today:
+                    existing_titles = {r["title"] for r in existing_today}
+                    if auto_title in existing_titles:
+                        suffix = 2
+                        while f"{auto_title} ({suffix})" in existing_titles:
+                            suffix += 1
+                        auto_title = f"{auto_title} ({suffix})"
+
+                new_cs_id = nanoid_generate(size=21)
+                await CMSChangeset.insert(
+                    CMSChangeset(
+                        id=new_cs_id,
+                        title=auto_title,
+                        status="open",
+                        created_at=today,
+                        publish_at=None,
+                        published_at=None,
+                    )
+                ).run()
+                await CMSChangesetDocument.insert(
+                    CMSChangesetDocument(
+                        changeset_id=new_cs_id,
+                        document_id=doc_id,
+                        added_at=today,
+                    )
+                ).run()
+                response_headers["X-Changeset-Id"] = new_cs_id
+                response_headers["X-Changeset-Title"] = auto_title
+
+        result = _row_to_dict(updated_row, use_draft=True)
+        return JSONResponse(result, headers=response_headers if response_headers else None)
 
     async def delete_document(request: Request) -> Response:
         if (err := await require_auth(request, cms)) is not None:
@@ -792,6 +898,21 @@ def make_document_routes(cms: CMS) -> list[Route]:
                     operation="publish",
                 )
                 draft_body_raw = None
+
+        # Snapshot current body before overwriting
+        current_body = row.get("body")
+        if isinstance(current_body, str):
+            try:
+                current_body = json.loads(current_body)
+            except Exception:
+                current_body = {}
+        await _snapshot_document_version(
+            doc_id=doc_id,
+            body=current_body or {},
+            action="publish",
+            changeset_id=None,
+            now=now,
+        )
 
         publish_body_update: dict[Column | str, Any] = {}
         if draft_body_raw is not None:
@@ -915,6 +1036,8 @@ def make_document_routes(cms: CMS) -> list[Route]:
                     CMSDocument.update(
                         {
                             CMSDocument.draft_body: None,
+                            CMSDocument.draft_deleted: None,
+                            CMSDocument.draft_published: None,
                             CMSDocument.draft_version: 0,
                             CMSDocument.updated_at: datetime.now(UTC),
                         }
@@ -928,6 +1051,249 @@ def make_document_routes(cms: CMS) -> list[Route]:
 
         updated_rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
         return JSONResponse(_row_to_dict(updated_rows[0]))
+
+    async def set_draft_publish_state(request: Request) -> JSONResponse:
+        if (err := await require_auth(request, cms)) is not None:
+            return err
+
+        doc_id = request.path_params["id"]
+        rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
+        if not rows:
+            return JSONResponse({"error": "Document not found"}, status_code=404)
+
+        row = rows[0]
+        doc_type = row["doc_type"]
+
+        try:
+            data = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+        if "published" not in data:
+            return JSONResponse({"error": "published field is required"}, status_code=422)
+
+        # Value is the desired draft_published state:
+        # true = pending publish, false = pending unpublish, null = clear pending change
+        draft_published = data["published"]
+
+        now = datetime.now(UTC)
+        await (
+            CMSDocument.update(
+                {
+                    CMSDocument.draft_published: draft_published,
+                    CMSDocument.updated_at: now,
+                }
+            )
+            .where(CMSDocument.id == doc_id)
+            .run()
+        )
+
+        # Auto-link to changeset (same pattern as patch_document)
+        CHANGESET_EXCLUDED_TYPES = {"chat_session", "chat_message"}
+        response_headers: dict[str, str] = {}
+        active_cs_id = request.headers.get("x-active-changeset-id")
+
+        if doc_type in CHANGESET_EXCLUDED_TYPES:
+            pass
+        elif active_cs_id:
+            cs_rows = await CMSChangeset.select().where(CMSChangeset.id == active_cs_id).run()
+            if cs_rows and cs_rows[0]["status"] in ("open", "review"):
+                existing = (
+                    await CMSChangesetDocument.select()
+                    .where(
+                        CMSChangesetDocument.changeset_id == active_cs_id,
+                        CMSChangesetDocument.document_id == doc_id,
+                    )
+                    .run()
+                )
+                if not existing:
+                    await CMSChangesetDocument.insert(
+                        CMSChangesetDocument(
+                            changeset_id=active_cs_id,
+                            document_id=doc_id,
+                            added_at=now,
+                        )
+                    ).run()
+        else:
+            in_cs = (
+                await CMSChangesetDocument.select(CMSChangesetDocument.changeset_id)
+                .where(CMSChangesetDocument.document_id == doc_id)
+                .run()
+            )
+            already_in_open = False
+            if in_cs:
+                cs_ids = [r["changeset_id"] for r in in_cs]
+                open_cs = (
+                    await CMSChangeset.select(CMSChangeset.id)
+                    .where(
+                        CMSChangeset.id.is_in(cs_ids),
+                        CMSChangeset.status.is_in(["open", "review"]),
+                    )
+                    .run()
+                )
+                already_in_open = len(open_cs) > 0
+
+            if not already_in_open:
+                today = datetime.now(UTC)
+                auto_title = today.strftime("%b %-d")
+
+                existing_today = (
+                    await CMSChangeset.select(CMSChangeset.title)
+                    .where(CMSChangeset.title.like(f"{auto_title}%"))
+                    .run()
+                )
+                if existing_today:
+                    existing_titles = {r["title"] for r in existing_today}
+                    if auto_title in existing_titles:
+                        suffix = 2
+                        while f"{auto_title} ({suffix})" in existing_titles:
+                            suffix += 1
+                        auto_title = f"{auto_title} ({suffix})"
+
+                new_cs_id = nanoid_generate(size=21)
+                await CMSChangeset.insert(
+                    CMSChangeset(
+                        id=new_cs_id,
+                        title=auto_title,
+                        status="open",
+                        created_at=today,
+                        publish_at=None,
+                        published_at=None,
+                    )
+                ).run()
+                await CMSChangesetDocument.insert(
+                    CMSChangesetDocument(
+                        changeset_id=new_cs_id,
+                        document_id=doc_id,
+                        added_at=today,
+                    )
+                ).run()
+                response_headers["X-Changeset-Id"] = new_cs_id
+                response_headers["X-Changeset-Title"] = auto_title
+
+        updated_rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
+        result = _row_to_dict(updated_rows[0])
+        return JSONResponse(result, headers=response_headers if response_headers else None)
+
+    async def set_draft_delete_state(request: Request) -> JSONResponse:
+        if (err := await require_auth(request, cms)) is not None:
+            return err
+
+        doc_id = request.path_params["id"]
+        rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
+        if not rows:
+            return JSONResponse({"error": "Document not found"}, status_code=404)
+
+        row = rows[0]
+        doc_type = row["doc_type"]
+
+        try:
+            data = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+        if "deleted" not in data:
+            return JSONResponse({"error": "deleted field is required"}, status_code=422)
+
+        draft_deleted = True if data["deleted"] else None
+
+        now = datetime.now(UTC)
+        await (
+            CMSDocument.update(
+                {
+                    CMSDocument.draft_deleted: draft_deleted,
+                    CMSDocument.updated_at: now,
+                }
+            )
+            .where(CMSDocument.id == doc_id)
+            .run()
+        )
+
+        CHANGESET_EXCLUDED_TYPES = {"chat_session", "chat_message"}
+        response_headers: dict[str, str] = {}
+        active_cs_id = request.headers.get("x-active-changeset-id")
+
+        if doc_type in CHANGESET_EXCLUDED_TYPES:
+            pass
+        elif active_cs_id:
+            cs_rows = await CMSChangeset.select().where(CMSChangeset.id == active_cs_id).run()
+            if cs_rows and cs_rows[0]["status"] in ("open", "review"):
+                existing = (
+                    await CMSChangesetDocument.select()
+                    .where(
+                        CMSChangesetDocument.changeset_id == active_cs_id,
+                        CMSChangesetDocument.document_id == doc_id,
+                    )
+                    .run()
+                )
+                if not existing:
+                    await CMSChangesetDocument.insert(
+                        CMSChangesetDocument(
+                            changeset_id=active_cs_id,
+                            document_id=doc_id,
+                            added_at=now,
+                        )
+                    ).run()
+        else:
+            in_cs = (
+                await CMSChangesetDocument.select(CMSChangesetDocument.changeset_id)
+                .where(CMSChangesetDocument.document_id == doc_id)
+                .run()
+            )
+            already_in_open = False
+            if in_cs:
+                cs_ids = [r["changeset_id"] for r in in_cs]
+                open_cs = (
+                    await CMSChangeset.select(CMSChangeset.id)
+                    .where(
+                        CMSChangeset.id.is_in(cs_ids),
+                        CMSChangeset.status.is_in(["open", "review"]),
+                    )
+                    .run()
+                )
+                already_in_open = len(open_cs) > 0
+
+            if not already_in_open:
+                today = datetime.now(UTC)
+                auto_title = today.strftime("%b %-d")
+
+                existing_today = (
+                    await CMSChangeset.select(CMSChangeset.title)
+                    .where(CMSChangeset.title.like(f"{auto_title}%"))
+                    .run()
+                )
+                if existing_today:
+                    existing_titles = {r["title"] for r in existing_today}
+                    if auto_title in existing_titles:
+                        suffix = 2
+                        while f"{auto_title} ({suffix})" in existing_titles:
+                            suffix += 1
+                        auto_title = f"{auto_title} ({suffix})"
+
+                new_cs_id = nanoid_generate(size=21)
+                await CMSChangeset.insert(
+                    CMSChangeset(
+                        id=new_cs_id,
+                        title=auto_title,
+                        status="open",
+                        created_at=today,
+                        publish_at=None,
+                        published_at=None,
+                    )
+                ).run()
+                await CMSChangesetDocument.insert(
+                    CMSChangesetDocument(
+                        changeset_id=new_cs_id,
+                        document_id=doc_id,
+                        added_at=today,
+                    )
+                ).run()
+                response_headers["X-Changeset-Id"] = new_cs_id
+                response_headers["X-Changeset-Title"] = auto_title
+
+        updated_rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
+        result = _row_to_dict(updated_rows[0])
+        return JSONResponse(result, headers=response_headers if response_headers else None)
 
     async def get_singleton(request: Request) -> JSONResponse:
         """Return the currently active singleton for a block type, or 404."""
@@ -1080,4 +1446,6 @@ def make_document_routes(cms: CMS) -> list[Route]:
         Route("/api/documents/{id}/publish", endpoint=publish_document, methods=["POST"]),
         Route("/api/documents/{id}/unpublish", endpoint=unpublish_document, methods=["POST"]),
         Route("/api/documents/{id}/discard-draft", endpoint=discard_draft, methods=["POST"]),
+        Route("/api/documents/{id}/draft-publish-state", endpoint=set_draft_publish_state, methods=["POST"]),
+        Route("/api/documents/{id}/draft-delete", endpoint=set_draft_delete_state, methods=["POST"]),
     ]

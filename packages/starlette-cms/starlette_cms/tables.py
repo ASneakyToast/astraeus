@@ -41,6 +41,14 @@ class CMSDocument(Table):
     draft_body = JSON(null=True, required=False, default=None)
     # draft_body — working draft (unpublished edits). NULL means no unpublished
     # edits exist; non-NULL means the document has unsaved changes not yet in body.
+    draft_deleted = Boolean(null=True, required=False, default=None)
+    # draft_deleted — pending deletion staged via the editor.
+    # None/False = no pending delete; True = will delete when changeset publishes.
+    # Cleared on discard-draft.
+    draft_published = Boolean(null=True, required=False, default=None)
+    # draft_published — pending publish state change.
+    # None = no pending change; True = will publish; False = will unpublish.
+    # Applied when the changeset publishes; cleared on discard-draft.
     draft_version = Integer(default=0)
     # draft_version — incremented on every PATCH that writes to draft_body.
     # Reset to 0 on publish or discard-draft.
@@ -63,17 +71,36 @@ class CMSWebhook(Table):
     active = Boolean(default=True)
 
 
+class CMSDocumentVersion(Table):
+    """Snapshot of a document body at publish or revert time.
+
+    One row per publish/revert event. The composite index on
+    (document_id, version) should be created manually after migration:
+        CREATE INDEX IF NOT EXISTS idx_cms_document_version_doc_ver
+            ON cms_document_version (document_id, version);
+    """
+
+    document_id = Varchar(length=36, index=True)
+    version = Integer()
+    body = JSON()
+    action = Varchar(length=16)  # "publish" | "revert"
+    changeset_id = Varchar(length=36, null=True, required=False)
+    created_at = Timestamptz()
+
+
 class CMSChangeset(Table):
     """A named group of documents for atomic publish."""
 
     id = Varchar(length=36, primary_key=True)
     title = Varchar(length=500, default="")
-    status = Varchar(length=16, default="open")  # "open" | "published" | "scheduled"
+    status = Varchar(length=16, default="open")  # "open" | "review" | "published" | "scheduled" | "reverted"
     created_at = Timestamptz()
     publish_at = Timestamptz(null=True, required=False)
     # publish_at — NULL = not scheduled
     published_at = Timestamptz(null=True, required=False)
     # published_at — NULL = not yet published
+    reviewed_at = Timestamptz(null=True, required=False)
+    # reviewed_at — set when changeset enters 'review' status
 
 
 class CMSChangesetDocument(Table):
