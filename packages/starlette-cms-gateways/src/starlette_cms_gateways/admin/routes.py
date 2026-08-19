@@ -141,19 +141,19 @@ def make_admin_routes(admin: GatewayAdmin) -> list:
   (function () {{
     var CONFIG = {{
       cmsBase: {_js_string(cms_base)},
-      apiKey: {_js_string(admin.cms.api_key)},
       mountPath: {_js_string(mount)}
     }};
 
+    // API calls authenticate via the same-origin `cms_session` cookie (sent
+    // automatically). No API key is embedded in this page.
     function authHeaders() {{
-      return CONFIG.apiKey
-        ? {{ "Authorization": "Bearer " + CONFIG.apiKey, "Content-Type": "application/json" }}
-        : {{ "Content-Type": "application/json" }};
+      return {{ "Content-Type": "application/json" }};
     }}
 
     async function apiFetch(path, opts) {{
       var resp = await fetch(CONFIG.cmsBase + path, Object.assign({{
-        headers: authHeaders()
+        headers: authHeaders(),
+        credentials: "same-origin"
       }}, opts || {{}}));
       if (!resp.ok) throw new Error(resp.status + " " + resp.statusText);
       return resp.json();
