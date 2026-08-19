@@ -80,12 +80,14 @@ class GatewayAdmin:
         cms: CMS,
         mount_path: str = "/gateways",
         auth: Callable | None = None,
+        login_path: str = "/api/auth/login",
         jobs_db_path: str | Path = DEFAULT_JOBS_DB,
         job_store: JobStore | None = None,
     ) -> None:
         self.cms = cms
         self.mount_path = mount_path
         self.auth = auth
+        self.login_path = login_path
 
         if job_store is not None:
             if jobs_db_path != DEFAULT_JOBS_DB:

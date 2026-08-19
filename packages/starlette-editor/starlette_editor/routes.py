@@ -7,7 +7,7 @@ import pathlib
 from typing import TYPE_CHECKING
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, Response
+from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -46,7 +46,12 @@ def make_editor_routes(editor: Editor) -> list:
             if hasattr(allowed, "__await__"):
                 allowed = await allowed
             if not allowed:
-                return HTMLResponse("Unauthorized", status_code=401)
+                # Redirect unauthenticated visitors to the login page, sending
+                # them back to the shell (?next=) once they have signed in.
+                return RedirectResponse(
+                    f"{editor.login_path}?next={request.url.path}",
+                    status_code=302,
+                )
 
         mount = editor.mount_path.rstrip("/")
 
