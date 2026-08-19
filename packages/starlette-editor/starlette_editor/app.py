@@ -29,6 +29,8 @@ class Editor:
     :param media_base: Mount path of Mediakit — enables the image picker in ImageField editing.
     :param mount_path: The path this editor is mounted at.
     :param auth: Optional auth callable (request) -> bool protecting /shell.
+    :param login_path: Where to redirect unauthenticated /shell visitors when
+        an auth guard is set (defaults to the CMS session-login route).
     """
 
     def __init__(
@@ -38,11 +40,13 @@ class Editor:
         media_base: str | None = None,
         mount_path: str = "/editor",
         auth: Callable | None = None,
+        login_path: str = "/api/auth/login",
     ) -> None:
         self.cms = cms
         self.media_base = media_base
         self.mount_path = mount_path
         self.auth = auth
+        self.login_path = login_path
 
         # Activate ProseMirror bridge and register /api/editor-schema on the CMS
         self.bridge = ProseMirrorBridge(cms.registry)

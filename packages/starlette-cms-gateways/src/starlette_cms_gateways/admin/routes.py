@@ -12,7 +12,7 @@ import pathlib
 from typing import TYPE_CHECKING
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse
+from starlette.responses import HTMLResponse, RedirectResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -54,7 +54,12 @@ def make_admin_routes(admin: GatewayAdmin) -> list:
             if hasattr(allowed, "__await__"):
                 allowed = await allowed
             if not allowed:
-                return HTMLResponse("Unauthorized", status_code=401)
+                # Redirect unauthenticated visitors to the login page, sending
+                # them back to the shell (?next=) once they have signed in.
+                return RedirectResponse(
+                    f"{admin.login_path}?next={request.url.path}",
+                    status_code=302,
+                )
 
         mount = admin.mount_path.rstrip("/")
         cms_base = admin.cms.mount_path.rstrip("/")
