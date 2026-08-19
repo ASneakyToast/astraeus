@@ -94,6 +94,9 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
 
     async def list_gateways(request: Request) -> JSONResponse:
         """List all gateways discovered via entry points."""
+        if (err := await _check_auth(request)) is not None:
+            return err
+
         gateways = discover_gateways()
         items = []
         for name, cls in sorted(gateways.items()):
@@ -117,6 +120,9 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
 
     async def get_gateway(request: Request) -> JSONResponse:
         """Return metadata for a single installed gateway, including recent jobs."""
+        if (err := await _check_auth(request)) is not None:
+            return err
+
         name = request.path_params["name"]
         gateways = discover_gateways()
         cls = gateways.get(name)

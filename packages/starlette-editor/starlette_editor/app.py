@@ -25,6 +25,10 @@ class Editor:
     """
     Mountable Starlette editor sub-application.
 
+    :param actions: Optional list of custom toolbar actions. Each is a dict
+        ``{"label": str, "endpoint": str, "icon"?: str, "confirm"?: str}``;
+        clicking the button POSTs to ``endpoint`` on the CMS. Injected into the
+        shell config and rendered in the floating toolbar.
     :param cms: The CMS instance to extend. Extension routes are registered at init time.
     :param media_base: Mount path of Mediakit — enables the image picker in ImageField editing.
     :param mount_path: The path this editor is mounted at.
@@ -37,12 +41,14 @@ class Editor:
         self,
         *,
         cms: CMS,
+        actions: list[dict] | None = None,
         media_base: str | None = None,
         mount_path: str = "/editor",
         auth: Callable | None = None,
         login_path: str = "/api/auth/login",
     ) -> None:
         self.cms = cms
+        self.actions = actions or []
         self.media_base = media_base
         self.mount_path = mount_path
         self.auth = auth

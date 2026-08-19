@@ -1,13 +1,16 @@
 import { state } from '../state.js'
 import { setActiveChangesetId } from '../changeset-store.js'
 import { setState } from '../state.js'
+import { apiFetch } from '../api.js'
+import { showToast } from '../components/toast.js'
 
 const LS_KEY = 'cms-editor-toolbar-geometry'
 
 export class EditorToolbar {
-  constructor({ changesetPanel, chatPanel }) {
+  constructor({ changesetPanel, chatPanel, actions }) {
     this._changesetPanel = changesetPanel
     this._chatPanel = chatPanel
+    this._actions = actions || []
     this._el = null
     this._unread = 0
   }
@@ -56,8 +59,71 @@ export class EditorToolbar {
       this._el.appendChild(this._buildChatSegment())
     }
 
+    // Custom actions configured by the instance (e.g. "Rebuild site").
+    for (const action of this._actions) {
+      this._el.appendChild(this._buildDivider())
+      this._el.appendChild(this._buildActionSegment(action))
+    }
+
     this._el.appendChild(this._buildDivider())
     this._el.appendChild(this._buildDragGrip())
+  }
+
+  _buildActionSegment(action) {
+    const seg = document.createElement('button')
+    seg.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 0 12px;
+      height: 100%;
+      background: none;
+      border: none;
+      color: var(--text-secondary, #8a8a8a);
+      font: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+    `
+    seg.textContent = this._actionLabel(action)
+
+    seg.addEventListener('mouseenter', () => {
+      if (!seg.disabled) seg.style.background = 'var(--bg-hover, #202020)'
+    })
+    seg.addEventListener('mouseleave', () => {
+      seg.style.background = 'none'
+    })
+    seg.addEventListener('click', (e) => {
+      e.stopPropagation()
+      this._runAction(action, seg)
+    })
+
+    return seg
+  }
+
+  _actionLabel(action) {
+    return `${action.icon ? action.icon + ' ' : ''}${action.label}`
+  }
+
+  async _runAction(action, seg) {
+    if (action.confirm && !window.confirm(action.confirm)) return
+
+    seg.disabled = true
+    seg.style.cursor = 'default'
+    seg.textContent = `⏳ ${action.label}`
+    try {
+      const res = await apiFetch(action.endpoint, { method: 'POST' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || `HTTP ${res.status}`)
+      }
+      showToast('success', action.label, 'Triggered')
+    } catch (err) {
+      showToast('error', action.label, err.message)
+    } finally {
+      seg.disabled = false
+      seg.style.cursor = 'pointer'
+      seg.textContent = this._actionLabel(action)
+    }
   }
 
   _buildChangesetSegment() {

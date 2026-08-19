@@ -180,7 +180,7 @@ async function boot() {
   if (initialCsId) changesetPanel._syncActiveChangesetInfo(initialCsId)
 
   // Mount floating toolbar pill
-  const editorToolbar = new EditorToolbar({ changesetPanel, chatPanel })
+  const editorToolbar = new EditorToolbar({ changesetPanel, chatPanel, actions: cfg.actions || [] })
   editorToolbar.mount()
   setState({ editorToolbar }, false)
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import pathlib
 from typing import TYPE_CHECKING
 
@@ -72,7 +73,8 @@ def make_editor_routes(editor: Editor) -> list:
     cmsBase: "",
     apiKey: {_js_string(editor.cms.api_key)},
     mountPath: {_js_string(mount)},
-    mediaBase: {_js_string(editor.media_base)}
+    mediaBase: {_js_string(editor.media_base)},
+    actions: {_js_json(editor.actions)}
   }};
   </script>
 
@@ -107,6 +109,16 @@ def make_editor_routes(editor: Editor) -> list:
         routes.append(Mount("/static", app=StaticFiles(directory=str(STATIC_DIR))))
 
     return routes
+
+
+def _js_json(value) -> str:
+    """Encode a Python value as a JSON literal safe to inline in a <script>."""
+    return (
+        json.dumps(value)
+        .replace("<", "\\u003c")  # prevent </script> injection
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
 
 
 def _js_string(value: str | None) -> str:
