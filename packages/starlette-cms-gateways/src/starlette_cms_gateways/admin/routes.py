@@ -221,8 +221,8 @@ def make_admin_routes(admin: GatewayAdmin) -> list:
       card.innerHTML =
         '<div class="gateway-name">' + esc(gw.name) + '</div>' +
         '<div class="gateway-meta">' + renderMeta(gw) + '</div>' +
-        '<div class="last-synced" id="lastsynced-' + esc(gw.name) + '">Last synced: '  # noqa: E501
-        + lastSyncedVal + '</div>' +
+        '<div class="last-synced" id="lastsynced-' + esc(gw.name) + '">' +
+        'Last synced: ' + lastSyncedVal + '</div>' +
         // TODO: relative time ("2 hours ago") — future enhancement
         '<button class="sync-btn" id="btn-' + esc(gw.name) + '">▶ Sync now</button>' +
         '<div class="job-status" id="status-' + esc(gw.name) + '"></div>';
