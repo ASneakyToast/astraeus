@@ -6,11 +6,15 @@ This is the Astraeus monorepo. Read this file before doing anything else.
 
 ## What this repo is
 
-**Astraeus** is a governed data platform for Python/Starlette developers. Three packages:
+**Astraeus** is a governed data platform for Python/Starlette developers. Seven packages:
 
 - **`starlette-cms`** — headless CMS (block registry, document API, webhooks, schema versioning)
 - **`starlette-editor`** — visual editing UI (ProseMirror-based, auto-generated from block schema)
 - **`mediakit`** — media management (S3-compatible storage, IIIF Image API, presigned uploads)
+- **`starlette-cms-gateways`** — framework for pulling external service data into the CMS as documents
+- **`starlette-chat`** — governed AI chat collaborator with live ProseMirror collab
+- **`astraeus-otel`** — shared OpenTelemetry configuration and testing utilities
+- **`astraeus-portal`** — central navigation hub linking all admin interfaces
 
 Each package is independently installable from PyPI. Together they form a full content management and data governance stack.
 
@@ -40,7 +44,11 @@ astraeus/
 ├── packages/
 │   ├── starlette-cms/             ← implement first, everything depends on it
 │   ├── starlette-editor/          ← implements after starlette-cms Phase 1
-│   └── mediakit/                  ← mostly independent, parallels starlette-cms
+│   ├── mediakit/                  ← mostly independent, parallels starlette-cms
+│   ├── starlette-cms-gateways/    ← gateway framework for external service sync
+│   ├── starlette-chat/            ← governed AI chat with live collab
+│   ├── astraeus-otel/             ← OpenTelemetry config & test helpers
+│   └── astraeus-portal/           ← central nav hub for admin interfaces
 ├── docs/
 │   ├── architecture.md            ← system design and package relationships
 │   ├── roadmap.md                 ← phased implementation plan
@@ -102,7 +110,7 @@ uv run ruff format packages/
 
 See `docs/roadmap.md` for the full phased plan and current progress.
 
-**Short version:** Phases 0–14 complete. starlette-cms: core, schema versioning, webhooks, testing utilities, field types, singletons, immutable fields, DocumentRef, list filters, MCP server, observability. mediakit: storage backend, catalog, upload flow, processing pipeline (EXIF strip, WebP conversion, dimension cap), IIIF Image API Level 1, asset/references routes, auth, admin UI, MCP server, CLI. starlette-editor: fully polished and PyPI-ready — ProseMirror-based editor with npm-bundled assets (no CDN), real markdown serialization, 83 JS unit tests (Vitest), 19 Python integration tests, build pipeline (esbuild + Makefile). starlette-cms-gateways: gateway framework scaffolded (Phase GW-1).
+**Short version:** Phases 0–14 complete. starlette-cms: core, schema versioning, webhooks, testing utilities, field types, singletons, immutable fields, DocumentRef, list filters, MCP server, observability. mediakit: storage backend, catalog, upload flow, processing pipeline (EXIF strip, WebP conversion, dimension cap), IIIF Image API Level 1, asset/references routes, auth, admin UI, MCP server, CLI. starlette-editor: fully polished and PyPI-ready — ProseMirror-based editor with npm-bundled assets (no CDN), real markdown serialization, 83 JS unit tests (Vitest), 19 Python integration tests, build pipeline (esbuild + Makefile). starlette-cms-gateways: gateway framework scaffolded (Phase GW-1). starlette-chat: governed AI chat collaborator (Phases CH-1 through CH-6). astraeus-portal: central nav hub with card grid and compose_app convenience (Phase POR-1).
 
 ---
 

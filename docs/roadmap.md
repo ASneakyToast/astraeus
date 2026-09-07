@@ -444,6 +444,29 @@ step history alongside human client IDs.  See ADR 019 and `docs/architecture.md`
 
 ---
 
+## Phase POR-1 — astraeus-portal admin hub ✅
+
+**Goal:** A mountable Starlette sub-app that serves as a central navigation hub linking all Astraeus admin interfaces (editor, gateways, chat, media, and custom apps).
+
+| Module | What was built |
+|--------|----------------|
+| Portal class | `Portal(apps=[...])` mountable Starlette sub-app with `/` shell page; `PortalApp` dataclass with name, path, description, icon, tags |
+| compose_app() | `compose_app(cms, editor, media, chat, gateways)` wires everything at conventional paths + portal at `/` with auto-populated cards; lifespan composition |
+| Shell page | Dark-themed card grid with header, tags, package version info, empty state, auth guard, keyboard nav (1–9), responsive layout |
+| Tests | 20 tests covering PortalApp, Portal rendering, empty state, header/footer links, package info, tags, auth (blocked/allowed), keyboard nav, compose_app all-variants, lifespan composition, mount path overrides |
+| Integration | Portal installed as `[compose]` optional extra; workspace member via `packages/*` glob |
+
+**Usage:**
+```python
+from astraeus_portal import Portal, PortalApp
+portal = Portal(apps=[
+    PortalApp("Editor", "/editor/shell", "Create and edit content", "✏️"),
+])
+app = Starlette(routes=[Mount("/", app=portal.app)])
+```
+
+---
+
 ## North Star (post-v1, don't implement yet)
 
 - Collaborative editing via `cms_steps` table + WebSocket authority endpoint + `prosemirror-collab`
