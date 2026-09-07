@@ -1,5 +1,5 @@
 [tool.uv.workspace]
-members = ["packages/*", "packages/astraeus-otel"]
+members = ["packages/*"]
 
 [tool.uv]
 dev-dependencies = [
