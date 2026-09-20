@@ -1,8 +1,13 @@
+// @vitest-environment happy-dom
+
 /**
- * Tests for the unsaved-edit guards on selectType and selectDoc.
+ * Tests for the unsaved-edit guards on selectType and selectDoc, and for how
+ * they interact with the local draft buffer.
  *
  * Both actions replace state.formData wholesale, so a dirty document has to
  * prompt before they run — otherwise the edits are gone with no way back.
+ * draft-buffer.js is deliberately not mocked: the point of these tests is the
+ * wiring between the two.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -12,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   fetchDocuments: vi.fn(),
   fetchDocument: vi.fn(),
   destroyPmInstances: vi.fn(),
+  patchDocument: vi.fn(),
 }))
 
 vi.mock('../components/confirm.js', () => ({ showConfirm: mocks.showConfirm }))
@@ -26,17 +32,25 @@ vi.mock('../api.js', () => ({
   fetchDocuments: mocks.fetchDocuments,
   fetchDocument: mocks.fetchDocument,
   createDocument: vi.fn(),
-  patchDocument: vi.fn(),
+  patchDocument: mocks.patchDocument,
   setDraftPublishState: vi.fn(),
   setDraftDeleted: vi.fn(),
   addDocToChangeset: vi.fn(),
 }))
 
-import { selectType, selectDoc } from '../standard/actions.js'
+import { selectType, selectDoc, saveDocument, onFieldChange } from '../standard/actions.js'
+import { draftKey, writeDraft, loadDraft } from '../draft-buffer.js'
 import { state } from '../state.js'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  localStorage.clear()
+  state.pmInstances = {}
+  state.collabConnections = {}
+  mocks.patchDocument.mockResolvedValue({
+    data: { id: 'doc-1', body: { title: 'saved' }, slug: 'saved' },
+    headers: { get: () => null },
+  })
   mocks.fetchDocuments.mockResolvedValue({ documents: [], total: 0 })
   mocks.fetchDocument.mockResolvedValue({ id: 'doc-2', body: { title: 'saved' }, slug: 'saved' })
 
@@ -118,5 +132,68 @@ describe('selectDoc', () => {
 
     expect(mocks.showConfirm).not.toHaveBeenCalled()
     expect(state.formData).toEqual({ title: 'unsaved work' })
+  })
+})
+
+describe('draft buffer integration', () => {
+  it('drops the buffer when the user confirms a discard', async () => {
+    const key = draftKey('doc-1', 'post')
+    writeDraft(key, { title: 'unsaved work' })
+    state.isDirty = true
+    mocks.showConfirm.mockResolvedValue(true)
+
+    await selectDoc('doc-2')
+
+    expect(loadDraft(key)).toBeNull()
+  })
+
+  it('keeps the buffer when the user cancels a discard', async () => {
+    const key = draftKey('doc-1', 'post')
+    writeDraft(key, { title: 'unsaved work' })
+    state.isDirty = true
+    mocks.showConfirm.mockResolvedValue(false)
+
+    await selectDoc('doc-2')
+
+    expect(loadDraft(key).formData).toEqual({ title: 'unsaved work' })
+  })
+
+  it('offers a surviving buffer and restores it on accept', async () => {
+    writeDraft(draftKey('doc-2', 'post'), { title: 'recovered' })
+    mocks.showConfirm.mockResolvedValue(true)
+
+    await selectDoc('doc-2')
+
+    expect(state.formData).toEqual({ title: 'recovered' })
+    expect(state.isDirty).toBe(true)
+  })
+
+  it('drops the buffer and keeps the server copy when restore is declined', async () => {
+    const key = draftKey('doc-2', 'post')
+    writeDraft(key, { title: 'recovered' })
+    mocks.showConfirm.mockResolvedValue(false)
+
+    await selectDoc('doc-2')
+
+    expect(state.formData).toEqual({ title: 'saved', __slug: 'saved' })
+    expect(state.isDirty).toBe(false)
+    expect(loadDraft(key)).toBeNull()
+  })
+
+  it('does not prompt when no buffer survived', async () => {
+    await selectDoc('doc-2')
+
+    expect(mocks.showConfirm).not.toHaveBeenCalled()
+    expect(state.formData).toEqual({ title: 'saved', __slug: 'saved' })
+  })
+
+  it('clears the buffer after a successful save', async () => {
+    const key = draftKey('doc-1', 'post')
+    onFieldChange('title', 'edited')
+    writeDraft(key, state.formData)
+
+    await saveDocument()
+
+    expect(loadDraft(key)).toBeNull()
   })
 })
