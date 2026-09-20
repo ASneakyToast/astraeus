@@ -19,14 +19,15 @@ export class EditorToolbar {
     this._el = document.createElement('div')
     this._el.style.cssText = `
       position: fixed;
-      bottom: 24px;
+      /* Clear the iOS home indicator, which sits over a bare 24px offset. */
+      bottom: calc(24px + env(safe-area-inset-bottom));
       left: 50%;
       transform: translateX(-50%);
       z-index: 9999;
       display: flex;
-      align-items: center;
+      align-items: stretch;
       gap: 0;
-      height: 36px;
+      min-height: var(--target-min, 44px);
       background: var(--bg-elevated, #1a1a1a);
       border: 1px solid var(--border-default, #2a2a2a);
       border-radius: 20px;
@@ -226,6 +227,7 @@ export class EditorToolbar {
     d.style.cssText = `
       width: 1px;
       height: 18px;
+      align-self: center;
       background: var(--border-subtle, #222222);
       flex-shrink: 0;
     `
@@ -261,6 +263,10 @@ export class EditorToolbar {
   // ── Drag ──
 
   _startDrag(e) {
+    // Below this width the panel is a full-width sheet and geometry is
+    // owned by CSS — dragging or resizing it would fight the stylesheet, and
+    // these are mouse-only interactions anyway.
+    if (window.innerWidth <= 640) return
     if (!this._el) return
     e.preventDefault()
 
@@ -301,6 +307,10 @@ export class EditorToolbar {
   }
 
   _restoreGeometry() {
+    // Below this width the panel is a full-width sheet and geometry is
+    // owned by CSS — dragging or resizing it would fight the stylesheet, and
+    // these are mouse-only interactions anyway.
+    if (window.innerWidth <= 640) return
     if (!this._el) return
     let geo = null
     try { geo = JSON.parse(localStorage.getItem(LS_KEY) || 'null') } catch { geo = null }

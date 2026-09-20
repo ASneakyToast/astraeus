@@ -53,6 +53,9 @@
   --font-size-md:   14px;
   --font-size-lg:   16px;
   --font-size-xl:   20px;
+  /* iOS Safari zooms the page when focusing any input below 16px, so this is a
+     floor for form controls rather than a size choice. */
+  --font-size-input: 16px;
 
   /* Spacing */
   --space-1: 4px;
@@ -67,6 +70,8 @@
   --sidebar-width:       240px;
   --doc-list-width:      240px;
   --header-height:       48px;
+  /* Touch is the base case (ADR 022); a precise pointer relaxes it below. */
+  --target-min:          44px;
   --radius-sm:           4px;
   --radius-md:           6px;
   --radius-lg:           8px;
@@ -74,6 +79,22 @@
   /* Transitions */
   --transition-fast:     100ms ease;
   --transition-base:     150ms ease;
+}
+
+/* A mouse or trackpad can hit a smaller target than a thumb, so density is
+   restored here rather than assumed and patched for touch. */
+@media (hover: hover) and (pointer: fine) {
+  :root {
+    --target-min: 28px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 html, body {
@@ -90,7 +111,7 @@ html, body {
 /* ---------- App Shell ---------- */
 #app {
   display: flex;
-  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -234,8 +255,8 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: var(--target-min);
+  height: var(--target-min);
   background: transparent;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
@@ -267,6 +288,10 @@ html, body {
 }
 
 .sidebar-docs__item {
+  min-height: var(--target-min);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   padding: var(--space-2) var(--space-3);
   cursor: pointer;
   transition: background var(--transition-fast);
@@ -457,7 +482,9 @@ html, body {
 .btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-1);
+  min-height: var(--target-min);
   padding: 5px var(--space-3);
   border-radius: var(--radius-sm);
   font-family: var(--font-sans);
@@ -564,12 +591,13 @@ html, body {
 .field-textarea,
 .field-select {
   width: 100%;
+  min-height: var(--target-min);
   background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-family: var(--font-sans);
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-input);
   padding: var(--space-2) var(--space-3);
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
   outline: none;
@@ -597,8 +625,11 @@ html, body {
 
 .field-textarea--json {
   font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-input);
   min-height: 120px;
+  /* JSON lines are long; wrapping them hides structure, so scroll instead. */
+  white-space: pre;
+  overflow-x: auto;
 }
 
 .field-select {
@@ -654,8 +685,8 @@ html, body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 26px;
+  min-width: var(--target-min);
+  min-height: var(--target-min);
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -1049,16 +1080,49 @@ html, body {
   border-bottom-color: var(--border-subtle);
 }
 
-.block-card__drag-handle {
-  color: var(--text-muted);
-  font-size: 16px;
-  cursor: grab;
+.block-card__position {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
   flex-shrink: 0;
-  line-height: 1;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }
 
-.block-card__drag-handle:active {
-  cursor: grabbing;
+.block-card__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.block-card__move {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--target-min);
+  min-height: var(--target-min);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-md);
+  line-height: 1;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.block-card__move:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.block-card__move:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
 .block-card__type-label {
@@ -1069,12 +1133,16 @@ html, body {
 }
 
 .block-card__delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--target-min);
+  min-height: var(--target-min);
   background: transparent;
   border: none;
   color: var(--text-muted);
   cursor: pointer;
   font-size: var(--font-size-sm);
-  padding: 2px 4px;
   border-radius: var(--radius-sm);
   transition: color var(--transition-fast), background var(--transition-fast);
   line-height: 1;
@@ -1094,14 +1162,6 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-}
-
-.block-card.is-dragging {
-  opacity: 0.5;
-}
-
-.block-card.drag-over {
-  border-top: 2px solid var(--accent);
 }
 
 .field-group--nested {
@@ -1382,6 +1442,31 @@ details.doc-meta[open] .doc-meta__summary::before {
   z-index: 1;
 }
 
+/* ---------- Drawer toggle (small screens only) ---------- */
+.editor-header__drawer-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--target-min);
+  min-height: var(--target-min);
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-md);
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.sidebar-docs__backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 39;
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 900px) {
   .sidebar-types {
@@ -1404,10 +1489,52 @@ details.doc-meta[open] .doc-meta__summary::before {
 }
 
 @media (max-width: 640px) {
+  /* The document list is the only route to a document, so it slides over the
+     editor here rather than being hidden (ADR 022 §4). */
   .sidebar-docs {
-    display: none;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 48px;
+    width: min(320px, calc(100vw - 48px));
+    z-index: 40;
+    transform: translateX(-110%);
+    transition: transform var(--transition-base);
+    box-shadow: 8px 0 24px rgba(0, 0, 0, 0.5);
   }
+
+  .sidebar-docs.is-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-docs__backdrop.is-open {
+    display: block;
+  }
+
+  .editor-header__drawer-toggle {
+    display: inline-flex;
+  }
+
   .editor-scroll {
     padding: var(--space-4) var(--space-3);
+    /* Clear the home indicator and any fixed bottom chrome. */
+    padding-bottom: calc(var(--space-8) + env(safe-area-inset-bottom));
+  }
+
+  .editor-header {
+    padding: 0 var(--space-3);
+  }
+
+  /* Floating panels are desktop windows; at this width they take the screen. */
+  [data-cms-chat-panel],
+  [data-cms-changeset-panel] {
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    top: auto !important;
+    width: 100vw !important;
+    max-height: 80dvh !important;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0 !important;
+    padding-bottom: env(safe-area-inset-bottom) !important;
   }
 }

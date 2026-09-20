@@ -669,6 +669,10 @@ export class ShellChangesetPanel {
   // ── Drag / resize / geometry ──────────────────────────────────────────────
 
   _startDrag(e, closeBtn) {
+    // Below this width the panel is a full-width sheet and geometry is
+    // owned by CSS — dragging or resizing it would fight the stylesheet, and
+    // these are mouse-only interactions anyway.
+    if (window.innerWidth <= 640) return;
     if (!this.el || (closeBtn && closeBtn.contains(e.target))) return;
     e.preventDefault();
 
@@ -708,6 +712,10 @@ export class ShellChangesetPanel {
   }
 
   _startResize(e) {
+    // Below this width the panel is a full-width sheet and geometry is
+    // owned by CSS — dragging or resizing it would fight the stylesheet, and
+    // these are mouse-only interactions anyway.
+    if (window.innerWidth <= 640) return;
     if (!this.el) return;
     e.preventDefault();
     e.stopPropagation();
@@ -747,6 +755,10 @@ export class ShellChangesetPanel {
   }
 
   _restoreGeometry() {
+    // Below this width the panel is a full-width sheet and geometry is
+    // owned by CSS — dragging or resizing it would fight the stylesheet, and
+    // these are mouse-only interactions anyway.
+    if (window.innerWidth <= 640) return;
     if (!this.el) return;
     let geo = null;
     try { geo = JSON.parse(localStorage.getItem(LS_GEOMETRY_KEY) || 'null'); } catch { geo = null; }
