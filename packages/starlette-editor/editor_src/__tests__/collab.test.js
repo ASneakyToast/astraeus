@@ -246,7 +246,31 @@ describe('CollabConnection._handleMessage()', () => {
     conn.destroy()
   })
 
-  it('handles reject: updates version and closes socket to trigger reconnect', () => {
+  it('handles reject: holds the socket open so pending steps survive', () => {
+    const view = makeMinimalView()
+    const toolbar = makeToolbar()
+    const conn = new CollabConnection({
+      view,
+      schema: {},
+      documentId: 'doc-1',
+      cmsBase: 'https://cms.example.com',
+      initialVersion: 0,
+      toolbar,
+      clientID: 'abc',
+    })
+
+    const ws = conn.ws
+    conn._handleMessage({ type: 'reject', version: 3 })
+
+    // Closing here used to strand pending steps: nothing resends them after a
+    // reconnect, so the edits never reached the server.
+    expect(conn.version).toBe(3)
+    expect(ws.readyState).toBe(MockWebSocket.OPEN)
+    expect(toolbar.setState).toHaveBeenCalledWith('editing')
+    conn.destroy()
+  })
+
+  it('retries pending steps when the broadcast that rejected us arrives', () => {
     const view = makeMinimalView()
     const conn = new CollabConnection({
       view,
@@ -258,12 +282,16 @@ describe('CollabConnection._handleMessage()', () => {
       clientID: 'abc',
     })
 
-    const ws = conn.ws
     conn._handleMessage({ type: 'reject', version: 3 })
 
-    expect(conn.version).toBe(3)
-    expect(ws.readyState).toBe(MockWebSocket.CLOSED)
-    // Prevent actual reconnect attempt from noising the test
+    // prosemirror-collab rebases pending steps through receiveTransaction; the
+    // steps handler then retries the send.
+    sendableSteps.mockReturnValueOnce({ steps: [{ toJSON: () => ({ stepType: 'replace' }) }], version: 3 })
+    conn._handleMessage({ type: 'steps', steps: [], clientIDs: [], version: 3 })
+
+    const sentSteps = conn.ws.sent.filter(m => m.type === 'steps')
+    expect(sentSteps).toHaveLength(1)
+    expect(sentSteps[0].version).toBe(3)
     conn.destroy()
   })
 
@@ -382,6 +410,78 @@ describe('CollabConnection exponential backoff', () => {
     conn.ws.onopen()
     expect(conn._reconnectDelay).toBe(1000)
 
+    conn.destroy()
+  })
+})
+
+describe('CollabConnection reconnect resume', () => {
+  it('resends pending steps when the server has not moved on', async () => {
+    const { getVersion } = await import('prosemirror-collab')
+    const conn = new CollabConnection({
+      view: makeMinimalView(),
+      schema: {},
+      documentId: 'doc-1',
+      cmsBase: 'https://cms.example.com',
+      initialVersion: 4,
+      toolbar: makeToolbar(),
+      clientID: 'abc',
+    })
+
+    sendableSteps.mockReturnValue({ steps: [{ toJSON: () => ({ stepType: 'replace' }) }], version: 4 })
+    getVersion.mockReturnValue(4)
+
+    conn._handleMessage({ type: 'init', version: 4, peers: [] })
+
+    expect(conn.ws.sent.filter(m => m.type === 'steps')).toHaveLength(1)
+
+    sendableSteps.mockReturnValue(null)
+    conn.destroy()
+  })
+
+  it('holds pending steps and warns when the server moved on while away', async () => {
+    const { getVersion } = await import('prosemirror-collab')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const conn = new CollabConnection({
+      view: makeMinimalView(),
+      schema: {},
+      documentId: 'doc-1',
+      cmsBase: 'https://cms.example.com',
+      initialVersion: 4,
+      toolbar: makeToolbar(),
+      clientID: 'abc',
+    })
+
+    sendableSteps.mockReturnValue({ steps: [{ toJSON: () => ({ stepType: 'replace' }) }], version: 4 })
+    getVersion.mockReturnValue(4)
+
+    conn._handleMessage({ type: 'init', version: 9, peers: [] })
+
+    // Sending at a version the server has passed would just reject again.
+    expect(conn.ws.sent.filter(m => m.type === 'steps')).toHaveLength(0)
+    expect(warn).toHaveBeenCalled()
+
+    sendableSteps.mockReturnValue(null)
+    conn.destroy()
+  })
+
+  it('does nothing when there is nothing pending', async () => {
+    const { getVersion } = await import('prosemirror-collab')
+    sendableSteps.mockReturnValue(null)
+    getVersion.mockReturnValue(0)
+
+    const conn = new CollabConnection({
+      view: makeMinimalView(),
+      schema: {},
+      documentId: 'doc-1',
+      cmsBase: 'https://cms.example.com',
+      initialVersion: 0,
+      toolbar: makeToolbar(),
+      clientID: 'abc',
+    })
+
+    conn._handleMessage({ type: 'init', version: 7, peers: [] })
+
+    expect(conn.ws.sent.filter(m => m.type === 'steps')).toHaveLength(0)
     conn.destroy()
   })
 })
