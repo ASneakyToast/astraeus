@@ -161,31 +161,108 @@ describe('ChangesetPanel._createAndAdd()', () => {
 })
 
 describe('ChangesetPanel._publishChangeset()', () => {
-  afterEach(() => { vi.restoreAllMocks() })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    document.body.innerHTML = ''
+  })
 
-  it('POSTs to /api/changesets/{id}/publish', async () => {
+  /** @returns {HTMLElement|null} the confirm button inside the review modal */
+  function confirmButton() {
+    const modal = document.querySelector('[data-publish-review-modal]')
+    return [...(modal?.querySelectorAll('button') ?? [])]
+      .find(b => b.textContent === 'Confirm Publish') ?? null
+  }
+
+  it('opens the review modal rather than publishing straight away', async () => {
     const fetchMock = makeFetch()
     const panel = makePanel(fetchMock)
 
     await panel._publishChangeset('cs-1')
 
-    const publishCall = fetchMock.mock.calls.find(c =>
-      c[1]?.method === 'POST' && String(c[0]).includes('/publish')
+    // Publishing fires a site rebuild, so it takes a deliberate second step.
+    const posted = fetchMock.mock.calls.some(
+      c => c[1]?.method === 'POST' && String(c[0]).includes('/publish'),
     )
-    expect(publishCall).toBeDefined()
+    expect(posted).toBe(false)
+    expect(document.querySelector('[data-publish-review-modal]')).not.toBeNull()
+  })
+
+  it('fetches the diff to populate the review', async () => {
+    const fetchMock = makeFetch()
+    const panel = makePanel(fetchMock)
+
+    await panel._publishChangeset('cs-1')
+
+    const diffCall = fetchMock.mock.calls.find(c => String(c[0]).includes('/diff'))
+    expect(diffCall).toBeDefined()
+    expect(diffCall[0]).toContain('/api/changesets/cs-1/diff')
+  })
+
+  it('POSTs to /api/changesets/{id}/publish once confirmed', async () => {
+    const fetchMock = makeFetch()
+    const panel = makePanel(fetchMock)
+
+    await panel._publishChangeset('cs-1')
+    await confirmButton().click()
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.find(
+          c => c[1]?.method === 'POST' && String(c[0]).includes('/publish'),
+        ),
+      ).toBeDefined(),
+    )
+
+    const publishCall = fetchMock.mock.calls.find(
+      c => c[1]?.method === 'POST' && String(c[0]).includes('/publish'),
+    )
     expect(publishCall[0]).toContain('/api/changesets/cs-1/publish')
   })
 
-  it('calls _showToast then refreshes', async () => {
+  it('toasts and refreshes after a confirmed publish', async () => {
     const fetchMock = makeFetch()
     const panel = makePanel(fetchMock)
     const toastSpy = vi.spyOn(panel, '_showToast')
     const refreshSpy = vi.spyOn(panel, 'refresh')
 
     await panel._publishChangeset('cs-1')
+    await confirmButton().click()
 
-    expect(toastSpy).toHaveBeenCalledWith('Published — site rebuilding')
-    expect(refreshSpy).toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(toastSpy).toHaveBeenCalledWith('Published — site rebuilding')
+      expect(refreshSpy).toHaveBeenCalled()
+    })
+  })
+
+  it('dismisses the modal without publishing when cancelled', async () => {
+    const fetchMock = makeFetch()
+    const panel = makePanel(fetchMock)
+
+    await panel._publishChangeset('cs-1')
+    const modal = document.querySelector('[data-publish-review-modal]')
+    const cancel = [...modal.querySelectorAll('button')].find(b => b.textContent === 'Cancel')
+    cancel.click()
+
+    expect(document.querySelector('[data-publish-review-modal]')).toBeNull()
+    expect(
+      fetchMock.mock.calls.some(
+        c => c[1]?.method === 'POST' && String(c[0]).includes('/publish'),
+      ),
+    ).toBe(false)
+  })
+
+  it('toasts without opening the modal when the diff cannot be loaded', async () => {
+    const fetchMock = vi.fn(url =>
+      String(url).includes('/diff')
+        ? Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({}) })
+        : Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
+    )
+    const panel = makePanel(fetchMock)
+    const toastSpy = vi.spyOn(panel, '_showToast')
+
+    await panel._publishChangeset('cs-1')
+
+    expect(toastSpy).toHaveBeenCalledWith('Failed to load diff')
+    expect(document.querySelector('[data-publish-review-modal]')).toBeNull()
   })
 })
 
