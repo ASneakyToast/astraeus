@@ -19,6 +19,7 @@ import { DocumentEventsSubscriber } from './events.js'
 import { EditorToolbar } from './standard/editor-toolbar.js'
 import { ShellChangesetPanel } from './standard/changeset-panel-shell.js'
 import { getActiveChangesetId } from './changeset-store.js'
+import { closeDocDrawer, toggleDocDrawer, wireDocDrawerDismiss } from './components/doc-drawer.js'
 import {
   renderTypeList,
   renderDocList,
@@ -37,11 +38,32 @@ import {
 import { el } from './standard/utils.js'
 
 /**
+ * Select a document, then dismiss the drawer if the selection took.
+ *
+ * Below 640px the list covers the editor, so it has to get out of the way — but
+ * not when the unsaved-edit guard sent the user back to pick again.
+ *
+ * @param {string} docId
+ */
+async function selectDocFromList(docId) {
+  await selectDoc(docId);
+  if (state.activeDocId === docId) closeDocDrawer();
+}
+
+/**
+ * Start a new document, then dismiss the drawer if the guard allowed it.
+ */
+async function openNewDocFromList() {
+  await openNewDoc();
+  if (state.activeDocId === null) closeDocDrawer();
+}
+
+/**
  * Top-level render orchestrator — called by setState() on every state change.
  */
 function render() {
   renderTypeList(selectType);
-  renderDocList(selectDoc, openNewDoc);
+  renderDocList(selectDocFromList, openNewDocFromList);
   renderHeader(togglePublish, saveDocument, deleteActiveDoc);
   state.editorToolbar?.update();
   renderForm(onFieldChange, render);
@@ -81,7 +103,7 @@ function buildShell() {
         id: 'doc-new-btn',
         title: 'New document',
         style: 'display:none',
-        onclick: openNewDoc,
+        onclick: openNewDocFromList,
       }, '+')
     ),
     el('div', { class: 'sidebar-docs__list', id: 'doc-list' },
@@ -91,6 +113,13 @@ function buildShell() {
 
   const main = el('main', { class: 'main-content' },
     el('header', { class: 'editor-header' },
+      el('button', {
+        class: 'editor-header__drawer-toggle',
+        type: 'button',
+        title: 'Documents',
+        'aria-label': 'Show document list',
+        onclick: toggleDocDrawer,
+      }, '☰'),
       el('div', { class: 'editor-header__title-wrap' },
         el('h1', { class: 'editor-header__title', id: 'header-title' }, 'CMS Editor'),
         el('span', { class: 'editor-header__dirty-dot', id: 'dirty-dot', title: 'Unsaved changes' })
@@ -127,9 +156,17 @@ function buildShell() {
     )
   );
 
+  const backdrop = el('div', {
+    class: 'sidebar-docs__backdrop',
+    onclick: closeDocDrawer,
+  });
+
   root.appendChild(typeSidebar);
+  root.appendChild(backdrop);
   root.appendChild(docSidebar);
   root.appendChild(main);
+
+  wireDocDrawerDismiss();
 }
 
 /**
