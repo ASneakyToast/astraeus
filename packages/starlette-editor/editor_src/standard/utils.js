@@ -123,6 +123,9 @@ export const $ = id => document.getElementById(id);
 export const el = (tag, attrs = {}, ...children) => {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
+    // A null value means "omit" — setting it would stringify to "null", which
+    // for a boolean attribute like disabled is the opposite of what was meant.
+    if (v == null) continue;
     if (k === 'class') e.className = v;
     else if (k.startsWith('on') && typeof v === 'function') e.addEventListener(k.slice(2), v);
     else e.setAttribute(k, v);
