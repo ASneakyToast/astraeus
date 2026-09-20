@@ -13,10 +13,27 @@ import {
   addDocToChangeset,
 } from '../api.js'
 import { setActiveChangesetId } from '../changeset-store.js'
+import { showConfirm } from '../components/confirm.js'
 import { showToast } from '../components/toast.js'
 import { destroyPmInstances } from '../prosemirror/mount.js'
 import { pmDocToMarkdown } from '../prosemirror/markdown.js'
 import { docTitle } from './utils.js'
+
+
+/**
+ * Prompt before an action that would discard unsaved edits.
+ *
+ * @returns {Promise<boolean>} true when it is safe to proceed
+ */
+async function confirmDiscardIfDirty() {
+  if (!state.isDirty) return true;
+
+  return showConfirm(
+    'Discard unsaved changes?',
+    'This document has edits that have not been saved. Leaving now discards them.',
+    'Discard',
+  );
+}
 
 /**
  * Select a document type and load its document list.
@@ -25,6 +42,8 @@ import { docTitle } from './utils.js'
  */
 export async function selectType(typeKey) {
   if (state.activeType === typeKey) return;
+
+  if (!(await confirmDiscardIfDirty())) return;
 
   destroyPmInstances();
 
@@ -59,6 +78,8 @@ export async function selectType(typeKey) {
  */
 export async function selectDoc(docId) {
   if (state.activeDocId === docId) return;
+
+  if (!(await confirmDiscardIfDirty())) return;
 
   destroyPmInstances();
 
