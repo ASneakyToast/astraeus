@@ -1,7 +1,9 @@
 # ADR 018 — Live Editing North Star: Inline Edit Mode + Collaborative Step Authority
 
-**Status:** Accepted  
-**Date:** 2026-07-05
+**Status:** Accepted, partially superseded  
+**Date:** 2026-07-05  
+**Superseded in part by:** [ADR 021](021-editing-transport-and-durability.md) — see the amendment
+notes in §3 and under Rationale.
 
 ---
 
@@ -51,6 +53,22 @@ collaborative editing authority. Protocol:
 - Audit trail of who changed what and when
 - `GET /api/documents/{id}/history` — list of step checkpoints with timestamps
 - `GET /api/documents/{id}/history/{version}` — reconstruct body at that version
+
+> **Amended 2026-09-20 by [ADR 021](021-editing-transport-and-durability.md) §5.** None of the
+> capabilities above are delivered as written. `CollabAuthority.apply_steps()` never applies the
+> steps — it validates that each carries a non-empty `stepType` and then assigns the client's
+> own post-edit document (`collab.py:57-96`, `api/collab.py:198`). `cms_steps` is therefore an
+> **advisory log of client-asserted steps**, not a verified history, and is not sufficient to
+> reconstruct document state.
+>
+> Two further defects follow. `history_at_version` replays steps over the *published* body as
+> baseline, but steps apply to `draft_body`. And `draft_version` resets to 0 on publish
+> (`documents.py:921,1041`, `changesets.py:310`) while `cms_steps` rows are never deleted — the
+> only write to that table is an insert (`collab.py:120`). So version numbers collide across
+> publish cycles, and a replay request returns interleaved steps from every cycle.
+>
+> Server-side step application is a documented non-goal with explicit reopening conditions; see
+> ADR 021 §5.
 
 ### 4. Changesets
 
@@ -120,6 +138,14 @@ REST PATCH is sufficient for single-user save-on-blur. The step model is require
 - Full rewind history (every keystroke is recoverable)
 - Conflict-free rebasing (no last-write-wins data loss)
 - The foundation for future approval workflows (steps can be held pending review)
+
+> **Amended 2026-09-20 by [ADR 021](021-editing-transport-and-durability.md).** "Conflict-free
+> rebasing (no last-write-wins data loss)" describes the intent, not the implementation. What
+> was built is last-write-wins guarded by a version check: a mismatched version is rejected and
+> the client recovers. Rebasing belongs on the client and `prosemirror-collab` provides it —
+> ADR 021 §1 makes the client actually do so, which delivers correct convergence between honest
+> clients without server-side ProseMirror. "Full rewind history" is not delivered; see the §3
+> amendment.
 
 **Why CMS-level changesets instead of browser-side coordination?**  
 A browser-side "publish all" sends N sequential publish requests, may get N Netlify builds,
