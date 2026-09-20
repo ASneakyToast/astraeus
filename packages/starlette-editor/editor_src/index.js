@@ -14,7 +14,7 @@
 import { state, setState, setRenderFn } from './state.js'
 import { fetchSchema } from './api.js'
 import { showToast } from './components/toast.js'
-import { ChatPanel } from './embed/chat-panel.js'
+import { ChatPanel } from './components/chat-panel.js'
 import { DocumentEventsSubscriber } from './events.js'
 import { EditorToolbar } from './standard/editor-toolbar.js'
 import { ShellChangesetPanel } from './standard/changeset-panel-shell.js'
@@ -35,7 +35,7 @@ import {
   togglePublish,
   deleteActiveDoc,
 } from './standard/actions.js'
-import { el } from './standard/utils.js'
+import { el } from './utils.js'
 
 /**
  * Select a document, then dismiss the drawer if the selection took.

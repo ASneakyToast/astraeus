@@ -1,9 +1,9 @@
 /**
- * Tests for standard/fields.js — field widget dispatch.
+ * Tests for components/fields.js — field widget dispatch.
  */
 
 import { describe, it, expect } from 'vitest'
-import { fieldWidget } from '../standard/fields.js'
+import { fieldWidget } from '../components/fields.js'
 
 describe('fieldWidget dispatch table', () => {
   it('rich_text field_type → prosemirror', () => {

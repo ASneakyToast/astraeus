@@ -18,7 +18,7 @@ import { showConfirm } from '../components/confirm.js'
 import { showToast } from '../components/toast.js'
 import { destroyPmInstances } from '../prosemirror/mount.js'
 import { pmDocToMarkdown } from '../prosemirror/markdown.js'
-import { docTitle } from './utils.js'
+import { docTitle } from '../utils.js'
 
 
 /**

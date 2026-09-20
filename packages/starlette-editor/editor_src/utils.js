@@ -1,5 +1,5 @@
 /**
- * standard/utils.js — Pure utility functions (no DOM, no state).
+ * utils.js — Pure utility functions and the el() DOM helper.
  */
 
 /**

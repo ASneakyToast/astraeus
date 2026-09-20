@@ -2,7 +2,7 @@
  * components/toast.js — Toast notification system.
  */
 
-import { el } from '../standard/utils.js'
+import { el } from '../utils.js'
 
 /** @returns {HTMLElement} */
 function getToastArea() {

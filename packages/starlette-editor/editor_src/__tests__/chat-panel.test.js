@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 /**
- * Tests for embed/chat-panel.js — ChatPanel logic and state machine.
+ * Tests for components/chat-panel.js — ChatPanel logic and state machine.
  *
  * WebSocket is not natively available in happy-dom so we provide a mock.
  * DOM manipulation is tested via the panel's message area and state accessors.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { ChatPanel } from '../embed/chat-panel.js'
+import { ChatPanel } from '../components/chat-panel.js'
 import { EditToolbar } from '../embed/toolbar.js'
 
 // ── Mock WebSocket ────────────────────────────────────────────────────────────

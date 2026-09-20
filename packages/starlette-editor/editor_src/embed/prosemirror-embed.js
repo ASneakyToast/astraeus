@@ -14,7 +14,7 @@ import { schema as basicSchema } from 'prosemirror-schema-basic'
 import { addListNodes } from 'prosemirror-schema-list'
 import { exampleSetup } from 'prosemirror-example-setup'
 import { collab } from 'prosemirror-collab'
-import { CollabConnection } from './collab.js'
+import { CollabConnection } from '../collab.js'
 
 // Build a schema that includes lists
 const pmSchema = new Schema({
