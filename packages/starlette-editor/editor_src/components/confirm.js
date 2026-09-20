@@ -9,9 +9,11 @@ import { el } from '../standard/utils.js'
  *
  * @param {string} title
  * @param {string} body
+ * @param {string} confirmLabel  Label for the confirming button.
+ * @param {string} confirmVariant  Button modifier — 'danger' or 'primary'.
  * @returns {Promise<boolean>}
  */
-export function showConfirm(title, body) {
+export function showConfirm(title, body, confirmLabel = 'Delete', confirmVariant = 'danger') {
   return new Promise(resolve => {
     const backdrop = el('div', { class: 'overlay-backdrop' },
       el('div', { class: 'overlay-dialog' },
@@ -23,9 +25,9 @@ export function showConfirm(title, body) {
             onclick: () => { backdrop.remove(); resolve(false); }
           }, 'Cancel'),
           el('button', {
-            class: 'btn btn--danger',
+            class: `btn btn--${confirmVariant}`,
             onclick: () => { backdrop.remove(); resolve(true); }
-          }, 'Delete')
+          }, confirmLabel)
         )
       )
     );

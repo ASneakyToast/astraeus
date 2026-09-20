@@ -13,10 +13,58 @@ import {
   addDocToChangeset,
 } from '../api.js'
 import { setActiveChangesetId } from '../changeset-store.js'
+import { clearDraft, draftKey, loadDraft, saveDraft } from '../draft-buffer.js'
+import { showConfirm } from '../components/confirm.js'
 import { showToast } from '../components/toast.js'
 import { destroyPmInstances } from '../prosemirror/mount.js'
 import { pmDocToMarkdown } from '../prosemirror/markdown.js'
 import { docTitle } from './utils.js'
+
+
+/**
+ * Prompt before an action that would discard unsaved edits.
+ *
+ * @returns {Promise<boolean>} true when it is safe to proceed
+ */
+async function confirmDiscardIfDirty() {
+  if (!state.isDirty) return true;
+
+  const discarded = await showConfirm(
+    'Discard unsaved changes?',
+    'This document has edits that have not been saved. Leaving now discards them.',
+    'Discard',
+  );
+
+  if (discarded) clearDraft(draftKey(state.activeDocId, state.activeType));
+
+  return discarded;
+}
+
+/**
+ * Offer back a buffer left behind by a tab that died mid-edit.
+ *
+ * Buffers are cleared on save and on confirmed discard, so one surviving here
+ * was not deliberately abandoned.
+ *
+ * @param {string} key
+ */
+async function offerBufferedDraft(key) {
+  const buffered = loadDraft(key);
+  if (!buffered) return;
+
+  const restore = await showConfirm(
+    'Restore unsaved changes?',
+    `This document has edits from ${new Date(buffered.savedAt).toLocaleString()} that were never saved.`,
+    'Restore',
+    'primary',
+  );
+
+  if (restore) {
+    setState({ formData: buffered.formData, isDirty: true });
+  } else {
+    clearDraft(key);
+  }
+}
 
 /**
  * Select a document type and load its document list.
@@ -25,6 +73,8 @@ import { docTitle } from './utils.js'
  */
 export async function selectType(typeKey) {
   if (state.activeType === typeKey) return;
+
+  if (!(await confirmDiscardIfDirty())) return;
 
   destroyPmInstances();
 
@@ -60,6 +110,8 @@ export async function selectType(typeKey) {
 export async function selectDoc(docId) {
   if (state.activeDocId === docId) return;
 
+  if (!(await confirmDiscardIfDirty())) return;
+
   destroyPmInstances();
 
   setState({
@@ -78,6 +130,8 @@ export async function selectDoc(docId) {
       isLoadingDoc: false,
       isDirty: false,
     });
+
+    await offerBufferedDraft(draftKey(docId, state.activeType));
   } catch (err) {
     setState({ isLoadingDoc: false });
     showToast('error', 'Failed to load document', err.message);
@@ -87,8 +141,11 @@ export async function selectDoc(docId) {
 /**
  * Open the new document form (blank).
  */
-export function openNewDoc() {
+export async function openNewDoc() {
   if (!state.activeType) return;
+
+  if (!(await confirmDiscardIfDirty())) return;
+
   destroyPmInstances();
   setState({
     activeDocId: null,
@@ -96,6 +153,8 @@ export function openNewDoc() {
     formData: { __slug: '' },
     isDirty: false,
   });
+
+  await offerBufferedDraft(draftKey(null, state.activeType));
 }
 
 /**
@@ -107,6 +166,9 @@ export function openNewDoc() {
 export function onFieldChange(name, value) {
   state.formData = { ...state.formData, [name]: value };
   state.isDirty = true;
+
+  saveDraft(draftKey(state.activeDocId, state.activeType), state.formData);
+
   // Only update the dirty indicator — no full re-render to preserve focus
   const dot = document.getElementById('dirty-dot');
   if (dot) dot.classList.add('is-visible');
@@ -118,6 +180,10 @@ export function onFieldChange(name, value) {
 export async function saveDocument() {
   if (!state.activeType) return;
   if (state.isSaving) return;
+
+  // Capture before the save — a new document is buffered under its type and
+  // gains an id here, so the post-save key would not match what was written.
+  const bufferKey = draftKey(state.activeDocId, state.activeType);
 
   setState({ isSaving: true });
 
@@ -182,6 +248,8 @@ export async function saveDocument() {
       documents: result.documents || [],
       docsTotal: result.total || 0,
     });
+
+    clearDraft(bufferKey);
 
     showToast('success', 'Saved', docTitle(savedDoc));
   } catch (err) {

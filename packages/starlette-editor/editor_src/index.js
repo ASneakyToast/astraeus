@@ -50,6 +50,15 @@ function render() {
 // Wire render into state so setState() can call it
 setRenderFn(render);
 
+// Warn before leaving the page with unsaved edits. Browsers ignore any custom
+// message and show their own; preventDefault() is what triggers the prompt.
+window.addEventListener('beforeunload', e => {
+  if (!state.isDirty) return;
+
+  e.preventDefault();
+  e.returnValue = '';
+});
+
 /**
  * Build the initial HTML shell structure inside #app.
  */
