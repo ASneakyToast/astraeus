@@ -44,10 +44,11 @@ its own notice component. The changeset panel exists twice —
 The one place sharing happens, it runs backwards: `index.js:17` has the shell importing
 `ChatPanel` from `./embed/chat-panel.js`.
 
-This is why the admin surfaces have four unrelated visual languages (`editor.css` tokens,
+This is why the admin surfaces have five unrelated visual languages (`editor.css` tokens,
 Catppuccin hardcoded in both panels, Tailwind-ish greys in the gateways admin, Bootstrap 5 in
-the mediakit admin). Nothing shares a widget, so nothing shares a token. The palette drift is
-a symptom, not the disease.
+the mediakit admin, and a fifth in `astraeus-portal`). Nothing shares a widget, so nothing
+shares a token. The palette drift is a symptom, not the disease — and it reproduces: the portal
+landed after this audit began and arrived with its own hardcoded palette.
 
 ---
 
@@ -142,9 +143,9 @@ time.
 - Short-term churn in `embed/`, which is the surface users actually touch today
 
 **Neutral / deferred:**
-- `astraeus-portal` is referenced by `joellithgow/pyproject.toml:29` at
-  `../astraeus/packages/astraeus-portal` but does not exist in this repo or on any branch. It
-  adopts the token file when it lands here.
+- `astraeus-portal` (added in `5171f0c`) is the fifth admin surface and the fifth palette —
+  `#0a0a0a`/`#141414` surfaces with Tailwind blues and greys, inline `<style>`, hardcoded hex
+  (`astraeus_portal/routes.py:146-271`). It adopts the token file in ED-3B.
 - Whether `components/` eventually becomes its own publishable package — deferred; no consumer
   outside this repo yet.
 
