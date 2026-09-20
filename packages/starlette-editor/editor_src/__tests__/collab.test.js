@@ -96,7 +96,7 @@ vi.mock('prosemirror-transform', () => {
 // Import after mocks are set up
 // ---------------------------------------------------------------------------
 
-const { CollabConnection } = await import('../embed/collab.js')
+const { CollabConnection } = await import('../collab.js')
 const { sendableSteps, receiveTransaction } = await import('prosemirror-collab')
 
 // ---------------------------------------------------------------------------

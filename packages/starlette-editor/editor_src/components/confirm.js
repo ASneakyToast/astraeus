@@ -2,7 +2,7 @@
  * components/confirm.js — Modal confirmation dialog.
  */
 
-import { el } from '../standard/utils.js'
+import { el } from '../utils.js'
 
 /**
  * Show a confirmation dialog and return a Promise that resolves to the user's choice.

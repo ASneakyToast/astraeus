@@ -2,7 +2,7 @@
  * components/meta-panel.js — Document metadata details panel.
  */
 
-import { el, formatDate } from '../standard/utils.js'
+import { el, formatDate } from '../utils.js'
 import { showToast } from './toast.js'
 
 /**

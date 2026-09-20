@@ -10,10 +10,10 @@ import { addListNodes } from 'prosemirror-schema-list'
 import { exampleSetup } from 'prosemirror-example-setup'
 
 import { collab } from 'prosemirror-collab'
-import { CollabConnection } from '../embed/collab.js'
+import { CollabConnection } from '../collab.js'
 import { markdownToPmDoc, pmDocToMarkdown } from './markdown.js'
 import { execPmCommand, updateToolbarState } from './toolbar.js'
-import { fieldWidget } from '../standard/fields.js'
+import { fieldWidget } from '../components/fields.js'
 import { state } from '../state.js'
 
 /**
