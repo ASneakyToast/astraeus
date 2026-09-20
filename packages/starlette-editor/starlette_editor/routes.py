@@ -55,6 +55,9 @@ def make_editor_routes(editor: Editor) -> list:
                 )
 
         mount = editor.mount_path.rstrip("/")
+        # Shared design tokens, served by starlette-cms (ADR 020 §4). Loaded
+        # before editor.css so the stylesheet can consume the custom properties.
+        cms_mount = editor.cms.mount_path.rstrip("/")
 
         html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -62,6 +65,7 @@ def make_editor_routes(editor: Editor) -> list:
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CMS Editor</title>
+  <link rel="stylesheet" href="{cms_mount}/static/tokens.css" />
   <link rel="stylesheet" href="{mount}/static/editor.css?v={_CSS_HASH}" />
 </head>
 <body>
