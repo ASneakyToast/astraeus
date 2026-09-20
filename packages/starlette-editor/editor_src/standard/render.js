@@ -2,9 +2,9 @@
  * standard/render.js — Top-level render functions for each UI panel.
  */
 
-import { $, el, humanizeType, docTitle, formatDate, getOrderedFields } from './utils.js'
-import { buildSlugField, buildFieldGroup } from './fields.js'
-import { buildProseMirrorPlaceholder } from './fields.js'
+import { $, el, humanizeType, docTitle, formatDate, getOrderedFields } from '../utils.js'
+import { buildSlugField, buildFieldGroup } from '../components/fields.js'
+import { buildProseMirrorPlaceholder } from '../components/fields.js'
 import { buildBlockCanvas } from '../components/block-canvas.js'
 import { buildImagePickerField } from '../components/image-picker.js'
 import { buildMetaPanel } from '../components/meta-panel.js'

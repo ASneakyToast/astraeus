@@ -163,7 +163,7 @@ export class EditToolbar {
    * Wire a ChatPanel to the toolbar.
    * Also back-references the toolbar on the panel so it can call _onChatMessage().
    * Triggers a re-render so the 💬 button appears.
-   * @param {import('./chat-panel.js').ChatPanel} chatPanel
+   * @param {import('../components/chat-panel.js').ChatPanel} chatPanel
    */
   setChatPanel(chatPanel) {
     this._chatPanel = chatPanel

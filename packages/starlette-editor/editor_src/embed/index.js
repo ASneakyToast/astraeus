@@ -49,7 +49,7 @@ if (cmsBase) {
     toolbar.changesetPanel = changesetPanel
 
     // Boot the AI chat panel (bottom-left, peer of the changeset panel)
-    const { ChatPanel } = await import('./chat-panel.js')
+    const { ChatPanel } = await import('../components/chat-panel.js')
     const apiKey = scriptEl?.dataset?.cmsApiKey ?? null
     const currentDocId = cmsElements[0]?.dataset?.cmsId ?? null
 

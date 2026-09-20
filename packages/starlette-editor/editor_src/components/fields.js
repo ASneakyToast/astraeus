@@ -1,8 +1,8 @@
 /**
- * standard/fields.js — Field widget dispatch and form field builders.
+ * components/fields.js — Field widget dispatch and form field builders.
  */
 
-import { humanizeFieldName, getDefaultValue, $ as domId, el } from './utils.js'
+import { humanizeFieldName, getDefaultValue, $ as domId, el } from '../utils.js'
 
 /**
  * Determine what kind of UI widget to use for a field.

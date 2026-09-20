@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 /**
- * Tests for standard/utils.js — pure utility functions, plus the el() DOM helper.
+ * Tests for utils.js — pure utility functions, plus the el() DOM helper.
  */
 
 import { describe, it, expect } from 'vitest'
-import { humanizeType, humanizeFieldName, docTitle, formatDate, getOrderedFields, getDefaultValue, el } from '../standard/utils.js'
+import { humanizeType, humanizeFieldName, docTitle, formatDate, getOrderedFields, getDefaultValue, el } from '../utils.js'
 
 describe('humanizeType', () => {
   it('pluralizes a snake_case type', () => {

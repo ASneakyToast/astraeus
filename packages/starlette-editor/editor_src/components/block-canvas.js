@@ -2,8 +2,8 @@
  * components/block-canvas.js — ListField/BlockField interactive card canvas.
  */
 
-import { el, humanizeFieldName, getDefaultValue } from '../standard/utils.js'
-import { fieldWidget } from '../standard/fields.js'
+import { el, humanizeFieldName, getDefaultValue } from '../utils.js'
+import { fieldWidget } from './fields.js'
 import { state } from '../state.js'
 
 /**

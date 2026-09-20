@@ -2,7 +2,7 @@
  * components/image-picker.js — Mediakit iframe picker widget.
  */
 
-import { el } from '../standard/utils.js'
+import { el } from '../utils.js'
 import { showToast } from './toast.js'
 
 const CONFIG = window.__EDITOR_CONFIG__ || { cmsBase: '', apiKey: null, mountPath: '/editor' };
