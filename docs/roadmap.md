@@ -467,6 +467,32 @@ app = Starlette(routes=[Mount("/", app=portal.app)])
 
 ---
 
+## Editor Foundations (ADRs 020–022) — planned
+
+**Goal:** Make the fallback authoring surfaces good and reliable, and consolidate the widget
+layer both surfaces should have been built from. Triggered by a mobile audit of `/editor/shell`
+that found navigation deleted below 640px, silent data loss on both surfaces, and five
+unrelated visual languages across the admin pages.
+
+| Phase | What it does |
+|-------|--------------|
+| ED-1 | Durability — nav guards, `beforeunload`, local draft buffer, fix the collab `reject` handler so pending steps rebase instead of being discarded |
+| ED-2 | Unblock small screens — restore document navigation, `dvh`, 16px input floor, safe-area insets, 44px targets, block reorder without drag |
+| ED-3 | Token stylesheet in `starlette-cms` adopted by all five admin surfaces; promote widgets to `components/`; fix the `standard/` ↔ `embed/` dependency direction |
+| ED-4 | Merge the two changeset panels (1,798 lines across two files) into one component |
+| ED-5 | Shell IA — route stack with back navigation, pending view, bottom action bar |
+| ED-6 | `embed/` adopts the shared layer; delete its duplicate ProseMirror mount, markdown, and notice |
+
+**Key architectural note:** server-side ProseMirror step application is a documented non-goal
+(ADR 021 §5). Correct convergence comes from client-side rebasing, which `prosemirror-collab`
+already provides. `cms_steps` is an advisory log of client-asserted steps, not a verified
+history — ADR 018 §3 is amended accordingly.
+
+Plan: [`docs/plans/ED-editor-foundations-implementation-plan.md`](plans/ED-editor-foundations-implementation-plan.md).
+Widget reference: [`docs/editor-widgets.md`](editor-widgets.md).
+
+---
+
 ## North Star (post-v1, don't implement yet)
 
 - Collaborative editing via `cms_steps` table + WebSocket authority endpoint + `prosemirror-collab`
