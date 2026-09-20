@@ -10,92 +10,10 @@
   padding: 0;
 }
 
-:root {
-  /* Backgrounds */
-  --bg-base:        #0d0d0d;
-  --bg-surface:     #141414;
-  --bg-elevated:    #1a1a1a;
-  --bg-hover:       #202020;
-  --bg-selected:    #1e2535;
-  --bg-input:       #161616;
-
-  /* Borders */
-  --border-subtle:  #222222;
-  --border-default: #2a2a2a;
-  --border-strong:  #383838;
-  --border-focus:   #4c6ef5;
-
-  /* Text */
-  --text-primary:   #e8e8e8;
-  --text-secondary: #8a8a8a;
-  --text-muted:     #555555;
-  --text-link:      #6e9ef7;
-
-  /* Accent / brand */
-  --accent:         #4c6ef5;
-  --accent-hover:   #5c7cfa;
-  --accent-dim:     rgba(76, 110, 245, 0.15);
-
-  /* Status colours */
-  --green:          #2ea043;
-  --green-dim:      rgba(46, 160, 67, 0.15);
-  --red:            #da3633;
-  --red-dim:        rgba(218, 54, 51, 0.15);
-  --yellow:         #d29922;
-  --yellow-dim:     rgba(210, 153, 34, 0.15);
-
-  /* Typography */
-  --font-sans:      -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
-  --font-mono:      "JetBrains Mono", "Fira Code", "SF Mono", ui-monospace, monospace;
-  --font-size-xs:   11px;
-  --font-size-sm:   12px;
-  --font-size-base: 13px;
-  --font-size-md:   14px;
-  --font-size-lg:   16px;
-  --font-size-xl:   20px;
-  /* iOS Safari zooms the page when focusing any input below 16px, so this is a
-     floor for form controls rather than a size choice. */
-  --font-size-input: 16px;
-
-  /* Spacing */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
-
-  /* Layout */
-  --sidebar-width:       240px;
-  --doc-list-width:      240px;
-  --header-height:       48px;
-  /* Touch is the base case (ADR 022); a precise pointer relaxes it below. */
-  --target-min:          44px;
-  --radius-sm:           4px;
-  --radius-md:           6px;
-  --radius-lg:           8px;
-
-  /* Transitions */
-  --transition-fast:     100ms ease;
-  --transition-base:     150ms ease;
-}
-
-/* A mouse or trackpad can hit a smaller target than a thumb, so density is
-   restored here rather than assumed and patched for touch. */
-@media (hover: hover) and (pointer: fine) {
-  :root {
-    --target-min: 28px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
+/* Design tokens live in starlette-cms and are served at
+   {cms_mount}/static/tokens.css, which the shell loads before this file.
+   Anything surface-specific belongs here; anything another admin surface would
+   also want belongs there (ADR 020 §4). */
 
 html, body {
   height: 100%;
