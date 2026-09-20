@@ -4,7 +4,7 @@
 [021 — Editing transport and durability](../decisions/021-editing-transport-and-durability.md) ·
 [022 — Touch as the base case](../decisions/022-touch-as-base-case.md)  
 **Reference:** [Editor widget inventory](../editor-widgets.md)  
-**Branch base:** `main` → new branch `feat/editor-foundations`  
+**Branch base:** `main` (at `5171f0c`) → new branch `feat/editor-foundations`  
 **Status:** Ready for implementation  
 **Date written:** 2026-09-20
 
@@ -129,7 +129,8 @@ The shell is usable on a phone. Not redesigned — usable.
 
 ## ED-3 — Tokens and widget promotion
 
-**Packages:** `starlette-cms`, `starlette-editor`, `starlette-cms-gateways`, `mediakit`  
+**Packages:** `starlette-cms`, `starlette-editor`, `starlette-cms-gateways`, `mediakit`,
+`astraeus-portal`  
 **Complexity:** Large  
 **Depends on:** ED-2  
 **Blocks:** ED-4, ED-5  
@@ -152,6 +153,7 @@ One token file. Widgets live in `components/`. Dependency direction is one-way.
   replace hardcoded Catppuccin hex in `cssText`
 - `starlette_cms_gateways/admin/routes.py:73` — replace the inline `<style>` palette
 - `mediakit/static/admin.css:9-26` — replace the Bootstrap palette
+- `astraeus_portal/routes.py:146-271` — replace the inline `<style>` palette
 
 **ED-3C: Fix the dependency direction**
 - Promote `ChatPanel` from `embed/` to `components/`; remove the `index.js:17` back-import
@@ -164,7 +166,7 @@ One token file. Widgets live in `components/`. Dependency direction is one-way.
 ### Test plan
 - Unit: existing JS suite passes after promotion
 - Test: the cross-import assertion fails when a violation is introduced
-- Visual: all four admin surfaces side by side, light and dark
+- Visual: all five admin surfaces side by side, light and dark
 
 ---
 
@@ -261,7 +263,6 @@ merges into it on small screens
 - Offline editing
 - `{type: "field"}` messages on the collab socket
 - A native mediakit picker replacing the iframe
-- `astraeus-portal` token adoption — the package is not in this repo yet
 
 ---
 
