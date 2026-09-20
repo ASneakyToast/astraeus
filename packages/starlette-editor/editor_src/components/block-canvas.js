@@ -195,27 +195,51 @@ function buildBlockTypePicker(fieldName, availableTypes, render) {
  * @param {object} blockData
  * @param {object} blockSchema
  * @param {number} index
+ * @param {number} total          — block count, for disabling the move controls at the ends
  * @param {Array}  availableTypes
  * @param {function} render
  * @returns {HTMLElement}
  */
-function buildBlockCard(fieldName, blockData, blockSchema, index, availableTypes, render) {
-  let dragOverActive = false;
+function buildBlockCard(fieldName, blockData, blockSchema, index, total, availableTypes, render) {
+  const card = el('div', { class: 'block-card' });
 
-  const card = el('div', {
-    class: 'block-card',
-    draggable: 'true',
-  });
+  // Blocks are an ordered sequence, so the position is real information rather
+  // than decoration — it doubles as the label for the move controls.
+  const position = el('span', { class: 'block-card__position' }, String(index + 1));
+
+  const moveUp = el('button', {
+    class: 'block-card__move',
+    type: 'button',
+    title: 'Move up',
+    'aria-label': `Move block ${index + 1} up`,
+    disabled: index === 0 ? 'disabled' : null,
+    onclick: e => { e.stopPropagation(); moveBlock(fieldName, index, index - 1, render); },
+  }, '↑');
+
+  const moveDown = el('button', {
+    class: 'block-card__move',
+    type: 'button',
+    title: 'Move down',
+    'aria-label': `Move block ${index + 1} down`,
+    disabled: index === total - 1 ? 'disabled' : null,
+    onclick: e => { e.stopPropagation(); moveBlock(fieldName, index, index + 1, render); },
+  }, '↓');
 
   // Header
   const header = el('div', { class: 'block-card__header', title: 'Click to expand/collapse' },
-    el('span', { class: 'block-card__drag-handle', 'aria-label': 'Drag to reorder' }, '⠿'),
+    position,
     el('span', { class: 'block-card__type-label' }, humanizeFieldName(blockData.block_type || 'Block')),
-    el('button', {
-      class: 'block-card__delete',
-      title: 'Remove block',
-      onclick: e => { e.stopPropagation(); removeBlock(fieldName, index, render); },
-    }, '✕')
+    el('div', { class: 'block-card__controls' },
+      moveUp,
+      moveDown,
+      el('button', {
+        class: 'block-card__delete',
+        type: 'button',
+        title: 'Remove block',
+        'aria-label': `Remove block ${index + 1}`,
+        onclick: e => { e.stopPropagation(); removeBlock(fieldName, index, render); },
+      }, '✕')
+    )
   );
   card.appendChild(header);
 
@@ -325,43 +349,8 @@ function buildBlockCard(fieldName, blockData, blockSchema, index, availableTypes
 
   // Toggle open/collapse on header click
   header.addEventListener('click', e => {
-    if (e.target.closest('.block-card__delete')) return;
+    if (e.target.closest('.block-card__controls')) return;
     card.classList.toggle('is-open');
-  });
-
-  // Drag-and-drop reorder
-  card.addEventListener('dragstart', e => {
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', String(index));
-    card.classList.add('is-dragging');
-  });
-
-  card.addEventListener('dragend', () => {
-    card.classList.remove('is-dragging');
-  });
-
-  card.addEventListener('dragover', e => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    if (!dragOverActive) {
-      dragOverActive = true;
-      card.classList.add('drag-over');
-    }
-  });
-
-  card.addEventListener('dragleave', () => {
-    dragOverActive = false;
-    card.classList.remove('drag-over');
-  });
-
-  card.addEventListener('drop', e => {
-    e.preventDefault();
-    dragOverActive = false;
-    card.classList.remove('drag-over');
-    const fromIndex = parseInt(e.dataTransfer.getData('text/plain'), 10);
-    if (!isNaN(fromIndex) && fromIndex !== index) {
-      moveBlock(fieldName, fromIndex, index, render);
-    }
   });
 
   return card;
@@ -390,7 +379,7 @@ export function buildBlockCanvas(fieldName, prop, meta, typeSchema, currentValue
     const typeInfo = availableTypes.find(t => t.registeredType === blockData.block_type)
       || availableTypes[0];
     const blockSchema = typeInfo?.schema || {};
-    const card = buildBlockCard(fieldName, blockData, blockSchema, i, availableTypes, render);
+    const card = buildBlockCard(fieldName, blockData, blockSchema, i, blocks.length, availableTypes, render);
     canvas.appendChild(card);
   }
 
