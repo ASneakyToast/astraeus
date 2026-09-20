@@ -13,6 +13,7 @@ Usage::
 
 from __future__ import annotations
 
+import pathlib
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -21,7 +22,8 @@ import structlog
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
-from starlette.routing import Route
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from starlette_cms.media import MediaBackend
 from starlette_cms.model_builder import build_document_model
@@ -240,7 +242,7 @@ class CMS:
         from starlette_cms.api.schema import make_schema_routes
         from starlette_cms.api.webhooks import make_webhook_routes
 
-        routes: list[Route] = [
+        routes: list[Route | Mount] = [
             *make_document_routes(self),
             *make_schema_routes(self),
             *make_webhook_routes(self),
@@ -258,6 +260,14 @@ class CMS:
 
         from starlette_cms.api.collab import make_collab_routes
         routes.extend(make_collab_routes(self))
+
+        # Design tokens, shared by every admin surface (ADR 020 §4). Mounted
+        # here because starlette-cms is the only package all of them depend on.
+        static_dir = pathlib.Path(__file__).parent / "static"
+        if static_dir.exists():
+            routes.append(
+                Mount("/static", app=StaticFiles(directory=str(static_dir)), name="cms_static")
+            )
 
         middleware = []
         if self.cors_origins:
