@@ -5,7 +5,7 @@
  *   - On connect: receives init with doc + version
  *   - On local edit: sends sendable steps to server
  *   - On server confirmation: receiveTransaction applied to local state
- *   - On reject: rebase pending steps against server version (reconnect)
+ *   - On reject: hold pending steps; they rebase when the broadcast arrives
  *   - Reconnects with exponential backoff on disconnect
  *
  * Protocol:
@@ -117,6 +117,7 @@ export class CollabConnection {
         this._peers.set(p.client_id, p)
       }
       this._toolbar?.updatePeers(this._peers)
+      this._resumePendingSteps(msg.version)
     }
 
     else if (msg.type === 'peer_joined') {
@@ -158,12 +159,48 @@ export class CollabConnection {
     }
 
     else if (msg.type === 'reject') {
-      // Server rejected our steps — version mismatch.
-      // Update local version. The simplest correct recovery is to reconnect:
-      // server will send an 'init' with current state on connect.
+      // Someone else's steps landed first, so ours were based on a stale
+      // version. Our steps are still pending in the collab plugin: the server
+      // broadcasts every accepted batch to all connections, and when that
+      // broadcast arrives the 'steps' handler rebases through
+      // receiveTransaction and retries the send.
+      //
+      // Closing the socket here used to strand them. Nothing resends after a
+      // reconnect, so the edits stayed local — and the next keystroke sent them
+      // at the same stale version, rejecting and reconnecting again.
       this.version = msg.version
-      this.ws.close()
+      this.toolbar.setState('editing')
     }
+  }
+
+  /**
+   * Re-send anything left pending after a (re)connect.
+   *
+   * A brief drop — tunnel, wifi handoff — leaves the server where we left it,
+   * so pending steps are still based on a document it recognises and can just
+   * be sent. Nothing else resends them: only onTransaction and an incoming
+   * steps broadcast call _sendPendingSteps.
+   *
+   * If the server moved on while we were away, our steps are based on a
+   * document it no longer has. Rebasing needs the steps we missed, and the
+   * protocol has no way to pull them — see ADR 021 §5. Leave them pending and
+   * say so: the next broadcast rebases them if one arrives.
+   *
+   * @param {number} serverVersion
+   */
+  _resumePendingSteps(serverVersion) {
+    if (!sendableSteps(this.view.state)) return
+
+    if (getVersion(this.view.state) === serverVersion) {
+      this._sendPendingSteps()
+      return
+    }
+
+    console.warn(
+      `[astraeus] Reconnected at server version ${serverVersion} but local edits are ` +
+      `based on version ${getVersion(this.view.state)}. They cannot be rebased without ` +
+      'the missed steps and have not been saved.',
+    )
   }
 
   _sendPendingSteps() {

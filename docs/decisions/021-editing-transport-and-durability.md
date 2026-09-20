@@ -161,6 +161,14 @@ wanted; nothing here forecloses it.
 - Offline editing — explicitly out of scope; in-memory pending steps plus a local buffer cover
   the disconnection and crash cases, and nothing covers composing while genuinely offline
 - Pruning or checkpointing `cms_steps`
+- **Rebasing after a reconnect that missed steps.** Decision 1 covers the version-conflict case:
+  the server broadcasts every accepted batch to all connections, so the broadcast that made us
+  stale also carries what we need to rebase. It does not cover a client that was disconnected
+  while the server advanced — that client's pending steps are based on a document the server no
+  longer has, and the protocol has no way to ask for the steps in between. Adding one means
+  reading them back out of `cms_steps`, which decision 5 leaves unverified and which the version
+  collision below makes ambiguous. The client holds the steps and warns rather than silently
+  diverging or silently dropping them; a real fix arrives with the reopening conditions in §5.
 - **Version collision across publish cycles.** `draft_version` resets to 0 on publish
   (`documents.py:921,1041`, `changesets.py:310`) but `cms_steps` rows are never deleted — the
   only write to that table is an insert (`collab.py:120`). Version numbers therefore repeat, and
