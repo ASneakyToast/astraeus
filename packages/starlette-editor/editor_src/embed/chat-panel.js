@@ -547,6 +547,10 @@ export class ChatPanel {
    * @param {HTMLElement} closeBtn - close button; drags starting on it are ignored
    */
   _startDrag(e, closeBtn) {
+    // Below this width the panel is a full-width sheet and geometry is
+    // owned by CSS — dragging or resizing it would fight the stylesheet, and
+    // these are mouse-only interactions anyway.
+    if (window.innerWidth <= 640) return
     if (!this._el || (closeBtn && closeBtn.contains(e.target))) return
     e.preventDefault()
 
@@ -601,6 +605,10 @@ export class ChatPanel {
    * @param {MouseEvent} e
    */
   _startResize(e) {
+    // Below this width the panel is a full-width sheet and geometry is
+    // owned by CSS — dragging or resizing it would fight the stylesheet, and
+    // these are mouse-only interactions anyway.
+    if (window.innerWidth <= 640) return
     if (!this._el) return
     e.preventDefault()
     e.stopPropagation()
@@ -651,6 +659,10 @@ export class ChatPanel {
    * Falls back to the default PANEL_STYLES anchoring if none is saved.
    */
   _restoreGeometry() {
+    // Below this width the panel is a full-width sheet and geometry is
+    // owned by CSS — dragging or resizing it would fight the stylesheet, and
+    // these are mouse-only interactions anyway.
+    if (window.innerWidth <= 640) return
     if (!this._el) return
     let geo = null
     try {
