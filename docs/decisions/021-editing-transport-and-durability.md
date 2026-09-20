@@ -161,6 +161,14 @@ wanted; nothing here forecloses it.
 - Offline editing — explicitly out of scope; in-memory pending steps plus a local buffer cover
   the disconnection and crash cases, and nothing covers composing while genuinely offline
 - Pruning or checkpointing `cms_steps`
+- **Version collision across publish cycles.** `draft_version` resets to 0 on publish
+  (`documents.py:921,1041`, `changesets.py:310`) but `cms_steps` rows are never deleted — the
+  only write to that table is an insert (`collab.py:120`). Version numbers therefore repeat, and
+  `history_at_version` returns interleaved steps from every cycle, replayed over the *published*
+  body as baseline when steps actually apply to `draft_body`. Not fixed here: the endpoint is
+  advisory under decision 5, and a correct fix means either scoping steps by publish generation
+  or clearing them on publish, which is a schema change that belongs with any future decision to
+  make the log authoritative.
 
 ---
 

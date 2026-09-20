@@ -280,7 +280,14 @@ def make_collab_routes(cms: CMS) -> list:
     # ------------------------------------------------------------------
 
     async def history_list(request: Request) -> JSONResponse:
-        """Return step history for a document as time-bucketed checkpoints."""
+        """Return step history for a document as time-bucketed checkpoints.
+
+        Advisory only. Steps are recorded as the client asserts them — the
+        authority never applies them (see ``CollabAuthority.apply_steps``) — so
+        this listing is not a verified history. Rows are also never deleted while
+        ``draft_version`` resets to 0 on publish, so versions repeat across
+        publish cycles. See ADR 021 §5.
+        """
         from starlette_cms.auth import require_auth
         from starlette_cms.tables import CMSDocument, CMSStep
 
@@ -392,7 +399,14 @@ def make_collab_routes(cms: CMS) -> list:
     # ------------------------------------------------------------------
 
     async def history_at_version(request: Request) -> JSONResponse:
-        """Return baseline body + all steps up to *version* for client-side replay."""
+        """Return baseline body + all steps up to *version* for client-side replay.
+
+        Do not treat the replay result as authoritative. Three reasons, all
+        tracked in ADR 021 §5: the steps are unverified client assertions; the
+        baseline here is the *published* body while steps apply to ``draft_body``;
+        and because ``draft_version`` resets on publish without ``cms_steps`` being
+        cleared, a version can match rows from several publish cycles at once.
+        """
         from starlette_cms.auth import require_auth
         from starlette_cms.tables import CMSDocument, CMSStep
 
