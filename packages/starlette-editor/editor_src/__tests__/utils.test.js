@@ -1,9 +1,10 @@
+// @vitest-environment happy-dom
 /**
- * Tests for standard/utils.js — pure utility functions.
+ * Tests for standard/utils.js — pure utility functions, plus the el() DOM helper.
  */
 
 import { describe, it, expect } from 'vitest'
-import { humanizeType, humanizeFieldName, docTitle, formatDate, getOrderedFields, getDefaultValue } from '../standard/utils.js'
+import { humanizeType, humanizeFieldName, docTitle, formatDate, getOrderedFields, getDefaultValue, el } from '../standard/utils.js'
 
 describe('humanizeType', () => {
   it('pluralizes a snake_case type', () => {
@@ -150,5 +151,45 @@ describe('getOrderedFields', () => {
   it('returns empty array for typeInfo with no properties', () => {
     expect(getOrderedFields({ schema: {}, field_meta: {} })).toEqual([])
     expect(getOrderedFields(null)).toEqual([])
+  })
+})
+
+describe('el', () => {
+  it('sets ordinary attributes', () => {
+    const node = el('button', { type: 'button', title: 'Move up' })
+
+    expect(node.getAttribute('type')).toBe('button')
+    expect(node.getAttribute('title')).toBe('Move up')
+  })
+
+  it('omits a null attribute instead of stringifying it', () => {
+    // setAttribute('disabled', null) yields disabled="null", which is present —
+    // so a conditional boolean attribute would always be on.
+    const node = el('button', { disabled: null })
+
+    expect(node.hasAttribute('disabled')).toBe(false)
+    expect(node.disabled).toBe(false)
+  })
+
+  it('omits an undefined attribute', () => {
+    const node = el('button', { title: undefined })
+
+    expect(node.hasAttribute('title')).toBe(false)
+  })
+
+  it('still sets a boolean attribute when a value is given', () => {
+    const node = el('button', { disabled: 'disabled' })
+
+    expect(node.disabled).toBe(true)
+  })
+
+  it('maps class and wires on* handlers', () => {
+    let clicked = false
+    const node = el('button', { class: 'btn', onclick: () => { clicked = true } })
+
+    node.click()
+
+    expect(node.className).toBe('btn')
+    expect(clicked).toBe(true)
   })
 })
