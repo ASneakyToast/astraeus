@@ -12,13 +12,13 @@
  */
 
 import { state, setState, setRenderFn } from './state.js'
-import { fetchSchema } from './api.js'
+import { fetchSchema, fetchChangeset } from './api.js'
 import { showToast } from './components/toast.js'
 import { ChatPanel } from './components/chat-panel.js'
 import { DocumentEventsSubscriber } from './events.js'
 import { EditorToolbar } from './standard/editor-toolbar.js'
-import { ShellChangesetPanel } from './standard/changeset-panel-shell.js'
-import { getActiveChangesetId } from './changeset-store.js'
+import { ChangesetPanel } from './components/changeset-panel.js'
+import { getActiveChangesetId, onActiveChangesetChange } from './changeset-store.js'
 import { closeDocDrawer, toggleDocDrawer, wireDocDrawerDismiss } from './components/doc-drawer.js'
 import {
   renderTypeList,
@@ -36,6 +36,41 @@ import {
   deleteActiveDoc,
 } from './standard/actions.js'
 import { el } from './utils.js'
+
+/**
+ * Mirror the active changeset into shell state for the header.
+ *
+ * @param {string|null} csId
+ */
+async function syncActiveChangesetInfo(csId) {
+  if (!csId) {
+    setState({
+      activeChangesetId: null,
+      activeChangesetTitle: null,
+      activeChangesetDocCount: 0,
+      activeChangesetDocs: [],
+    })
+    return
+  }
+
+  try {
+    const cs = await fetchChangeset(csId)
+    const docs = cs.documents || []
+    setState({
+      activeChangesetId: csId,
+      activeChangesetTitle: cs.title || 'Untitled',
+      activeChangesetDocCount: cs.document_count ?? docs.length ?? 0,
+      activeChangesetDocs: docs,
+    })
+  } catch {
+    setState({
+      activeChangesetId: csId,
+      activeChangesetTitle: null,
+      activeChangesetDocCount: 0,
+      activeChangesetDocs: [],
+    })
+  }
+}
 
 /**
  * Select a document, then dismiss the drawer if the selection took.
@@ -218,12 +253,26 @@ async function boot() {
   const eventsSubscriber = new DocumentEventsSubscriber(resolvedCmsBase, cfg.apiKey || null)
   setState({ eventsSubscriber }, false)
 
-  // Mount ChangesetPanel
-  const changesetPanel = new ShellChangesetPanel()
+  // Mount ChangesetPanel. "Go to" is injected because it means something
+  // different per surface — selecting a document here, following a URL on the
+  // live site.
+  const changesetPanel = new ChangesetPanel({
+    variant: 'shell',
+    onNavigate: async (docType, docId) => {
+      await selectType(docType)
+      await selectDoc(docId)
+    },
+  })
   changesetPanel.mount()
+
+  // The header shows the active changeset's title and count. The panel writes
+  // active-changeset state to changeset-store and nothing else, so the shell
+  // derives what it needs from the same place rather than being pushed into.
+  onActiveChangesetChange(csId => { syncActiveChangesetInfo(csId) })
+
   const initialCsId = getActiveChangesetId()
   setState({ changesetPanel, activeChangesetId: initialCsId }, false)
-  if (initialCsId) changesetPanel._syncActiveChangesetInfo(initialCsId)
+  if (initialCsId) syncActiveChangesetInfo(initialCsId)
 
   // Mount floating toolbar pill
   const editorToolbar = new EditorToolbar({ changesetPanel, chatPanel, actions: cfg.actions || [] })

@@ -1,15 +1,26 @@
 /**
- * changeset-panel-shell.js — Changeset panel for the standard CMS shell.
+ * components/changeset-panel.js — Changesets, for both editing surfaces.
  *
  * Tree-view layout: changesets as collapsible groups with child doc rows.
- * Orphaned drafts (not in any changeset) listed at the bottom.
+ * Orphaned drafts (in no changeset) listed at the bottom.
+ *
+ * This was two components — one per surface, 1,810 lines between them, neither
+ * a superset of the other. A user moving between the shell and the live site
+ * lost capabilities in both directions depending which way they went. This is
+ * their union (ADR 020 §3).
+ *
+ * Surfaces differ only in mounting:
+ *   variant 'shell' — docked panel, drag and resize on a precise pointer
+ *   variant 'embed' — overlay on the published page, fixed position
+ *
+ * Navigation is injected, because "go to this document" means selecting it in
+ * the shell and following a URL on the live site. Everything else is shared.
  */
 
 import {
   fetchDirtyDocs,
   fetchUnpublishedDocs,
   fetchOpenChangesets,
-  fetchChangeset,
   createChangeset,
   addDocToChangeset,
   removeDocFromChangeset,
@@ -26,9 +37,7 @@ import {
   setActiveChangesetId,
   onActiveChangesetChange,
 } from '../changeset-store.js';
-import { state, setState } from '../state.js';
-import { selectType, selectDoc } from './actions.js';
-import { showToast } from '../components/toast.js';
+import { showToast } from './toast.js';
 
 const LS_GEOMETRY_KEY = 'cms-changeset-panel-geometry';
 const MIN_WIDTH = 280;
@@ -86,8 +95,17 @@ const SELECT_STYLE = `
   border-radius: 6px; padding: 3px 6px; font-size: 11px; cursor: pointer;
 `;
 
-export class ShellChangesetPanel {
-  constructor() {
+export class ChangesetPanel {
+  /**
+   * @param {object}   [opts]
+   * @param {'shell'|'embed'} [opts.variant]   Mounting style only.
+   * @param {(docType: string, docId: string) => void|Promise<void>} [opts.onNavigate]
+   *   Open a document. Omitted on surfaces with nowhere to go, which hides
+   *   the "Go to" action rather than offering one that does nothing.
+   */
+  constructor({ variant = 'shell', onNavigate = null } = {}) {
+    this.variant = variant;
+    this.onNavigate = onNavigate;
     this.el = null;
     this.visible = false;
     this.dirtyDocs = [];
@@ -95,32 +113,18 @@ export class ShellChangesetPanel {
     this.expanded = new Set();
     this.openMenuId = null;
     this.selectedDocId = null;
+    this.activeChangesetId = getActiveChangesetId();
 
+    // changeset-store is the single source of active-changeset state across
+    // every surface (ED-4C). Surfaces that need it elsewhere — the shell
+    // mirrors it into its own state for the header — subscribe separately
+    // rather than having this component push into them.
     onActiveChangesetChange((newId) => {
-      setState({ activeChangesetId: newId }, false);
-      this._syncActiveChangesetInfo(newId);
+      this.activeChangesetId = newId;
       if (this.visible) this._render();
     });
 
     window.addEventListener('cms:chat-turn-done', () => this.refresh());
-  }
-
-  async _syncActiveChangesetInfo(csId) {
-    if (!csId) {
-      setState({ activeChangesetTitle: null, activeChangesetDocCount: 0, activeChangesetDocs: [] });
-      return;
-    }
-    try {
-      const cs = await fetchChangeset(csId);
-      const docs = cs.documents || [];
-      setState({
-        activeChangesetTitle: cs.title || 'Untitled',
-        activeChangesetDocCount: cs.document_count ?? docs.length ?? 0,
-        activeChangesetDocs: docs,
-      });
-    } catch (_err) {
-      setState({ activeChangesetTitle: null, activeChangesetDocCount: 0, activeChangesetDocs: [] });
-    }
   }
 
   mount() {
@@ -133,8 +137,10 @@ export class ShellChangesetPanel {
     this._scrollContainer.style.cssText = 'flex: 1; overflow-y: auto;';
     this.el.appendChild(this._scrollContainer);
 
-    this.el.appendChild(this._buildResizeHandle());
-    this._restoreGeometry();
+    if (this.variant === 'shell') {
+      this.el.appendChild(this._buildResizeHandle());
+      this._restoreGeometry();
+    }
     document.body.appendChild(this.el);
   }
 
@@ -169,14 +175,10 @@ export class ShellChangesetPanel {
       this.openChangesets = [];
     }
 
-    const activeId = state.activeChangesetId;
+    const activeId = this.activeChangesetId;
     if (activeId) {
       const active = this.openChangesets.find(cs => cs.id === activeId);
       if (active) {
-        setState({
-          activeChangesetTitle: active.title || 'Untitled',
-          activeChangesetDocCount: active.document_count ?? 0,
-        }, false);
       }
     }
 
@@ -204,7 +206,7 @@ export class ShellChangesetPanel {
     if (!this.el || !this._scrollContainer) return;
     this._scrollContainer.innerHTML = '';
 
-    const activeId = state.activeChangesetId;
+    const activeId = this.activeChangesetId;
 
     // Title bar (draggable)
     const titleBar = document.createElement('div');
@@ -223,7 +225,9 @@ export class ShellChangesetPanel {
     closeBtn.textContent = '×';
     closeBtn.addEventListener('click', () => this.toggle());
 
-    titleBar.addEventListener('mousedown', (e) => this._startDrag(e, closeBtn));
+    if (this.variant === 'shell') {
+      titleBar.addEventListener('mousedown', (e) => this._startDrag(e, closeBtn));
+    }
 
     titleBar.appendChild(title);
     titleBar.appendChild(closeBtn);
@@ -332,7 +336,6 @@ export class ShellChangesetPanel {
           clearActiveItem.addEventListener('click', () => {
             this.openMenuId = null;
             setActiveChangesetId(null);
-            setState({ activeChangesetId: null, activeChangesetTitle: null, activeChangesetDocCount: 0, activeChangesetDocs: [] });
             this._render();
           });
           menu.appendChild(clearActiveItem);
@@ -490,7 +493,7 @@ export class ShellChangesetPanel {
             });
 
             actionBar.appendChild(moveSelect);
-            actionBar.appendChild(goToBtn);
+            if (this.onNavigate) actionBar.appendChild(goToBtn);
             actionBar.appendChild(viewBtn);
             actionBar.appendChild(removeBtn);
             row.appendChild(actionBar);
@@ -638,7 +641,7 @@ export class ShellChangesetPanel {
           });
 
           actionBar.appendChild(addSelect);
-          actionBar.appendChild(goToBtn);
+          if (this.onNavigate) actionBar.appendChild(goToBtn);
           actionBar.appendChild(discardBtn);
           actionBar.appendChild(deleteBtn);
           row.appendChild(actionBar);
@@ -658,7 +661,6 @@ export class ShellChangesetPanel {
       clearBtn.textContent = 'Clear active';
       clearBtn.addEventListener('click', () => {
         setActiveChangesetId(null);
-        setState({ activeChangesetId: null, activeChangesetTitle: null, activeChangesetDocCount: 0, activeChangesetDocs: [] });
         this._render();
       });
       footer.appendChild(clearBtn);
@@ -781,16 +783,14 @@ export class ShellChangesetPanel {
 
   async _setActive(csId) {
     setActiveChangesetId(csId);
-    setState({ activeChangesetId: csId }, false);
     this.expanded.add(csId);
-    await this._syncActiveChangesetInfo(csId);
     this._render();
   }
 
   async _handleGoToDoc(docType, docId) {
     this.selectedDocId = null;
-    await selectType(docType);
-    await selectDoc(docId);
+    if (!this.onNavigate) return;
+    await this.onNavigate(docType, docId);
   }
 
   async _handleMove(docId, fromCsId, toCsId) {
@@ -906,7 +906,7 @@ export class ShellChangesetPanel {
   async _handleDeleteDocument(docId, slug, isDraftDeleted) {
     try {
       this.selectedDocId = null;
-      await setDraftDeleted(docId, isDraftDeleted ? null : true, state.activeChangesetId);
+      await setDraftDeleted(docId, isDraftDeleted ? null : true, this.activeChangesetId);
       showToast('info', isDraftDeleted ? 'Delete cancelled' : 'Will delete with changeset');
       await this.refresh();
     } catch (err) {
@@ -924,17 +924,15 @@ export class ShellChangesetPanel {
   }
 
   async _promptAndCreate(docId) {
-    const title = window.prompt('Changeset name (optional):') ?? '';
+    const title = window.prompt('Changeset name (optional):');
     if (title === null) return;
     try {
       const cs = await createChangeset(title);
       setActiveChangesetId(cs.id);
-      setState({ activeChangesetId: cs.id }, false);
       if (docId) {
         await addDocToChangeset(cs.id, docId);
       }
       this.expanded.add(cs.id);
-      await this._syncActiveChangesetInfo(cs.id);
       await this.refresh();
     } catch (err) {
       showToast('error', 'Failed to create changeset', err.message);
@@ -951,7 +949,7 @@ export class ShellChangesetPanel {
   }
 
   async openDrawer() {
-    const csId = state.activeChangesetId;
+    const csId = this.activeChangesetId;
     if (!csId) return;
     try {
       const diffData = await fetchChangesetDiff(csId);
@@ -1066,7 +1064,6 @@ export class ShellChangesetPanel {
             await removeDocFromChangeset(changesetId, d.doc_id);
             row.remove();
             showToast('info', 'Removed from changeset');
-            await this._syncActiveChangesetInfo(changesetId);
           } catch (err) {
             showToast('error', 'Remove failed', err.message);
           }
@@ -1124,9 +1121,8 @@ export class ShellChangesetPanel {
       confirmBtn.textContent = 'Publishing…';
       try {
         await publishChangeset(changesetId);
-        if (state.activeChangesetId === changesetId) {
+        if (this.activeChangesetId === changesetId) {
           setActiveChangesetId(null);
-          setState({ activeChangesetId: null, activeChangesetTitle: null, activeChangesetDocCount: 0, activeChangesetDocs: [] });
         }
         this.closeDrawer();
         showToast('success', 'Published — site rebuilding');
@@ -1183,9 +1179,8 @@ export class ShellChangesetPanel {
     if (!confirm('Delete this changeset? Documents will not be affected.')) return;
     try {
       await deleteChangeset(changesetId);
-      if (state.activeChangesetId === changesetId) {
+      if (this.activeChangesetId === changesetId) {
         setActiveChangesetId(null);
-        setState({ activeChangesetId: null }, false);
       }
       this.expanded.delete(changesetId);
       await this.refresh();

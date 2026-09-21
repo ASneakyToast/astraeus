@@ -1,15 +1,36 @@
 // @vitest-environment happy-dom
 /**
- * Tests for embed/changeset-panel.js — ChangesetPanel logic.
+ * Tests for components/changeset-panel.js — the merged changeset panel.
  *
- * DOM manipulation is minimal in these tests; we focus on the async
- * logic layer (fetch calls, state population, confirmation guards).
+ * This replaced two components, one per surface, neither a superset of the
+ * other. These tests cover the union, and the two seams that let one component
+ * serve both surfaces: injected navigation, and the mounting variant.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { ChangesetPanel } from '../embed/changeset-panel.js'
 
-// ── Fixtures ──────────────────────────────────────────────────────────────────
+const mocks = vi.hoisted(() => ({
+  fetchDirtyDocs: vi.fn(),
+  fetchUnpublishedDocs: vi.fn(),
+  fetchOpenChangesets: vi.fn(),
+  fetchChangesetDiff: vi.fn(),
+  publishChangeset: vi.fn(),
+  createChangeset: vi.fn(),
+  addDocToChangeset: vi.fn(),
+  removeDocFromChangeset: vi.fn(),
+  scheduleChangeset: vi.fn(),
+  deleteChangeset: vi.fn(),
+  setDraftDeleted: vi.fn(),
+  discardDraft: vi.fn(),
+  patchChangeset: vi.fn(),
+  showToast: vi.fn(),
+}))
+
+vi.mock('../api.js', () => ({ ...mocks }))
+vi.mock('../components/toast.js', () => ({ showToast: mocks.showToast }))
+
+import { ChangesetPanel } from '../components/changeset-panel.js'
+import { setActiveChangesetId } from '../changeset-store.js'
 
 const DIRTY_DOCS = [
   { id: 'doc-1', doc_type: 'BlogPost', slug: 'hello-world', has_draft: true },
@@ -17,267 +38,242 @@ const DIRTY_DOCS = [
 ]
 
 const OPEN_CHANGESETS = [
-  { id: 'cs-1', title: 'Q3 launch', status: 'open', document_count: 2 },
-  { id: 'cs-2', title: 'Footer update', status: 'open', document_count: 1 },
+  { id: 'cs-1', title: 'Q3 launch', status: 'open', document_count: 1, documents: [DIRTY_DOCS[0]] },
+  { id: 'cs-2', title: 'Footer update', status: 'open', document_count: 0, documents: [] },
 ]
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function makeFetch(docsPayload = DIRTY_DOCS, csPayload = OPEN_CHANGESETS) {
-  return vi.fn(url => {
-    const u = String(url)
-    if (u.includes('has_draft=true')) {
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ documents: docsPayload }) })
-    }
-    if (u.includes('status=open')) {
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ changesets: csPayload }) })
-    }
-    if (u.includes('/publish')) {
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ id: 'cs-1', status: 'published' }) })
-    }
-    if (u.includes('/schedule')) {
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ id: 'cs-1', status: 'scheduled' }) })
-    }
-    // Generic POST (add doc, create changeset, delete)
-    return Promise.resolve({ ok: true, json: () => Promise.resolve({ id: 'cs-new', title: 'new cs' }) })
-  })
-}
-
-function makePanel(fetchMock) {
-  const panel = new ChangesetPanel({ cmsBase: 'http://cms.test', toolbar: {} })
-  // Attach a minimal DOM element so _render() doesn't throw
-  const el = document.createElement('div')
-  document.body.appendChild(el)
-  panel.el = el
-  // Override fetch
-  vi.stubGlobal('fetch', fetchMock)
+/** Mount a panel and load it with the fixtures. */
+async function mountPanel(opts = {}) {
+  const panel = new ChangesetPanel(opts)
+  panel.mount()
+  panel.visible = true
+  await panel.refresh()
   return panel
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+beforeEach(() => {
+  vi.clearAllMocks()
+  localStorage.clear()
+  document.body.innerHTML = ''
+  mocks.fetchDirtyDocs.mockResolvedValue({ documents: DIRTY_DOCS })
+  mocks.fetchUnpublishedDocs.mockResolvedValue({ documents: [] })
+  mocks.fetchOpenChangesets.mockResolvedValue({ changesets: OPEN_CHANGESETS })
+  mocks.fetchChangesetDiff.mockResolvedValue({ documents: [] })
+  mocks.publishChangeset.mockResolvedValue({ id: 'cs-1', status: 'published' })
+  mocks.createChangeset.mockResolvedValue({ id: 'cs-new', title: 'New' })
+})
 
-describe('ChangesetPanel.refresh()', () => {
-  afterEach(() => { vi.restoreAllMocks() })
+afterEach(() => {
+  document.body.innerHTML = ''
+})
 
-  it('calls both /api/documents?has_draft=true and /api/changesets?status=open', async () => {
-    const fetchMock = makeFetch()
-    const panel = makePanel(fetchMock)
-
-    await panel.refresh()
-
-    const calls = fetchMock.mock.calls.map(c => c[0])
-    expect(calls.some(u => u.includes('has_draft=true'))).toBe(true)
-    expect(calls.some(u => u.includes('status=open'))).toBe(true)
-  })
-
-  it('populates dirtyDocs and openChangesets from responses', async () => {
-    const panel = makePanel(makeFetch())
-
-    await panel.refresh()
+describe('refresh', () => {
+  it('loads dirty documents and open changesets', async () => {
+    const panel = await mountPanel()
 
     expect(panel.dirtyDocs).toHaveLength(2)
-    expect(panel.dirtyDocs[0].id).toBe('doc-1')
     expect(panel.openChangesets).toHaveLength(2)
-    expect(panel.openChangesets[0].id).toBe('cs-1')
   })
 
-  it('handles missing keys gracefully (uses empty arrays)', async () => {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
-    )
-    const panel = makePanel(fetchMock)
+  it('merges unpublished documents without duplicating them', async () => {
+    mocks.fetchUnpublishedDocs.mockResolvedValue({ documents: [DIRTY_DOCS[0]] })
 
-    await panel.refresh()
+    const panel = await mountPanel()
+
+    expect(panel.dirtyDocs.filter(d => d.id === 'doc-1')).toHaveLength(1)
+  })
+
+  it('empties rather than throwing when the API is unreachable', async () => {
+    mocks.fetchOpenChangesets.mockRejectedValue(new Error('offline'))
+
+    const panel = await mountPanel()
 
     expect(panel.dirtyDocs).toEqual([])
     expect(panel.openChangesets).toEqual([])
   })
-})
 
-describe('ChangesetPanel._addToChangeset()', () => {
-  afterEach(() => { vi.restoreAllMocks() })
+  it('treats a document in no changeset as orphaned', async () => {
+    const panel = await mountPanel()
 
-  it('POSTs to /api/changesets/{csId}/documents/{docId} then refreshes', async () => {
-    const fetchMock = makeFetch()
-    const panel = makePanel(fetchMock)
-
-    await panel._addToChangeset('doc-1', 'cs-1')
-
-    const postCalls = fetchMock.mock.calls.filter(c => c[1]?.method === 'POST')
-    expect(postCalls.length).toBeGreaterThanOrEqual(1)
-    const addUrl = postCalls[0][0]
-    expect(addUrl).toContain('/api/changesets/cs-1/documents/doc-1')
-
-    // refresh() follows — verify at least the GET calls were made
-    const getCalls = fetchMock.mock.calls.filter(c => !c[1]?.method || c[1].method === 'GET')
-    expect(getCalls.length).toBeGreaterThan(0)
+    expect(panel._computeOrphans().map(d => d.id)).toEqual(['doc-2'])
   })
 })
 
-describe('ChangesetPanel._createAndAdd()', () => {
-  afterEach(() => { vi.restoreAllMocks() })
+describe('publishing', () => {
+  /** @returns {HTMLElement|null} */
+  function confirmButton() {
+    return [...document.querySelectorAll('button')].find(
+      b => b.textContent === 'Confirm Publish',
+    ) ?? null
+  }
 
-  it('first creates a changeset then adds the doc', async () => {
-    const fetchMock = makeFetch()
-    const panel = makePanel(fetchMock)
+  it('opens a review step instead of publishing straight away', async () => {
+    const panel = await mountPanel()
 
-    await panel._createAndAdd('doc-1', 'My release')
+    await panel._handlePublish('cs-1')
 
-    const postCalls = fetchMock.mock.calls
-      .filter(c => c[1]?.method === 'POST')
-      .map(c => c[0])
-
-    // First POST creates changeset
-    expect(postCalls[0]).toContain('/api/changesets')
-    expect(postCalls[0]).not.toContain('/documents/')
-
-    // Second POST adds the document
-    expect(postCalls[1]).toContain('/documents/doc-1')
+    // Publishing triggers a production rebuild, so it takes a second step.
+    expect(mocks.publishChangeset).not.toHaveBeenCalled()
+    expect(confirmButton()).not.toBeNull()
   })
 
-  it('sends the title in the creation body', async () => {
-    const fetchMock = makeFetch()
-    const panel = makePanel(fetchMock)
+  it('fetches the diff to populate the review', async () => {
+    const panel = await mountPanel()
 
-    await panel._createAndAdd('doc-1', 'Sprint 42')
+    await panel._handlePublish('cs-1')
 
-    const createCall = fetchMock.mock.calls.find(
-      c => c[1]?.method === 'POST' && !String(c[0]).includes('/documents/')
-    )
-    const body = JSON.parse(createCall[1].body)
-    expect(body.title).toBe('Sprint 42')
+    expect(mocks.fetchChangesetDiff).toHaveBeenCalledWith('cs-1')
   })
 
-  it('skips the add-document step when docId is null', async () => {
-    const fetchMock = makeFetch()
-    const panel = makePanel(fetchMock)
+  it('publishes once confirmed', async () => {
+    const panel = await mountPanel()
 
-    await panel._createAndAdd(null, 'Empty cs')
+    await panel._handlePublish('cs-1')
+    confirmButton().click()
 
-    const postCalls = fetchMock.mock.calls.filter(c => c[1]?.method === 'POST')
-    // Only the create call, no /documents/ call
-    expect(postCalls.every(c => !String(c[0]).includes('/documents/'))).toBe(true)
-  })
-})
-
-describe('ChangesetPanel._publishChangeset()', () => {
-  afterEach(() => { vi.restoreAllMocks() })
-
-  it('POSTs to /api/changesets/{id}/publish', async () => {
-    const fetchMock = makeFetch()
-    const panel = makePanel(fetchMock)
-
-    await panel._publishChangeset('cs-1')
-
-    const publishCall = fetchMock.mock.calls.find(c =>
-      c[1]?.method === 'POST' && String(c[0]).includes('/publish')
-    )
-    expect(publishCall).toBeDefined()
-    expect(publishCall[0]).toContain('/api/changesets/cs-1/publish')
+    await vi.waitFor(() => expect(mocks.publishChangeset).toHaveBeenCalledWith('cs-1'))
   })
 
-  it('calls _showToast then refreshes', async () => {
-    const fetchMock = makeFetch()
-    const panel = makePanel(fetchMock)
-    const toastSpy = vi.spyOn(panel, '_showToast')
-    const refreshSpy = vi.spyOn(panel, 'refresh')
+  it('publishes nothing when the review is cancelled', async () => {
+    const panel = await mountPanel()
 
-    await panel._publishChangeset('cs-1')
+    await panel._handlePublish('cs-1')
+    const cancel = [...document.querySelectorAll('button')].find(b => b.textContent === 'Cancel')
+    cancel.click()
 
-    expect(toastSpy).toHaveBeenCalledWith('Published — site rebuilding')
-    expect(refreshSpy).toHaveBeenCalled()
+    expect(mocks.publishChangeset).not.toHaveBeenCalled()
+  })
+
+  it('reports a diff that cannot be loaded without opening a review', async () => {
+    mocks.fetchChangesetDiff.mockRejectedValue(new Error('boom'))
+    const panel = await mountPanel()
+
+    await panel._handlePublish('cs-1')
+
+    expect(mocks.showToast).toHaveBeenCalledWith('error', 'Failed to load diff', 'boom')
+    expect(confirmButton()).toBeNull()
   })
 })
 
-describe('ChangesetPanel._deleteChangeset()', () => {
-  afterEach(() => { vi.restoreAllMocks() })
+describe('active changeset', () => {
+  it('reads the active id from the shared store', async () => {
+    setActiveChangesetId('cs-2')
 
-  it('sends DELETE to /api/changesets/{id} after confirm', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true))
-    const fetchMock = makeFetch()
-    const panel = makePanel(fetchMock)
+    const panel = await mountPanel()
 
-    await panel._deleteChangeset('cs-1')
-
-    const deleteCall = fetchMock.mock.calls.find(c => c[1]?.method === 'DELETE')
-    expect(deleteCall).toBeDefined()
-    expect(deleteCall[0]).toContain('/api/changesets/cs-1')
+    expect(panel.activeChangesetId).toBe('cs-2')
   })
 
-  it('does not call fetch when confirm returns false', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => false))
-    const fetchMock = makeFetch()
-    const panel = makePanel(fetchMock)
+  it('follows the store when another surface changes it', async () => {
+    const panel = await mountPanel()
 
-    await panel._deleteChangeset('cs-1')
+    setActiveChangesetId('cs-1')
 
-    const deleteCalls = fetchMock.mock.calls.filter(c => c[1]?.method === 'DELETE')
-    expect(deleteCalls).toHaveLength(0)
-  })
-})
-
-describe('ChangesetPanel.toggle()', () => {
-  afterEach(() => { vi.restoreAllMocks() })
-
-  it('calls refresh() when toggling to visible', async () => {
-    const fetchMock = makeFetch()
-    const panel = makePanel(fetchMock)
-    const refreshSpy = vi.spyOn(panel, 'refresh')
-
-    expect(panel.visible).toBe(false)
-    await panel.toggle()
-
-    expect(panel.visible).toBe(true)
-    expect(refreshSpy).toHaveBeenCalled()
+    expect(panel.activeChangesetId).toBe('cs-1')
   })
 
-  it('does not call refresh() when toggling to hidden', async () => {
-    const fetchMock = makeFetch()
-    const panel = makePanel(fetchMock)
-    panel.visible = true
-    const refreshSpy = vi.spyOn(panel, 'refresh')
+  it('writes through the store when setting active', async () => {
+    const panel = await mountPanel()
 
-    await panel.toggle()
+    await panel._setActive('cs-2')
 
-    expect(panel.visible).toBe(false)
-    expect(refreshSpy).not.toHaveBeenCalled()
+    expect(panel.activeChangesetId).toBe('cs-2')
   })
 })
 
-describe('ChangesetPanel._scheduleChangeset()', () => {
-  afterEach(() => { vi.restoreAllMocks() })
+describe('surface seams', () => {
+  /** Action bars render only for the selected row, so select one. */
+  function goToButtons(panel) {
+    panel.expanded.add('cs-1')
+    panel.selectedDocId = 'doc-1'
+    panel._render()
+    return [...panel.el.querySelectorAll('button')].filter(b => b.textContent === 'Go to')
+  }
 
-  it('POSTs { publish_at } ISO string to /schedule endpoint', async () => {
-    const fetchMock = makeFetch()
-    const panel = makePanel(fetchMock)
+  it('offers Go to when navigation is injected', async () => {
+    const panel = await mountPanel({ variant: 'shell', onNavigate: vi.fn() })
 
-    // Simulate a row element with a picker that has a value set
-    const rowEl = document.createElement('div')
-    document.body.appendChild(rowEl)
+    expect(goToButtons(panel).length).toBeGreaterThan(0)
+  })
 
-    // Call _scheduleChangeset — it inserts a picker into rowEl
-    panel._scheduleChangeset('cs-1', rowEl)
+  it('hides Go to where there is nowhere to go', async () => {
+    const panel = await mountPanel({ variant: 'embed' })
 
-    // Find the input and set a value, then click confirm
-    const input = rowEl.querySelector('input[type="datetime-local"]')
-    const confirmBtn = rowEl.querySelector('button')
-    expect(input).toBeDefined()
-    expect(confirmBtn).toBeDefined()
+    expect(goToButtons(panel)).toHaveLength(0)
+  })
 
-    // Set a datetime value
-    input.value = '2026-09-01T10:00'
-    confirmBtn.click()
+  it('routes Go to through the injected navigator', async () => {
+    const onNavigate = vi.fn()
+    const panel = await mountPanel({ variant: 'shell', onNavigate })
 
-    // Allow promise to settle
-    await new Promise(r => setTimeout(r, 0))
+    await panel._handleGoToDoc('BlogPost', 'doc-1')
 
-    const scheduleCall = fetchMock.mock.calls.find(c =>
-      c[1]?.method === 'POST' && String(c[0]).includes('/schedule')
-    )
-    expect(scheduleCall).toBeDefined()
-    expect(scheduleCall[0]).toContain('/api/changesets/cs-1/schedule')
+    expect(onNavigate).toHaveBeenCalledWith('BlogPost', 'doc-1')
+  })
 
-    const body = JSON.parse(scheduleCall[1].body)
-    expect(body.publish_at).toBe(new Date('2026-09-01T10:00').toISOString())
+  it('does nothing on Go to when no navigator was given', async () => {
+    const panel = await mountPanel({ variant: 'embed' })
+
+    await expect(panel._handleGoToDoc('BlogPost', 'doc-1')).resolves.toBeUndefined()
+  })
+
+  it('gives the shell a resize handle', async () => {
+    const panel = await mountPanel({ variant: 'shell' })
+
+    expect(panel.el.children.length).toBeGreaterThan(1)
+  })
+
+  it('does not make the embed overlay a draggable window', async () => {
+    const panel = await mountPanel({ variant: 'embed' })
+    panel._render()
+
+    // Geometry there would fight the host page layout and outlive the session.
+    expect(localStorage.getItem('cms-changeset-panel-geometry')).toBeNull()
+  })
+})
+
+describe('changeset actions', () => {
+  it('creates a changeset and adds the document to it', async () => {
+    const panel = await mountPanel()
+    vi.spyOn(window, 'prompt').mockReturnValue('Release notes')
+
+    await panel._promptAndCreate('doc-2')
+
+    expect(mocks.createChangeset).toHaveBeenCalled()
+    expect(mocks.addDocToChangeset).toHaveBeenCalledWith('cs-new', 'doc-2')
+  })
+
+  it('creates nothing when the title prompt is dismissed', async () => {
+    const panel = await mountPanel()
+    vi.spyOn(window, 'prompt').mockReturnValue(null)
+
+    await panel._promptAndCreate('doc-2')
+
+    expect(mocks.createChangeset).not.toHaveBeenCalled()
+  })
+
+  it('adds a document to an existing changeset', async () => {
+    const panel = await mountPanel()
+
+    await panel._handleAddToChangeset('doc-2', 'cs-1')
+
+    expect(mocks.addDocToChangeset).toHaveBeenCalledWith('cs-1', 'doc-2')
+  })
+
+  it('removes a document from a changeset', async () => {
+    const panel = await mountPanel()
+
+    await panel._handleRemoveFromChangeset('cs-1', 'doc-1')
+
+    expect(mocks.removeDocFromChangeset).toHaveBeenCalledWith('cs-1', 'doc-1')
+  })
+
+  it('moves a document between changesets', async () => {
+    const panel = await mountPanel()
+
+    await panel._handleMove('doc-1', 'cs-1', 'cs-2')
+
+    expect(mocks.removeDocFromChangeset).toHaveBeenCalledWith('cs-1', 'doc-1')
+    expect(mocks.addDocToChangeset).toHaveBeenCalledWith('cs-2', 'doc-1')
   })
 })
