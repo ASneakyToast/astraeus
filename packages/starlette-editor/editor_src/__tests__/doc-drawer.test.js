@@ -16,6 +16,7 @@ import {
 beforeEach(() => {
   document.body.innerHTML = `
     <div class="sidebar-docs__backdrop"></div>
+    <aside class="sidebar-types"></aside>
     <aside class="sidebar-docs"></aside>
   `
 })
@@ -138,5 +139,23 @@ describe('back gesture', () => {
     expect(back).not.toHaveBeenCalled()
     back.mockRestore()
     unwire()
+  })
+})
+
+describe('both sidebars move as one panel', () => {
+  it('opens the type list alongside the document list', () => {
+    openDocDrawer()
+
+    // Below 640px they are one navigation surface, not a rail plus a drawer.
+    expect(document.querySelector('.sidebar-types').classList.contains('is-open')).toBe(true)
+    expect(document.querySelector('.sidebar-docs').classList.contains('is-open')).toBe(true)
+  })
+
+  it('closes both', () => {
+    openDocDrawer()
+    closeDocDrawer()
+
+    expect(document.querySelector('.sidebar-types').classList.contains('is-open')).toBe(false)
+    expect(document.querySelector('.sidebar-docs').classList.contains('is-open')).toBe(false)
   })
 })

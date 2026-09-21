@@ -1528,22 +1528,61 @@ details.doc-meta[open] .doc-meta__summary::before {
 }
 
 @media (max-width: 640px) {
-  /* The document list is the only route to a document, so it slides over the
-     editor here rather than being hidden (ADR 022 §4). */
+  /* Navigation is a panel, not two permanent columns (ADR 022 §2).
+     A 48px icon rail costs 12% of a 390pt screen to sit there permanently,
+     and pairing it with a 320px drawer left a dead strip of backdrop — neither
+     a rail nor a full navigation surface. Both sidebars leave the flow here and
+     slide in together over the editor, which gets the whole width back. */
+  .sidebar-types {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 108px;
+    z-index: 41;
+    transform: translateX(-110%);
+    transition: transform var(--transition-base);
+  }
+
   .sidebar-docs {
     position: fixed;
     top: 0;
     bottom: 0;
-    left: 48px;
-    width: min(320px, calc(100vw - 48px));
+    left: 108px;
+    width: calc(100vw - 108px);
     z-index: 40;
     transform: translateX(-110%);
     transition: transform var(--transition-base);
     box-shadow: 8px 0 24px rgba(0, 0, 0, 0.5);
   }
 
+  .sidebar-types.is-open,
   .sidebar-docs.is-open {
     transform: translateX(0);
+  }
+
+  /* There is room for words again, so the 900px icon-rail collapse is undone.
+     Labels beat guessing at icons. */
+  .sidebar-types__logo {
+    display: block;
+  }
+  .sidebar-types__item span {
+    display: inline;
+  }
+  .sidebar-types__item {
+    justify-content: flex-start;
+    padding: var(--space-2) var(--space-3);
+    min-height: var(--target-min);
+  }
+  .sidebar-types__group-label {
+    font-size: var(--font-size-xs);
+    min-height: var(--target-min);
+    padding: 0 var(--space-3);
+    justify-content: flex-start;
+  }
+  .sidebar-types__group-label::before {
+    font-size: var(--font-size-sm);
+    margin-right: var(--space-1);
   }
 
   .sidebar-docs__backdrop.is-open {

@@ -11,6 +11,16 @@
 
 const OPEN_CLASS = 'is-open';
 
+/**
+ * Both sidebars — below 640px they leave the layout flow and slide in together
+ * as one navigation panel, so they open and close as a unit.
+ *
+ * @returns {HTMLElement[]}
+ */
+function panels() {
+  return [...document.querySelectorAll('.sidebar-types, .sidebar-docs')];
+}
+
 /** @returns {HTMLElement|null} */
 function drawer() {
   return document.querySelector('.sidebar-docs');
@@ -29,7 +39,7 @@ export function isDocDrawerOpen() {
 export function openDocDrawer() {
   if (isDocDrawerOpen()) return;
 
-  drawer()?.classList.add(OPEN_CLASS);
+  for (const el of panels()) el.classList.add(OPEN_CLASS);
   backdrop()?.classList.add(OPEN_CLASS);
 
   // Push a history entry so the device back gesture dismisses the drawer
@@ -47,7 +57,7 @@ export function openDocDrawer() {
 export function closeDocDrawer(fromHistory = false) {
   const wasOpen = isDocDrawerOpen();
 
-  drawer()?.classList.remove(OPEN_CLASS);
+  for (const el of panels()) el.classList.remove(OPEN_CLASS);
   backdrop()?.classList.remove(OPEN_CLASS);
 
   if (wasOpen && !fromHistory && history.state?.docDrawer) {
