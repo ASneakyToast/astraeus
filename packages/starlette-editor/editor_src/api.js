@@ -2,7 +2,11 @@
  * api.js — Thin authenticated fetch wrapper for the CMS API.
  */
 
-const CONFIG = window.__EDITOR_CONFIG__ || { cmsBase: '', apiKey: null, mountPath: '/editor' };
+// globalThis rather than window: this module is imported transitively by
+// field widgets, which are exercised in a plain node test environment where
+// window does not exist. Reading a global at module load should not decide
+// whether an import succeeds.
+const CONFIG = globalThis.__EDITOR_CONFIG__ || { cmsBase: '', apiKey: null, mountPath: '/editor' };
 
 /**
  * Custom error class for API errors with status + data payload.

@@ -15,6 +15,12 @@
    Anything surface-specific belongs here; anything another admin surface would
    also want belongs there (ADR 020 §4). */
 
+/* Published by components/keyboard-inset.js from visualViewport. 0 where the
+   API is missing, which is every desktop browser. */
+:root {
+  --keyboard-inset: 0px;
+}
+
 html, body {
   height: 100%;
   background: var(--bg-base);
@@ -1705,7 +1711,8 @@ details.doc-meta[open] .doc-meta__summary::before {
     position: fixed;
     left: 0;
     right: 0;
-    bottom: 0;
+    /* Rides above the keyboard, which the safe-area inset does not describe. */
+    bottom: var(--keyboard-inset);
     z-index: 30;
     justify-content: flex-end;
     gap: var(--space-2);
@@ -1721,9 +1728,11 @@ details.doc-meta[open] .doc-meta__summary::before {
 
   /* Clear the action bar rather than letting it cover the last field. */
   .editor-scroll {
-    /* Clears the action bar, which is now the only fixed thing down there. */
+    /* Clears the action bar, which is now the only fixed thing down there,
+       plus the keyboard when it is up. */
     padding-bottom: calc(
-      var(--target-min) + var(--space-8) + env(safe-area-inset-bottom)
+      var(--target-min) + var(--space-8) + env(safe-area-inset-bottom) +
+      var(--keyboard-inset)
     );
   }
 

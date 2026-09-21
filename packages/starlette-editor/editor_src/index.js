@@ -27,6 +27,7 @@ import {
   wireDocDrawerDismiss,
 } from './components/doc-drawer.js'
 import { PendingView } from './components/pending-view.js'
+import { wireKeyboardInset } from './components/keyboard-inset.js'
 import {
   renderTypeList,
   renderDocList,
@@ -280,6 +281,7 @@ function buildShell() {
   root.appendChild(main);
 
   wireDocDrawerDismiss();
+  wireKeyboardInset();
 }
 
 /**

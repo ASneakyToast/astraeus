@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * Tests for components/fields.js — field widget dispatch.
  */
@@ -38,8 +39,11 @@ describe('fieldWidget dispatch table', () => {
     expect(fieldWidget('metadata', { type: 'object' }, { field_type: 'json' })).toBe('json')
   })
 
-  it('document_ref field_type → input', () => {
-    expect(fieldWidget('author', { type: 'string' }, { field_type: 'document_ref' })).toBe('input')
+  it('document_ref field_type → document_ref picker', () => {
+    // Was 'input' — you typed a document id by hand and found out at save time
+    // whether it existed.
+    expect(fieldWidget('author', { type: 'string' }, { field_type: 'document_ref' }))
+      .toBe('document_ref')
   })
 
   it('choices in meta → select (legacy heuristic)', () => {
@@ -81,5 +85,31 @@ describe('fieldWidget dispatch table', () => {
   it('default string → input', () => {
     expect(fieldWidget('title', { type: 'string' }, {})).toBe('input')
     expect(fieldWidget('author', { type: 'string' }, {})).toBe('input')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// document_ref picker
+// ---------------------------------------------------------------------------
+
+describe('buildDocumentRefPicker', () => {
+  it('falls back to a text input when no target type is declared', async () => {
+    const { buildDocumentRefPicker } = await import('../components/document-ref-picker.js')
+
+    const node = buildDocumentRefPicker('ref', {}, 'doc-9', false, () => {})
+
+    // Nothing to list, so typing an id is still the only option.
+    expect(node.tagName).toBe('INPUT')
+    expect(node.value).toBe('doc-9')
+  })
+
+  it('renders a select when a target type is declared', async () => {
+    const { buildDocumentRefPicker } = await import('../components/document-ref-picker.js')
+
+    const node = buildDocumentRefPicker('ref', { ref_block_type: 'blog_post' }, null, false, () => {})
+
+    expect(node.tagName).toBe('SELECT')
+    // Disabled until the options arrive, rather than briefly offering none.
+    expect(node.hasAttribute('disabled')).toBe(true)
   })
 })

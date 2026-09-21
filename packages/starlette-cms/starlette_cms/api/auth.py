@@ -18,7 +18,7 @@ _SESSION_COOKIE = "cms_session"
 _COOKIE_MAX_AGE = 86400  # 24 hours
 
 
-def _login_html(error: bool = False, next_url: str = "") -> str:
+def _login_html(error: bool = False, next_url: str = "", mount: str = "") -> str:
     error_block = (
         '<p class="error">Invalid username or password.</p>' if error else ""
     )
@@ -31,76 +31,81 @@ def _login_html(error: bool = False, next_url: str = "") -> str:
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CMS Login</title>
+  <link rel="stylesheet" href="{mount}/static/tokens.css">
   <style>
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
-      background: #0f1117;
-      color: #e2e8f0;
-      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg-base);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
       display: flex;
       align-items: center;
       justify-content: center;
-      min-height: 100vh;
+      /* 100vh excludes the iOS URL bar. */
+      min-height: 100dvh;
+      padding: var(--space-4);
     }}
     .card {{
-      background: #1a1d27;
-      border: 1px solid #2d3149;
-      border-radius: 12px;
-      padding: 2rem;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-lg);
+      padding: var(--space-8);
       width: 100%;
       max-width: 360px;
     }}
     h1 {{
-      font-size: 1.25rem;
+      font-size: var(--font-size-xl);
       font-weight: 600;
-      margin-bottom: 1.5rem;
-      color: #f8fafc;
+      margin-bottom: var(--space-6);
+      color: var(--text-primary);
     }}
     label {{
       display: block;
-      font-size: 0.8rem;
+      font-size: var(--font-size-md);
       font-weight: 500;
-      color: #94a3b8;
-      margin-bottom: 0.4rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
+      color: var(--text-secondary);
+      margin-bottom: var(--space-1);
     }}
     input[type="text"], input[type="password"] {{
       width: 100%;
-      padding: 0.6rem 0.75rem;
-      background: #0f1117;
-      border: 1px solid #2d3149;
-      border-radius: 6px;
-      color: #e2e8f0;
-      font-size: 0.95rem;
-      margin-bottom: 1rem;
+      min-height: var(--target-min);
+      padding: var(--space-2) var(--space-3);
+      background: var(--bg-input);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      /* iOS zooms the page when focusing anything below 16px. */
+      font-size: var(--font-size-input);
+      margin-bottom: var(--space-4);
       outline: none;
-      transition: border-color 0.15s;
+      transition: border-color var(--transition-fast);
     }}
     input[type="text"]:focus, input[type="password"]:focus {{
-      border-color: #6366f1;
+      border-color: var(--border-focus);
     }}
     button {{
       width: 100%;
-      padding: 0.65rem;
-      background: #6366f1;
-      color: #fff;
+      min-height: var(--target-min);
+      padding: var(--space-2);
+      background: var(--accent);
+      color: var(--accent-on);
       border: none;
-      border-radius: 6px;
-      font-size: 0.95rem;
+      border-radius: var(--radius-sm);
+      font-family: var(--font-sans);
+      font-size: var(--font-size-input);
       font-weight: 500;
       cursor: pointer;
-      transition: background 0.15s;
+      transition: background var(--transition-fast);
     }}
-    button:hover {{ background: #4f46e5; }}
+    button:hover {{ background: var(--accent-hover); }}
     .error {{
-      color: #f87171;
-      font-size: 0.85rem;
-      margin-bottom: 1rem;
-      padding: 0.5rem 0.75rem;
-      background: rgba(248, 113, 113, 0.1);
-      border: 1px solid rgba(248, 113, 113, 0.3);
-      border-radius: 6px;
+      color: var(--pending);
+      font-size: var(--font-size-md);
+      margin-bottom: var(--space-4);
+      padding: var(--space-2) var(--space-3);
+      background: var(--pending-dim);
+      border: 1px solid var(--pending);
+      border-radius: var(--radius-sm);
     }}
   </style>
 </head>
@@ -127,7 +132,8 @@ def make_auth_routes(cms: CMS) -> list[Route]:
     async def login_get(request: Request) -> HTMLResponse:
         error = request.query_params.get("error") == "1"
         next_url = request.query_params.get("next", "")
-        return HTMLResponse(_login_html(error=error, next_url=next_url))
+        mount = cms.mount_path.rstrip("/")
+        return HTMLResponse(_login_html(error=error, next_url=next_url, mount=mount))
 
     async def login_post(request: Request) -> Response:
         if cms.session_secret is None:

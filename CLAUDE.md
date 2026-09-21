@@ -16,7 +16,7 @@ This is the Astraeus monorepo. Read this file before doing anything else.
 - **`astraeus-otel`** — shared OpenTelemetry configuration and testing utilities
 - **`astraeus-portal`** — central navigation hub linking all admin interfaces
 
-Each package is independently installable from PyPI. Together they form a full content management and data governance stack.
+Each package is built to be independently installable. **None are published to PyPI yet** — there are no release tags and the `version` fields are hand-set and stale, so a consumer depends on this workspace by path (see `joellithgow/pyproject.toml`). Versioning becomes worth setting up when the first package is actually published.
 
 **Why it exists:** Joel needed an agentic content backend for his personal site (joellithgow.com) and future client work. He wanted something he could use across projects — not a one-off backend. The agentic layer (MCP servers) is a first-class design goal, not a bolt-on.
 
@@ -39,7 +39,7 @@ Each package is independently installable from PyPI. Together they form a full c
 astraeus/
 ├── CLAUDE.md                      ← you are here
 ├── pyproject.toml                 ← UV workspace root (no package here)
-├── uv.lock                        ← single lockfile for all packages
+├── uv.lock                        ← resolved lockfile; gitignored, not committed
 ├── .python-version                ← 3.12
 ├── packages/
 │   ├── starlette-cms/             ← implement first, everything depends on it
@@ -102,7 +102,7 @@ uv run ruff format packages/
 
 ### Commits
 - Conventional commits: `feat:`, `fix:`, `test:`, `docs:`, `chore:`
-- End commit messages with: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
+- End commit messages with a `Co-Authored-By:` line naming the model that wrote them
 
 ---
 

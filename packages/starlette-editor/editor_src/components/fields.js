@@ -3,6 +3,7 @@
  */
 
 import { humanizeFieldName, getDefaultValue, $ as domId, el } from '../utils.js'
+import { buildDocumentRefPicker } from './document-ref-picker.js'
 
 /**
  * Determine what kind of UI widget to use for a field.
@@ -31,7 +32,7 @@ export function fieldWidget(name, prop, meta) {
   if (ft === 'number')       return 'number';
   if (ft === 'boolean')      return 'boolean';
   if (ft === 'json')         return 'json';
-  if (ft === 'document_ref') return 'input';  // rendered as plain text input for now
+  if (ft === 'document_ref') return 'document_ref';
   // url, text → fall through to heuristics below
 
   // --- Legacy heuristics (backwards compat for fields without field_type) ---
@@ -194,6 +195,13 @@ export function buildFieldGroup(name, prop, meta, state, onFieldChange, buildBlo
         : currentVal != null ? JSON.stringify(currentVal, null, 2) : '';
       ta.value = rawVal;
       group.appendChild(ta);
+      break;
+    }
+
+    case 'document_ref': {
+      group.appendChild(
+        buildDocumentRefPicker(name, meta, currentVal, isRequired, onFieldChange),
+      );
       break;
     }
 
