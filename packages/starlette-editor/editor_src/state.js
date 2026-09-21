@@ -21,6 +21,7 @@ export const state = {
   activeType: null,       // string doc_type key
   documents: [],          // array of document objects for the active type
   docsTotal: 0,
+  docFilter: '',          // client-side filter over the loaded document list
   activeDocId: null,      // string id, or null for "new"
   activeDoc: null,        // full document object from API, or null
   formData: {},           // current form field values (in-memory)
@@ -37,6 +38,7 @@ export const state = {
   activeChangesetDocs: [],    // [{id, doc_type, slug, has_draft}] for tooltip
   chatPanel: null,        // ChatPanel instance once mounted
   changesetPanel: null,   // ChangesetPanel instance once mounted
+  pendingView: null,      // PendingView instance once mounted
 };
 
 /**
