@@ -547,3 +547,62 @@ async def test_event_bus_broadcast_drops_failed_connection():
 
     assert good.received == [{"event": "document.updated", "document_id": "x"}]
     assert bad not in bus._connections  # dropped after failure
+
+
+# ---------------------------------------------------------------------------
+# Event name validation
+# ---------------------------------------------------------------------------
+
+
+async def test_create_webhook_rejects_unknown_event(wh_client):
+    """A name the CMS never fires is refused rather than stored.
+
+    Dispatch matches the event name exactly, so subscribing to
+    "document.publish" instead of "document.published" produced a webhook that
+    listed as active and never fired once. That went unnoticed for months.
+    """
+    resp = await wh_client.post(
+        "/api/webhooks",
+        json={
+            "url": "https://example.com/hook",
+            "events": ["document.publish"],  # present tense — never fired
+        },
+    )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert "document.publish" in body["error"]
+    # The response says what would have worked.
+    assert "document.published" in body["valid_events"]
+
+
+async def test_create_webhook_rejects_a_bad_name_among_good_ones(wh_client):
+    """One wrong name invalidates the request rather than being dropped."""
+    resp = await wh_client.post(
+        "/api/webhooks",
+        json={
+            "url": "https://example.com/hook",
+            "events": ["document.published", "document.delete"],
+        },
+    )
+
+    assert resp.status_code == 422
+    assert "document.delete" in resp.json()["error"]
+
+
+async def test_create_webhook_accepts_changeset_published(wh_client):
+    """Changeset publishes fire their own event, so it has to be subscribable.
+
+    Publishing a changeset fires changeset.published once instead of one
+    document.published per member (ADR 018 §4), so a rebuild consumer that only
+    subscribes to document events never rebuilds after a changeset publish.
+    """
+    resp = await wh_client.post(
+        "/api/webhooks",
+        json={
+            "url": "https://example.com/hook",
+            "events": ["document.published", "changeset.published"],
+        },
+    )
+
+    assert resp.status_code == 201

@@ -157,6 +157,23 @@ def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+#: Every event the CMS fires. Dispatch is an exact string match, so anything
+#: outside this set can only ever be a subscription that never fires.
+WEBHOOK_EVENTS: frozenset[str] = frozenset(
+    {
+        "document.created",
+        "document.updated",
+        "document.published",
+        "document.unpublished",
+        "document.deleted",
+        # Publishing a changeset fires this once instead of one
+        # document.published per member document (ADR 018 §4), so a consumer
+        # that only wants rebuilds needs it as well.
+        "changeset.published",
+    }
+)
+
+
 def make_webhook_routes(cms: CMS) -> list[Route]:
     """Build and return all webhook CRUD routes, closed over ``cms``."""
 
@@ -190,6 +207,20 @@ def make_webhook_routes(cms: CMS) -> list[Route]:
         if not isinstance(events, list) or len(events) == 0:
             return JSONResponse(
                 {"error": "events must be a non-empty list"},
+                status_code=422,
+            )
+
+        # Dispatch matches the event name exactly, so a name that is never
+        # fired produces a webhook that looks registered and active and does
+        # nothing. A subscription to "document.publish" rather than
+        # "document.published" went unnoticed for months because of this.
+        unknown = [e for e in events if e not in WEBHOOK_EVENTS]
+        if unknown:
+            return JSONResponse(
+                {
+                    "error": f"unknown event(s): {', '.join(sorted(unknown))}",
+                    "valid_events": sorted(WEBHOOK_EVENTS),
+                },
                 status_code=422,
             )
 
