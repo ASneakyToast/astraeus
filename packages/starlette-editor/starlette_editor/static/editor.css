@@ -1488,7 +1488,8 @@ details.doc-meta[open] .doc-meta__summary::before {
 
 /* Only needed where the panel covers everything else. */
 .sidebar-types__close,
-.sidebar-docs__back {
+.sidebar-docs__back,
+.sidebar-types__destinations {
   display: none;
 }
 
@@ -1637,6 +1638,22 @@ details.doc-meta[open] .doc-meta__summary::before {
     cursor: pointer;
   }
 
+  .sidebar-types__destinations button {
+    width: 100%;
+    background: transparent;
+    border: none;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .sidebar-types__destinations {
+    display: block;
+    border-top: 1px solid var(--border-subtle);
+    margin-top: auto;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
   /* Back to the type list. Hidden at width, where both are columns. */
   .sidebar-docs__back {
     display: inline-flex;
@@ -1671,73 +1688,14 @@ details.doc-meta[open] .doc-meta__summary::before {
     padding: 0 var(--space-3);
   }
 
-  /* A phone cannot spare a permanent row for chrome, so the pill becomes a
-     FAB: one button, bottom-right, that opens the actions upward. Collapsed it
-     costs a corner instead of a row. */
+  /* No floating chrome on a phone at all. Changesets and Chat are navigation
+     destinations, so they live in the navigation panel; the pill and the FAB
+     before it spent every iteration colliding with the action bar, because
+     clearing it is arithmetic against --target-min, which is 44px on touch and
+     28px under a fine pointer. Deleting the floating element deletes the
+     problem. */
   [data-cms-editor-toolbar] {
-    left: auto !important;
-    right: var(--space-4) !important;
-    /* Clears the action bar, which owns the bottom edge when a document is
-       open. Unconditional: without :has() the stylesheet cannot tell, and a
-       FAB sitting slightly high beats one sitting on top of Save. */
-    bottom: calc(
-      var(--target-min) + var(--space-5) + env(safe-area-inset-bottom)
-    ) !important;
-    top: auto !important;
-    width: auto !important;
-    transform: none !important;
-    flex-direction: column-reverse !important;
-    align-items: stretch !important;
-    border-radius: var(--radius-lg) !important;
-    overflow: hidden;
-  }
-
-  /* Collapsed: only the toggle. Expanded: the actions stack above it. */
-  [data-cms-editor-toolbar]:not(.is-expanded) > *:not(.cms-toolbar__fab) {
     display: none !important;
-  }
-
-  [data-cms-editor-toolbar]:not(.is-expanded) {
-    border-radius: 50% !important;
-  }
-
-  .cms-toolbar__fab {
-    position: relative;
-    min-width: var(--target-min);
-    min-height: var(--target-min);
-    background: var(--bg-elevated);
-    border: none;
-    color: var(--text-primary);
-    font-size: var(--font-size-lg);
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .cms-toolbar__fab-dot {
-    position: absolute;
-    top: 9px;
-    right: 9px;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--pending);
-  }
-
-  [data-cms-editor-toolbar].is-expanded > button:not(.cms-toolbar__fab) {
-    min-height: var(--target-min);
-    justify-content: flex-start;
-    padding: 0 var(--space-4) !important;
-  }
-
-  /* The dividers were for a horizontal row. */
-  [data-cms-editor-toolbar] > div:not(.cms-toolbar__fab) {
-    display: none !important;
-  }
-
-  /* The action bar owned the bottom edge; with the FAB in the corner it can
-     sit at the edge again. */
-  .editor-header__actions {
-    bottom: 0;
   }
 
   /* Primary actions move to the bottom edge, within thumb reach and inside the
@@ -1747,7 +1705,7 @@ details.doc-meta[open] .doc-meta__summary::before {
     position: fixed;
     left: 0;
     right: 0;
-    bottom: calc(var(--target-min) + env(safe-area-inset-bottom));
+    bottom: 0;
     z-index: 30;
     justify-content: flex-end;
     gap: var(--space-2);
@@ -1763,9 +1721,9 @@ details.doc-meta[open] .doc-meta__summary::before {
 
   /* Clear the action bar rather than letting it cover the last field. */
   .editor-scroll {
-    /* Clears the action bar and the FAB below it. */
+    /* Clears the action bar, which is now the only fixed thing down there. */
     padding-bottom: calc(
-      var(--target-min) * 2 + var(--space-6) + env(safe-area-inset-bottom)
+      var(--target-min) + var(--space-8) + env(safe-area-inset-bottom)
     );
   }
 

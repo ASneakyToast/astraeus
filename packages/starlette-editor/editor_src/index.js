@@ -168,7 +168,28 @@ function buildShell() {
         onclick: () => closeDocDrawer(),
       }, '\u00d7')
     ),
-    el('nav', { class: 'sidebar-types__list', id: 'type-list' })
+    el('nav', { class: 'sidebar-types__list', id: 'type-list' }),
+    // Changesets and Chat are destinations, not document actions, so on small
+    // screens they live here rather than in floating chrome that has to dodge
+    // the action bar. Hidden at width, where the toolbar pill handles them.
+    el('div', { class: 'sidebar-types__destinations' },
+      el('button', {
+        class: 'sidebar-types__item',
+        type: 'button',
+        onclick: () => {
+          closeDocDrawer();
+          state.changesetPanel?.toggle();
+        },
+      }, el('span', { class: 'sidebar-types__item-icon' }, '\u{1F4CB}'), el('span', {}, 'Changesets')),
+      el('button', {
+        class: 'sidebar-types__item',
+        type: 'button',
+        onclick: () => {
+          closeDocDrawer();
+          state.chatPanel?.toggle();
+        },
+      }, el('span', { class: 'sidebar-types__item-icon' }, '\u{1F4AC}'), el('span', {}, 'Chat'))
+    )
   );
 
   const docSidebar = el('aside', { class: 'sidebar-docs' },
