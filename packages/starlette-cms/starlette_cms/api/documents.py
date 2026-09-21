@@ -85,11 +85,14 @@ def _row_to_dict(row: dict[str, Any], *, use_draft: bool = False) -> dict[str, A
                 "starlette_cms.documents.body_parse_failed_in_row",
                 body_type=type(raw_body).__name__,
             )
-    # Strip null values from body on read — per ADR 016, absence is the
-    # canonical representation of "not set"; null is not a valid stored value.
-    # This sanitises legacy documents written before exclude_none=True was applied.
-    if isinstance(raw_body, dict):
-        raw_body = {k: v for k, v in raw_body.items() if v is not None}
+    # Nulls are NOT stripped on read. ADR 016 makes absence the canonical
+    # representation of "not set" at *write* time (model_dump(exclude_none=True)),
+    # and reserves null for an explicit write — a PATCH that deliberately clears a
+    # field (§2), or on_delete="nullify" blanking a DocumentRef (ADR 010).
+    #
+    # Stripping here destroyed exactly those signals: a consumer could not tell
+    # "the referenced document was deleted" from "this ref was never set", which
+    # is the ambiguity ADR 016 exists to prevent.
 
     raw_draft_body = row.get("draft_body")
     if isinstance(raw_draft_body, str):

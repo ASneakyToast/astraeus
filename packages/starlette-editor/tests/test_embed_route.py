@@ -70,9 +70,9 @@ async def test_embed_js_no_auth_required():
     async with AsyncClient(
         transport=ASGITransport(app=editor.app), base_url="http://test"
     ) as client:
-        # Shell should be blocked
+        # Shell sends an unauthenticated visitor to the login page
         shell_resp = await client.get("/shell")
-        assert shell_resp.status_code == 401
+        assert shell_resp.status_code == 302
 
         # But embed.js should be public
         embed_resp = await client.get("/embed.js")

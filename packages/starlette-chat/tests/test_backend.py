@@ -152,6 +152,7 @@ async def chat_client(chat_api: ChatAPI) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(
         transport=ASGITransport(app=chat_api.app),
         base_url="http://testserver",
+        headers={"Authorization": f"Bearer {API_KEY}"},
     ) as client:
         yield client
 
@@ -179,6 +180,7 @@ async def test_create_session(chat_api: ChatAPI) -> None:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=chat_api.app),
             base_url="http://testserver",
+            headers={"Authorization": f"Bearer {API_KEY}"},
         ) as client:
             resp = await client.post(
                 "/api/chat/sessions",
@@ -211,6 +213,7 @@ async def test_create_session_no_config(chat_api: ChatAPI) -> None:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=chat_api.app),
             base_url="http://testserver",
+            headers={"Authorization": f"Bearer {API_KEY}"},
         ) as client:
             resp = await client.post(
                 "/api/chat/sessions",

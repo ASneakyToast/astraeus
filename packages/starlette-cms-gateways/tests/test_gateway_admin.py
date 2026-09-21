@@ -135,7 +135,7 @@ async def test_shell_returns_html(admin_app):
 )
 async def test_list_gateways(mock_disc, admin_app):
     """GET /api/gateways returns all installed gateways."""
-    resp = await admin_app["client"].get("/cms/api/gateways")
+    resp = await admin_app["client"].get("/cms/api/gateways", headers=_auth_headers())
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 1
@@ -154,7 +154,7 @@ async def test_list_gateways(mock_disc, admin_app):
 )
 async def test_list_gateways_empty(mock_disc, admin_app):
     """Returns an empty list when no gateways are installed."""
-    resp = await admin_app["client"].get("/cms/api/gateways")
+    resp = await admin_app["client"].get("/cms/api/gateways", headers=_auth_headers())
     assert resp.status_code == 200
     assert resp.json()["total"] == 0
 
@@ -169,7 +169,7 @@ async def test_list_gateways_empty(mock_disc, admin_app):
     return_value=_FAKE_ENTRY_POINTS,
 )
 async def test_get_gateway_found(mock_disc, admin_app):
-    resp = await admin_app["client"].get("/cms/api/gateways/admin-test")
+    resp = await admin_app["client"].get("/cms/api/gateways/admin-test", headers=_auth_headers())
     assert resp.status_code == 200
     data = resp.json()
     assert data["name"] == "admin-test"
@@ -181,7 +181,9 @@ async def test_get_gateway_found(mock_disc, admin_app):
     return_value=_FAKE_ENTRY_POINTS,
 )
 async def test_get_gateway_not_found(mock_disc, admin_app):
-    resp = await admin_app["client"].get("/cms/api/gateways/no-such-gateway")
+    resp = await admin_app["client"].get(
+        "/cms/api/gateways/no-such-gateway", headers=_auth_headers()
+    )
     assert resp.status_code == 404
     assert "not found" in resp.json()["error"].lower()
 
@@ -292,7 +294,7 @@ async def test_trigger_and_poll_sync_to_done(mock_disc, admin_app):
     assert result["errors"] == []
 
     # After sync completes, last_synced should appear in the gateway list
-    list_resp = await admin_app["client"].get("/cms/api/gateways")
+    list_resp = await admin_app["client"].get("/cms/api/gateways", headers=_auth_headers())
     assert list_resp.status_code == 200
     gw_after = list_resp.json()["gateways"][0]
     assert gw_after["last_synced"] is not None, "last_synced must be set after a successful sync"
