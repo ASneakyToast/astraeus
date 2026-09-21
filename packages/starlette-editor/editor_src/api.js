@@ -30,7 +30,10 @@ export async function apiFetch(path, opts = {}) {
   if (CONFIG.apiKey) {
     headers['Authorization'] = `Bearer ${CONFIG.apiKey}`;
   }
-  return fetch(url, { ...opts, headers });
+  // The embed runs on the published site, cross-origin to the CMS, and
+  // authenticates with the cms_session cookie. Same-origin requests send
+  // cookies either way, so this only changes the cross-origin case.
+  return fetch(url, { credentials: 'include', ...opts, headers });
 }
 
 /** @returns {Promise<object>} */

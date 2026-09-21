@@ -36,7 +36,7 @@ export const state = {
   activeChangesetDocCount: 0, // number of docs in the active changeset
   activeChangesetDocs: [],    // [{id, doc_type, slug, has_draft}] for tooltip
   chatPanel: null,        // ChatPanel instance once mounted
-  changesetPanel: null,   // ShellChangesetPanel instance once mounted
+  changesetPanel: null,   // ChangesetPanel instance once mounted
 };
 
 /**
