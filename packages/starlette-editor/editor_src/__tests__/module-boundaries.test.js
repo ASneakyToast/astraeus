@@ -102,3 +102,16 @@ describe('the shared layer is actually shared', () => {
     expect(shared.length).toBeGreaterThan(1)
   })
 })
+
+describe('one ProseMirror schema', () => {
+  it('is constructed in exactly one place', () => {
+    // Both surfaces connect to the same collab authority, and a step only
+    // applies if both ends agree on the schema. Two schemas that match today
+    // drift tomorrow, and the failure is silent and mid-session.
+    const constructors = jsFiles(SRC).filter(f =>
+      /new Schema\(/.test(readFileSync(f, 'utf8')),
+    )
+
+    expect(constructors.map(f => f.slice(SRC.length + 1))).toEqual(['prosemirror/schema.js'])
+  })
+})

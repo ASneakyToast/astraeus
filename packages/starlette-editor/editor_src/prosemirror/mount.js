@@ -4,26 +4,18 @@
 
 import { EditorState } from 'prosemirror-state'
 import { EditorView } from 'prosemirror-view'
-import { Schema } from 'prosemirror-model'
-import { schema as basicSchema } from 'prosemirror-schema-basic'
-import { addListNodes } from 'prosemirror-schema-list'
 import { exampleSetup } from 'prosemirror-example-setup'
 
 import { collab } from 'prosemirror-collab'
+import { schemaWithLists } from './schema.js'
 import { CollabConnection } from '../collab.js'
 import { markdownToPmDoc, pmDocToMarkdown } from './markdown.js'
 import { execPmCommand, updateToolbarState } from './toolbar.js'
 import { fieldWidget } from '../components/fields.js'
 import { state } from '../state.js'
 
-/**
- * Build a schema that includes list nodes (extends the basic schema).
- * Created once and reused for all PM instances.
- */
-export const schemaWithLists = new Schema({
-  nodes: addListNodes(basicSchema.spec.nodes, 'paragraph block*', 'block'),
-  marks: basicSchema.spec.marks,
-})
+// Re-exported so existing importers of this module keep working.
+export { schemaWithLists }
 
 /**
  * Stub toolbar that satisfies CollabConnection's interface for the shell.

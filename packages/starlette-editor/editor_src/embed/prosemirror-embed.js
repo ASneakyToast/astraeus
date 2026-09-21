@@ -9,22 +9,12 @@
  */
 import { EditorState } from 'prosemirror-state'
 import { EditorView } from 'prosemirror-view'
-import { Schema } from 'prosemirror-model'
-import { schema as basicSchema } from 'prosemirror-schema-basic'
-import { addListNodes } from 'prosemirror-schema-list'
 import { exampleSetup } from 'prosemirror-example-setup'
 import { collab } from 'prosemirror-collab'
 import { CollabConnection } from '../collab.js'
+import { schemaWithLists as pmSchema, generateClientID } from '../prosemirror/schema.js'
 
-// Build a schema that includes lists
-const pmSchema = new Schema({
-  nodes: addListNodes(basicSchema.spec.nodes, 'paragraph block*', 'block'),
-  marks: basicSchema.spec.marks,
-})
 
-function generateClientID() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36)
-}
 
 export async function mountProseMirrorOnElement(el, { doc, docId, fieldName, cmsBase, toolbar }) {
   // Clear existing static HTML
