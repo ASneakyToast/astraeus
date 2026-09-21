@@ -1533,32 +1533,46 @@ details.doc-meta[open] .doc-meta__summary::before {
      and pairing it with a 320px drawer left a dead strip of backdrop — neither
      a rail nor a full navigation surface. Both sidebars leave the flow here and
      slide in together over the editor, which gets the whole width back. */
-  .sidebar-types {
-    position: fixed;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    width: 108px;
-    z-index: 41;
-    transform: translateX(-110%);
-    transition: transform var(--transition-base);
-  }
-
+  .sidebar-types,
   .sidebar-docs {
     position: fixed;
     top: 0;
     bottom: 0;
+    /* visibility, not just transform: a panel offset from the left edge needs
+       its transform to clear that offset too, and getting that arithmetic
+       wrong leaves it silently painting over the content. This makes the
+       closed state unable to paint regardless. Zero-duration, delayed on
+       close so the slide still animates. */
+    visibility: hidden;
+    transition:
+      transform var(--transition-base),
+      visibility 0s linear var(--transition-base);
+  }
+
+  .sidebar-types {
+    left: 0;
+    width: 108px;
+    z-index: 41;
+    transform: translateX(-100%);
+  }
+
+  .sidebar-docs {
     left: 108px;
     width: calc(100vw - 108px);
     z-index: 40;
-    transform: translateX(-110%);
-    transition: transform var(--transition-base);
+    /* -100% clears its own width; the extra 120px clears the 108px left offset
+       and the box-shadow that would otherwise bleed back on screen. */
+    transform: translateX(calc(-100% - 120px));
     box-shadow: 8px 0 24px rgba(0, 0, 0, 0.5);
   }
 
   .sidebar-types.is-open,
   .sidebar-docs.is-open {
+    visibility: visible;
     transform: translateX(0);
+    transition:
+      transform var(--transition-base),
+      visibility 0s;
   }
 
   /* There is room for words again, so the 900px icon-rail collapse is undone.
