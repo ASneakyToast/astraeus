@@ -119,6 +119,14 @@ function render() {
   renderHeader(togglePublish, saveDocument, deleteActiveDoc);
   state.editorToolbar?.update();
 
+  // The action bar's children are hidden inline rather than removed, so :empty
+  // never matches and it rendered as a bare strip with nothing in it.
+  const actions = document.querySelector('.editor-header__actions');
+  if (actions) {
+    const hasVisible = [...actions.children].some(c => c.style.display !== 'none');
+    actions.classList.toggle('is-empty', !hasVisible);
+  }
+
   const showPending = !state.activeType && !state.activeDocId;
   const pendingEl = document.getElementById('pending-area');
   const formEl = document.getElementById('form-area');
@@ -149,7 +157,16 @@ function buildShell() {
 
   const typeSidebar = el('aside', { class: 'sidebar-types' },
     el('div', { class: 'sidebar-types__header' },
-      el('span', { class: 'sidebar-types__logo' }, 'Astraeus')
+      el('span', { class: 'sidebar-types__logo' }, 'Astraeus'),
+      // At full width the panel covers the backdrop and the header toggle, so
+      // without this there is no way out but the device back gesture.
+      el('button', {
+        class: 'sidebar-types__close',
+        type: 'button',
+        title: 'Close',
+        'aria-label': 'Close navigation',
+        onclick: () => closeDocDrawer(),
+      }, '\u00d7')
     ),
     el('nav', { class: 'sidebar-types__list', id: 'type-list' })
   );

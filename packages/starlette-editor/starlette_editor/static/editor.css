@@ -1482,6 +1482,12 @@ details.doc-meta[open] .doc-meta__summary::before {
   flex-shrink: 0;
 }
 
+.sidebar-types__header {
+  justify-content: space-between;
+}
+
+/* Only needed where the panel covers everything else. */
+.sidebar-types__close,
 .sidebar-docs__back {
   display: none;
 }
@@ -1617,6 +1623,20 @@ details.doc-meta[open] .doc-meta__summary::before {
     flex-shrink: 0;
   }
 
+  .sidebar-types__close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--target-min);
+    min-height: var(--target-min);
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: var(--font-size-xl);
+    line-height: 1;
+    cursor: pointer;
+  }
+
   /* Back to the type list. Hidden at width, where both are columns. */
   .sidebar-docs__back {
     display: inline-flex;
@@ -1651,23 +1671,73 @@ details.doc-meta[open] .doc-meta__summary::before {
     padding: 0 var(--space-3);
   }
 
-  /* The pill is persistent chrome — changesets, chat, instance actions — so it
-     docks to the bottom edge full width rather than floating over the content
-     it is meant to sit beside. Free positioning is a desktop affordance, and
-     its drag grip is already disabled at this width. */
+  /* A phone cannot spare a permanent row for chrome, so the pill becomes a
+     FAB: one button, bottom-right, that opens the actions upward. Collapsed it
+     costs a corner instead of a row. */
   [data-cms-editor-toolbar] {
-    left: 0 !important;
-    right: 0 !important;
-    bottom: 0 !important;
+    left: auto !important;
+    right: var(--space-4) !important;
+    /* Clears the action bar, which owns the bottom edge when a document is
+       open. Unconditional: without :has() the stylesheet cannot tell, and a
+       FAB sitting slightly high beats one sitting on top of Save. */
+    bottom: calc(
+      var(--target-min) + var(--space-5) + env(safe-area-inset-bottom)
+    ) !important;
     top: auto !important;
-    width: 100% !important;
+    width: auto !important;
     transform: none !important;
-    border-radius: 0 !important;
-    border-left: none !important;
-    border-right: none !important;
-    border-bottom: none !important;
-    justify-content: center !important;
-    padding-bottom: env(safe-area-inset-bottom) !important;
+    flex-direction: column-reverse !important;
+    align-items: stretch !important;
+    border-radius: var(--radius-lg) !important;
+    overflow: hidden;
+  }
+
+  /* Collapsed: only the toggle. Expanded: the actions stack above it. */
+  [data-cms-editor-toolbar]:not(.is-expanded) > *:not(.cms-toolbar__fab) {
+    display: none !important;
+  }
+
+  [data-cms-editor-toolbar]:not(.is-expanded) {
+    border-radius: 50% !important;
+  }
+
+  .cms-toolbar__fab {
+    position: relative;
+    min-width: var(--target-min);
+    min-height: var(--target-min);
+    background: var(--bg-elevated);
+    border: none;
+    color: var(--text-primary);
+    font-size: var(--font-size-lg);
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .cms-toolbar__fab-dot {
+    position: absolute;
+    top: 9px;
+    right: 9px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--pending);
+  }
+
+  [data-cms-editor-toolbar].is-expanded > button:not(.cms-toolbar__fab) {
+    min-height: var(--target-min);
+    justify-content: flex-start;
+    padding: 0 var(--space-4) !important;
+  }
+
+  /* The dividers were for a horizontal row. */
+  [data-cms-editor-toolbar] > div:not(.cms-toolbar__fab) {
+    display: none !important;
+  }
+
+  /* The action bar owned the bottom edge; with the FAB in the corner it can
+     sit at the edge again. */
+  .editor-header__actions {
+    bottom: 0;
   }
 
   /* Primary actions move to the bottom edge, within thumb reach and inside the
@@ -1687,13 +1757,13 @@ details.doc-meta[open] .doc-meta__summary::before {
     border-top: 1px solid var(--border-subtle);
   }
 
-  .editor-header__actions:empty {
+  .editor-header__actions.is-empty {
     display: none;
   }
 
   /* Clear the action bar rather than letting it cover the last field. */
   .editor-scroll {
-    /* Clears the docked pill plus the action bar that can sit above it. */
+    /* Clears the action bar and the FAB below it. */
     padding-bottom: calc(
       var(--target-min) * 2 + var(--space-6) + env(safe-area-inset-bottom)
     );

@@ -13,6 +13,7 @@ export class EditorToolbar {
     this._actions = actions || []
     this._el = null
     this._unread = 0
+    this._expanded = false
   }
 
   mount() {
@@ -44,6 +45,15 @@ export class EditorToolbar {
 
     document.body.appendChild(this._el)
     this._render()
+
+    // Tapping anywhere else closes the expanded menu — the × alone leaves a
+    // menu that only closes by hitting a small target.
+    document.addEventListener('click', (e) => {
+      if (this._expanded && !this._el.contains(e.target)) {
+        this.collapse()
+        this._render()
+      }
+    })
     this._restoreGeometry()
     this._wireUnreadListener()
   }
@@ -52,9 +62,43 @@ export class EditorToolbar {
     this._render()
   }
 
+  /** Collapse the expanded FAB. No-op where the pill is a docked bar. */
+  collapse() {
+    this._expanded = false
+    this._el?.classList.remove('is-expanded')
+  }
+
+  _buildFabToggle() {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'cms-toolbar__fab'
+    btn.setAttribute('aria-label', this._expanded ? 'Close actions' : 'Open actions')
+    btn.textContent = this._expanded ? '\u00d7' : '\u22ee'
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      this._expanded = !this._expanded
+      this._el.classList.toggle('is-expanded', this._expanded)
+      this._render()
+    })
+
+    if (this._unread > 0 && !this._expanded) {
+      const dot = document.createElement('span')
+      dot.className = 'cms-toolbar__fab-dot'
+      btn.appendChild(dot)
+    }
+
+    return btn
+  }
+
   _render() {
     if (!this._el) return
     this._el.innerHTML = ''
+
+    // On a phone this is a FAB: one button that opens the actions, rather than
+    // a strip holding a row of the screen permanently. The stylesheet decides
+    // which shape applies; the toggle is inert when it is not rendered.
+    this._el.appendChild(this._buildFabToggle())
 
     this._el.appendChild(this._buildChangesetSegment())
 
@@ -171,6 +215,7 @@ export class EditorToolbar {
     })
     seg.addEventListener('click', (e) => {
       e.stopPropagation()
+      this.collapse()
       this._changesetPanel?.toggle()
     })
 
@@ -218,6 +263,7 @@ export class EditorToolbar {
     seg.addEventListener('click', (e) => {
       e.stopPropagation()
       this._unread = 0
+      this.collapse()
       this._chatPanel?.toggle()
       this._render()
     })
