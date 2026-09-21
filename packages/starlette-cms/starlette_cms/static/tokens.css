@@ -11,11 +11,25 @@
 
    Served at {cms_mount}/static/tokens.css.
 
-   These values are extracted verbatim from editor.css as it stood, so
-   adopting this file changes nothing about how the editor looks. Picking a
-   palette that suits the surfaces as a set is a separate decision (ED-3B);
-   doing it here first would have meant redesigning four surfaces inside a
-   refactor.
+   Two rules carry this palette (ED-3B):
+
+   1. Chrome is greyscale. Focus rings, primary buttons, active navigation and
+      selected rows carry no hue. A decorative accent tells the reader nothing,
+      and spends the one thing that could.
+
+   2. Saturated colour means something needs you. --pending is the only hue in
+      the set, reserved for unpublished state and destructive actions. So any
+      colour on screen answers "is there anything outstanding?" at a glance,
+      and an admin with nothing pending is entirely greyscale.
+
+   Transient feedback (toasts) keeps its success/error hues. Those are not
+   chrome — they appear, say what happened, and leave. Stripping them would
+   cost legibility and buy no discipline.
+
+   Surfaces are dark by default. Mediakit opts into a light ramp with
+   data-astraeus-theme="light", because media is judged against its ground:
+   a dark one makes light images glow and dark images disappear. Everything
+   except the surface and text ramp is shared.
    ============================================================ */
 
 :root {
@@ -24,31 +38,37 @@
   --bg-surface:     #141414;
   --bg-elevated:    #1a1a1a;
   --bg-hover:       #202020;
-  --bg-selected:    #1e2535;
+  --bg-selected:    #1f1f1f;
   --bg-input:       #161616;
 
   /* Borders */
   --border-subtle:  #222222;
   --border-default: #2a2a2a;
   --border-strong:  #383838;
-  --border-focus:   #4c6ef5;
+  --border-focus:   #9a9a9a;
 
   /* Text */
   --text-primary:   #e8e8e8;
   --text-secondary: #8a8a8a;
   --text-muted:     #555555;
-  --text-link:      #6e9ef7;
+  --text-link:      #e8e8e8;
 
-  /* Accent / brand */
-  --accent:         #4c6ef5;
-  --accent-hover:   #5c7cfa;
-  --accent-dim:     rgba(76, 110, 245, 0.15);
+  /* Primary action — greyscale, per rule 1. Named accent because that is the
+     role it fills; it simply no longer carries a hue. */
+  --accent:         #e8e8e8;
+  --accent-hover:   #ffffff;
+  --accent-dim:     rgba(232, 232, 232, 0.12);
+  --accent-on:      #0d0d0d;   /* text on a filled primary button */
 
-  /* Status colours */
+  /* The one hue: unpublished state and destructive actions (rule 2). */
+  --pending:        #c1272d;
+  --pending-dim:    rgba(193, 39, 45, 0.15);
+
+  /* Transient feedback only — toasts. Not chrome. */
   --green:          #2ea043;
   --green-dim:      rgba(46, 160, 67, 0.15);
-  --red:            #da3633;
-  --red-dim:        rgba(218, 54, 51, 0.15);
+  --red:            var(--pending);
+  --red-dim:        var(--pending-dim);
   --yellow:         #d29922;
   --yellow-dim:     rgba(210, 153, 34, 0.15);
 
@@ -87,6 +107,40 @@
   /* Transitions */
   --transition-fast:     100ms ease;
   --transition-base:     150ms ease;
+}
+
+/* ---------- Light surface ramp ----------
+   Opt in with data-astraeus-theme="light" on <html>. Only the surface and text
+   ramp differ; spacing, type, radius, targets, transitions and --pending are
+   shared, so a light surface stays part of the same system.
+
+   Mediakit uses this because media is judged against its ground. --pending
+   darkens slightly to hold contrast on a light surface. */
+[data-astraeus-theme="light"] {
+  --bg-base:        #fbfbfa;
+  --bg-surface:     #ffffff;
+  --bg-elevated:    #f4f4f2;
+  --bg-hover:       #eeeeec;
+  --bg-selected:    #e8e8e5;
+  --bg-input:       #ffffff;
+
+  --border-subtle:  #e6e6e2;
+  --border-default: #d8d8d3;
+  --border-strong:  #bfbfb9;
+  --border-focus:   #57575a;
+
+  --text-primary:   #1c1c1a;
+  --text-secondary: #6a6a65;
+  --text-muted:     #9a9a94;
+  --text-link:      #1c1c1a;
+
+  --accent:         #1c1c1a;
+  --accent-hover:   #000000;
+  --accent-dim:     rgba(28, 28, 26, 0.08);
+  --accent-on:      #ffffff;
+
+  --pending:        #a81f25;
+  --pending-dim:    rgba(168, 31, 37, 0.12);
 }
 
 /* A mouse or trackpad can hit a smaller target than a thumb, so density is

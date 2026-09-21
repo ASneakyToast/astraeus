@@ -253,18 +253,18 @@ html, body {
 }
 
 .badge--published {
-  background: var(--green-dim);
-  color: var(--green);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
 }
 
 .badge--draft {
-  background: var(--yellow-dim);
-  color: var(--yellow);
+  background: var(--pending-dim);
+  color: var(--pending);
 }
 
 .badge--pending {
-  background: var(--blue-dim, var(--yellow-dim));
-  color: var(--blue, var(--yellow));
+  background: var(--pending-dim);
+  color: var(--pending);
 }
 
 .badge--danger {
@@ -320,7 +320,7 @@ html, body {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--yellow);
+  background: var(--pending);
   flex-shrink: 0;
   display: none;
 }
@@ -423,7 +423,7 @@ html, body {
 
 .btn--primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-on);
   border-color: var(--accent);
 }
 
@@ -1298,28 +1298,29 @@ details.doc-meta[open] .doc-meta__summary::before {
 }
 
 .changeset-drawer__badge--new {
-  background: var(--green);
-  color: #fff;
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .changeset-drawer__badge--changed {
-  background: var(--accent);
-  color: #fff;
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .changeset-drawer__badge--none {
   background: var(--bg-hover);
-  color: var(--text-secondary);
+  color: var(--text-muted);
 }
 
+/* Staged deletion is destructive, so it keeps the hue. */
 .changeset-drawer__badge--delete {
-  background: var(--red, #f38ba8);
-  color: #fff;
+  background: var(--pending-dim);
+  color: var(--pending);
 }
 
 .changeset-drawer__conflict {
   margin-top: var(--space-1);
-  color: var(--yellow);
+  color: var(--pending);
   font-size: var(--font-size-xs);
 }
 
