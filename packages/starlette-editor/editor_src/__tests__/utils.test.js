@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { humanizeType, humanizeFieldName, docTitle, formatDate, getOrderedFields, getDefaultValue, el } from '../utils.js'
+import { filterDocuments } from '../standard/render.js'
 
 describe('humanizeType', () => {
   it('pluralizes a snake_case type', () => {
@@ -191,5 +192,38 @@ describe('el', () => {
 
     expect(node.className).toBe('btn')
     expect(clicked).toBe(true)
+  })
+})
+
+describe('filterDocuments', () => {
+  const DOCS = [
+    { id: 'a', slug: 'hello-world', body: { title: 'Hello World' } },
+    { id: 'b', slug: 'about-me', body: { title: 'About' } },
+    { id: 'c', slug: 'notes', body: {} },
+  ]
+
+  it('returns everything for an empty filter', () => {
+    expect(filterDocuments(DOCS, '')).toHaveLength(3)
+    expect(filterDocuments(DOCS, '   ')).toHaveLength(3)
+  })
+
+  it('matches on slug', () => {
+    expect(filterDocuments(DOCS, 'about').map(d => d.id)).toEqual(['b'])
+  })
+
+  it('matches on title', () => {
+    expect(filterDocuments(DOCS, 'Hello World').map(d => d.id)).toEqual(['a'])
+  })
+
+  it('ignores case', () => {
+    expect(filterDocuments(DOCS, 'HELLO').map(d => d.id)).toEqual(['a'])
+  })
+
+  it('returns nothing when nothing matches', () => {
+    expect(filterDocuments(DOCS, 'zzz')).toEqual([])
+  })
+
+  it('handles a document with no title', () => {
+    expect(filterDocuments(DOCS, 'notes').map(d => d.id)).toEqual(['c'])
   })
 })

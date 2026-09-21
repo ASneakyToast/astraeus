@@ -27,13 +27,34 @@ export function isDocDrawerOpen() {
 }
 
 export function openDocDrawer() {
+  if (isDocDrawerOpen()) return;
+
   drawer()?.classList.add(OPEN_CLASS);
   backdrop()?.classList.add(OPEN_CLASS);
+
+  // Push a history entry so the device back gesture dismisses the drawer
+  // instead of leaving the site, which is what back means to someone holding
+  // a phone with a panel open over the content.
+  try {
+    history.pushState({ docDrawer: true }, '');
+  } catch { /* history unavailable — the drawer still works */ }
 }
 
-export function closeDocDrawer() {
+/**
+ * @param {boolean} [fromHistory] true when a popstate triggered this, so the
+ *   history entry is already gone and must not be popped again.
+ */
+export function closeDocDrawer(fromHistory = false) {
+  const wasOpen = isDocDrawerOpen();
+
   drawer()?.classList.remove(OPEN_CLASS);
   backdrop()?.classList.remove(OPEN_CLASS);
+
+  if (wasOpen && !fromHistory && history.state?.docDrawer) {
+    try {
+      history.back();
+    } catch { /* history unavailable */ }
+  }
 }
 
 export function toggleDocDrawer() {
@@ -45,7 +66,7 @@ export function toggleDocDrawer() {
 }
 
 /**
- * Close the drawer on Escape.
+ * Close the drawer on Escape or on the device back gesture.
  *
  * Returns an unsubscribe so a test can tear it down; the shell never does,
  * since the drawer lives as long as the page.
@@ -57,6 +78,15 @@ export function wireDocDrawerDismiss() {
     if (e.key === 'Escape' && isDocDrawerOpen()) closeDocDrawer();
   };
 
+  const onPopState = () => {
+    if (isDocDrawerOpen()) closeDocDrawer(true);
+  };
+
   document.addEventListener('keydown', onKeydown);
-  return () => document.removeEventListener('keydown', onKeydown);
+  window.addEventListener('popstate', onPopState);
+
+  return () => {
+    document.removeEventListener('keydown', onKeydown);
+    window.removeEventListener('popstate', onPopState);
+  };
 }

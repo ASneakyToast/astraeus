@@ -20,6 +20,7 @@ import { EditorToolbar } from './standard/editor-toolbar.js'
 import { ChangesetPanel } from './components/changeset-panel.js'
 import { getActiveChangesetId, onActiveChangesetChange } from './changeset-store.js'
 import { closeDocDrawer, toggleDocDrawer, wireDocDrawerDismiss } from './components/doc-drawer.js'
+import { PendingView } from './components/pending-view.js'
 import {
   renderTypeList,
   renderDocList,
@@ -101,7 +102,14 @@ function render() {
   renderDocList(selectDocFromList, openNewDocFromList);
   renderHeader(togglePublish, saveDocument, deleteActiveDoc);
   state.editorToolbar?.update();
-  renderForm(onFieldChange, render);
+
+  const showPending = !state.activeType && !state.activeDocId;
+  const pendingEl = document.getElementById('pending-area');
+  const formEl = document.getElementById('form-area');
+  if (pendingEl) pendingEl.style.display = showPending ? '' : 'none';
+  if (formEl) formEl.style.display = showPending ? 'none' : '';
+
+  if (!showPending) renderForm(onFieldChange, render);
 }
 
 // Wire render into state so setState() can call it
@@ -141,6 +149,14 @@ function buildShell() {
         onclick: openNewDocFromList,
       }, '+')
     ),
+    el('input', {
+      class: 'sidebar-docs__search',
+      id: 'doc-search',
+      type: 'search',
+      placeholder: 'Filter documents',
+      'aria-label': 'Filter documents',
+      oninput: e => setState({ docFilter: e.target.value }),
+    }),
     el('div', { class: 'sidebar-docs__list', id: 'doc-list' },
       el('div', { class: 'sidebar-docs__empty' }, 'Select a type')
     )
@@ -187,6 +203,7 @@ function buildShell() {
       )
     ),
     el('div', { class: 'editor-scroll' },
+      el('div', { id: 'pending-area' }),
       el('div', { id: 'form-area' })
     )
   );
@@ -273,6 +290,19 @@ async function boot() {
   const initialCsId = getActiveChangesetId()
   setState({ changesetPanel, activeChangesetId: initialCsId }, false)
   if (initialCsId) syncActiveChangesetInfo(initialCsId)
+
+  // Pending view — the landing until a type or document is chosen. Publishing
+  // routes through the changeset panel's review step rather than happening here.
+  const pendingView = new PendingView({
+    onOpen: async (docType, docId) => {
+      await selectType(docType)
+      await selectDoc(docId)
+    },
+    onPublish: () => changesetPanel.toggle(),
+  })
+  document.getElementById('pending-area')?.appendChild(pendingView.mount())
+  setState({ pendingView }, false)
+  pendingView.refresh()
 
   // Mount floating toolbar pill
   const editorToolbar = new EditorToolbar({ changesetPanel, chatPanel, actions: cfg.actions || [] })

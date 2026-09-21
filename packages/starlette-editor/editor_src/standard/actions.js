@@ -82,6 +82,7 @@ export async function selectType(typeKey) {
     activeType: typeKey,
     documents: [],
     docsTotal: 0,
+    docFilter: '',
     activeDocId: null,
     activeDoc: null,
     formData: {},

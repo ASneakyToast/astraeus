@@ -4,7 +4,7 @@
  * Tests for components/doc-drawer.js — the document list as a small-screen drawer.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   isDocDrawerOpen,
   openDocDrawer,
@@ -95,5 +95,48 @@ describe('missing shell', () => {
 
     expect(() => openDocDrawer()).not.toThrow()
     expect(isDocDrawerOpen()).toBe(false)
+  })
+})
+
+describe('back gesture', () => {
+  it('pushes a history entry so back dismisses the drawer, not the site', () => {
+    const push = vi.spyOn(history, 'pushState')
+
+    openDocDrawer()
+
+    expect(push).toHaveBeenCalledWith({ docDrawer: true }, '')
+    push.mockRestore()
+  })
+
+  it('does not stack entries when already open', () => {
+    const push = vi.spyOn(history, 'pushState')
+
+    openDocDrawer()
+    openDocDrawer()
+
+    expect(push).toHaveBeenCalledTimes(1)
+    push.mockRestore()
+  })
+
+  it('closes on popstate', () => {
+    const unwire = wireDocDrawerDismiss()
+    openDocDrawer()
+
+    window.dispatchEvent(new PopStateEvent('popstate'))
+
+    expect(isDocDrawerOpen()).toBe(false)
+    unwire()
+  })
+
+  it('does not pop again when the close came from history', () => {
+    const back = vi.spyOn(history, 'back')
+    const unwire = wireDocDrawerDismiss()
+    openDocDrawer()
+
+    window.dispatchEvent(new PopStateEvent('popstate'))
+
+    expect(back).not.toHaveBeenCalled()
+    back.mockRestore()
+    unwire()
   })
 })
