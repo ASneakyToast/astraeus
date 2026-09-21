@@ -33,9 +33,9 @@ const PANEL_STYLES = `
   z-index: 9998;
   width: 360px;
   height: 540px;
-  background: #1e1e2e;
-  color: #cdd6f4;
-  border: 1px solid #313244;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
   border-radius: 12px;
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 13px;
@@ -55,7 +55,7 @@ const MARKDOWN_STYLES = `
   [data-cms-chat-panel] .cms-md ol { margin: 4px 0; padding-left: 20px; }
   [data-cms-chat-panel] .cms-md li { margin: 2px 0; }
   [data-cms-chat-panel] .cms-md pre {
-    background: #181825;
+    background: var(--border-subtle);
     padding: 8px 10px;
     border-radius: 6px;
     overflow-x: auto;
@@ -132,7 +132,7 @@ export class ChatPanel {
     this._el.appendChild(this._messagesEl)
 
     const divider = document.createElement('div')
-    divider.style.cssText = 'height: 1px; background: #313244; flex-shrink: 0;'
+    divider.style.cssText = 'height: 1px; background: var(--border-default); flex-shrink: 0;'
     this._el.appendChild(divider)
 
     this._el.appendChild(this._buildInputArea())
@@ -330,7 +330,7 @@ export class ChatPanel {
       const indicator = document.createElement('div')
       indicator.setAttribute('data-thinking', '')
       indicator.style.cssText = `
-        color: #6c7086;
+        color: var(--text-muted);
         font-style: italic;
         font-size: 12px;
         padding: 4px 0;
@@ -358,16 +358,16 @@ export class ChatPanel {
       bubble.style.cssText = `
         ${BUBBLE_COMMON}
         align-self: flex-end;
-        background: #89b4fa;
-        color: #1e1e2e;
+        background: var(--text-secondary);
+        color: var(--bg-elevated);
         border-radius: 12px 12px 2px 12px;
       `
     } else {
       bubble.style.cssText = `
         ${BUBBLE_COMMON}
         align-self: flex-start;
-        background: #313244;
-        color: #cdd6f4;
+        background: var(--border-default);
+        color: var(--text-primary);
         border-radius: 2px 12px 12px 12px;
       `
     }
@@ -385,8 +385,8 @@ export class ChatPanel {
     bubble.style.cssText = `
       ${BUBBLE_COMMON}
       align-self: flex-start;
-      background: #313244;
-      color: #cdd6f4;
+      background: var(--border-default);
+      color: var(--text-primary);
       border-radius: 2px 12px 12px 12px;
     `
     // Raw markdown buffer — re-rendered to innerHTML on each token.
@@ -420,9 +420,9 @@ export class ChatPanel {
     const chip = document.createElement('div')
     chip.style.cssText = `
       align-self: flex-start;
-      background: #1e1e2e;
-      border: 1px solid #45475a;
-      color: #89b4fa;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      color: var(--text-secondary);
       padding: 6px 10px;
       border-radius: 8px;
       font-size: 12px;
@@ -450,7 +450,7 @@ export class ChatPanel {
   _updateToolChip(tool, summary) {
     const chip = this._activeToolChips[tool]
     if (!chip) return
-    chip.style.color = '#a6e3a1'
+    chip.style.color = 'var(--accent)'
     chip.textContent = summary ? `✓ ${tool} — ${summary}` : `✓ ${tool}`
     delete this._activeToolChips[tool]
   }
@@ -464,9 +464,9 @@ export class ChatPanel {
     const notice = document.createElement('div')
     notice.style.cssText = `
       align-self: stretch;
-      background: #1e1e2e;
-      border: 1px solid #89b4fa;
-      color: #89b4fa;
+      background: var(--bg-elevated);
+      border: 1px solid var(--text-secondary);
+      color: var(--text-secondary);
       padding: 8px 12px;
       border-radius: 8px;
       font-size: 12px;
@@ -513,7 +513,7 @@ export class ChatPanel {
     const header = document.createElement('div')
     header.style.cssText = `
       padding: 12px 14px 10px;
-      border-bottom: 1px solid #313244;
+      border-bottom: 1px solid var(--border-default);
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -523,11 +523,11 @@ export class ChatPanel {
     `
 
     const title = document.createElement('span')
-    title.style.cssText = 'font-weight: 700; color: #cdd6f4;'
+    title.style.cssText = 'font-weight: 700; color: var(--text-primary);'
     title.textContent = '💬 Chat'
 
     const closeBtn = document.createElement('button')
-    closeBtn.style.cssText = `${BTN_BASE} background: transparent; color: #6c7086; font-size: 16px; padding: 0 4px;`
+    closeBtn.style.cssText = `${BTN_BASE} background: transparent; color: var(--text-muted); font-size: 16px; padding: 0 4px;`
     closeBtn.textContent = '×'
     closeBtn.addEventListener('click', () => this.toggle())
 
@@ -594,7 +594,7 @@ export class ChatPanel {
       height: 16px;
       cursor: nwse-resize;
       background:
-        linear-gradient(135deg, transparent 50%, #45475a 50%, #45475a 60%, transparent 60%, transparent 70%, #45475a 70%, #45475a 80%, transparent 80%);
+        linear-gradient(135deg, transparent 50%, var(--border-strong) 50%, var(--border-strong) 60%, transparent 60%, transparent 70%, var(--border-strong) 70%, var(--border-strong) 80%, transparent 80%);
     `
     handle.addEventListener('mousedown', (e) => this._startResize(e))
     return handle
@@ -713,9 +713,9 @@ export class ChatPanel {
     this._inputEl.rows = 1
     this._inputEl.style.cssText = `
       flex: 1;
-      background: #313244;
-      color: #cdd6f4;
-      border: 1px solid #45475a;
+      background: var(--border-default);
+      color: var(--text-primary);
+      border: 1px solid var(--border-strong);
       border-radius: 8px;
       padding: 8px 10px;
       font-size: 13px;
@@ -745,8 +745,8 @@ export class ChatPanel {
     this._sendBtn.textContent = 'Send'
     this._sendBtn.style.cssText = `
       ${BTN_BASE}
-      background: #89b4fa;
-      color: #1e1e2e;
+      background: var(--text-secondary);
+      color: var(--bg-elevated);
       padding: 8px 14px;
       font-weight: 600;
     `

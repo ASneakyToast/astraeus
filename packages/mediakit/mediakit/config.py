@@ -29,6 +29,13 @@ class MediakitConfig(BaseModel):
     api_key: str | None = None
     auth: Any | None = None  # callable (request) -> bool, or None
 
+    # Admin UI
+    # URL of the shared Astraeus design tokens, e.g. "/cms/static/tokens.css".
+    # A URL, not an import — mediakit keeps no dependency on the CMS packages.
+    # Unset means the admin uses its own built-in values, which is the right
+    # default for a standalone mediakit deployment.
+    tokens_url: str | None = None
+
     # Serving
     public_read: bool = False
     presign_expires: int = 3600  # 1 hour

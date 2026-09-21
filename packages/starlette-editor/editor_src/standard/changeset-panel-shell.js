@@ -41,9 +41,9 @@ const PANEL_STYLES = `
   z-index: 9998;
   width: 340px;
   height: 420px;
-  background: #1e1e2e;
-  color: #cdd6f4;
-  border: 1px solid #313244;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
   border-radius: 12px;
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 13px;
@@ -58,14 +58,14 @@ const SECTION_HEADING = `
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #89b4fa;
+  color: var(--text-secondary);
   padding: 8px 14px 4px;
   margin: 0;
 `;
 
 const ITEM = `
   padding: 6px 14px;
-  border-bottom: 1px solid #181825;
+  border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -82,7 +82,7 @@ const BTN = `
 `;
 
 const SELECT_STYLE = `
-  background: #313244; color: #cdd6f4; border: 1px solid #45475a;
+  background: var(--border-default); color: var(--text-primary); border: 1px solid var(--border-strong);
   border-radius: 6px; padding: 3px 6px; font-size: 11px; cursor: pointer;
 `;
 
@@ -210,16 +210,16 @@ export class ShellChangesetPanel {
     const titleBar = document.createElement('div');
     titleBar.style.cssText = `
       padding: 12px 14px 10px;
-      border-bottom: 1px solid #313244;
+      border-bottom: 1px solid var(--border-default);
       display: flex; align-items: center; justify-content: space-between;
       cursor: grab; user-select: none;
     `;
     const title = document.createElement('span');
-    title.style.cssText = 'font-weight: 700; color: #cdd6f4;';
+    title.style.cssText = 'font-weight: 700; color: var(--text-primary);';
     title.textContent = '\u{1F4CB} Changesets';
 
     const closeBtn = document.createElement('button');
-    closeBtn.style.cssText = `${BTN} background: transparent; color: #6c7086; font-size: 16px; padding: 0 4px;`;
+    closeBtn.style.cssText = `${BTN} background: transparent; color: var(--text-muted); font-size: 16px; padding: 0 4px;`;
     closeBtn.textContent = '×';
     closeBtn.addEventListener('click', () => this.toggle());
 
@@ -243,18 +243,18 @@ export class ShellChangesetPanel {
         padding: 8px 14px;
         display: flex; align-items: center; gap: 8px;
         cursor: pointer;
-        border-bottom: 1px solid #181825;
-        ${isActive ? 'background: #181825;' : ''}
+        border-bottom: 1px solid var(--border-subtle);
+        ${isActive ? 'background: var(--border-subtle);' : ''}
       `;
 
       const caret = document.createElement('span');
-      caret.style.cssText = 'font-size: 10px; color: #6c7086; width: 12px; flex-shrink: 0; user-select: none;';
+      caret.style.cssText = 'font-size: 10px; color: var(--text-muted); width: 12px; flex-shrink: 0; user-select: none;';
       caret.textContent = isExpanded ? '▾' : '▸';
 
       const label = document.createElement('span');
       label.style.cssText = `
         flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        color: ${isActive ? '#a6e3a1' : '#cdd6f4'};
+        color: ${isActive ? 'var(--accent)' : 'var(--text-primary)'};
       `;
       const activeMark = isActive ? ' (active)' : '';
       label.textContent = `${cs.title || 'Untitled'}${activeMark} — ${docs.length} change${docs.length !== 1 ? 's' : ''}`;
@@ -279,7 +279,7 @@ export class ShellChangesetPanel {
       actions.style.cssText = 'display: flex; gap: 4px; flex-shrink: 0; align-items: center;';
 
       const publishBtn = document.createElement('button');
-      publishBtn.style.cssText = `${BTN} background: #a6e3a1; color: #1e1e2e; padding: 3px 8px; font-size: 11px;`;
+      publishBtn.style.cssText = `${BTN} background: var(--accent); color: var(--accent-on); padding: 3px 8px; font-size: 11px;`;
       publishBtn.textContent = 'Publish';
       publishBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -287,7 +287,7 @@ export class ShellChangesetPanel {
       });
 
       const menuBtn = document.createElement('button');
-      menuBtn.style.cssText = `${BTN} background: #313244; color: #cdd6f4; padding: 3px 6px; font-size: 13px; position: relative;`;
+      menuBtn.style.cssText = `${BTN} background: var(--border-default); color: var(--text-primary); padding: 3px 6px; font-size: 13px; position: relative;`;
       menuBtn.textContent = '⋮';
       menuBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -306,13 +306,13 @@ export class ShellChangesetPanel {
       if (this.openMenuId === cs.id) {
         const menu = document.createElement('div');
         menu.style.cssText = `
-          background: #313244; border: 1px solid #45475a; border-radius: 8px;
+          background: var(--border-default); border: 1px solid var(--border-strong); border-radius: 8px;
           padding: 4px 0; margin: 0 14px 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
         `;
 
         const menuItemStyle = `
           display: block; width: 100%; text-align: left; padding: 6px 12px;
-          background: none; border: none; color: #cdd6f4; font-size: 12px;
+          background: none; border: none; color: var(--text-primary); font-size: 12px;
           cursor: pointer; font-family: system-ui, -apple-system, sans-serif;
         `;
 
@@ -366,7 +366,7 @@ export class ShellChangesetPanel {
         menu.appendChild(scheduleItem);
 
         const deleteItem = document.createElement('button');
-        deleteItem.style.cssText = `${menuItemStyle} color: #f38ba8;`;
+        deleteItem.style.cssText = `${menuItemStyle} color: var(--pending);`;
         deleteItem.textContent = 'Delete';
         deleteItem.addEventListener('click', () => {
           this.openMenuId = null;
@@ -385,10 +385,10 @@ export class ShellChangesetPanel {
           const row = document.createElement('div');
           row.style.cssText = `
             padding: 5px 14px 5px 34px;
-            border-bottom: 1px solid #181825;
+            border-bottom: 1px solid var(--border-subtle);
             font-size: 12px;
             cursor: pointer;
-            ${isSelected ? 'background: #313244;' : ''}
+            ${isSelected ? 'background: var(--border-default);' : ''}
           `;
 
           // Top line — label, always visible
@@ -396,7 +396,7 @@ export class ShellChangesetPanel {
           topLine.style.cssText = 'display: flex; align-items: center; gap: 6px;';
 
           const docLabel = document.createElement('span');
-          docLabel.style.cssText = 'flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #bac2de;';
+          docLabel.style.cssText = 'flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary);';
           const conflict = (doc.also_in && doc.also_in.length > 0) ? '⚠ ' : '';
           docLabel.textContent = `${conflict}${doc.doc_type}: ${doc.slug || '(no slug)'}`;
           docLabel.title = doc.also_in?.length
@@ -463,7 +463,7 @@ export class ShellChangesetPanel {
 
             // Go to button
             const goToBtn = document.createElement('button');
-            goToBtn.style.cssText = `${BTN} background: none; color: #a6e3a1; padding: 2px 6px; font-size: 11px;`;
+            goToBtn.style.cssText = `${BTN} background: none; color: var(--accent); padding: 2px 6px; font-size: 11px;`;
             goToBtn.textContent = 'Go to';
             goToBtn.addEventListener('click', (e) => {
               e.stopPropagation();
@@ -472,7 +472,7 @@ export class ShellChangesetPanel {
 
             // View changes button
             const viewBtn = document.createElement('button');
-            viewBtn.style.cssText = `${BTN} background: none; color: #89b4fa; padding: 2px 6px; font-size: 11px;`;
+            viewBtn.style.cssText = `${BTN} background: none; color: var(--text-secondary); padding: 2px 6px; font-size: 11px;`;
             viewBtn.textContent = 'View changes';
             viewBtn.addEventListener('click', (e) => {
               e.stopPropagation();
@@ -481,7 +481,7 @@ export class ShellChangesetPanel {
 
             // Remove button
             const removeBtn = document.createElement('button');
-            removeBtn.style.cssText = `${BTN} background: none; color: #f38ba8; padding: 2px 6px; font-size: 11px;`;
+            removeBtn.style.cssText = `${BTN} background: none; color: var(--pending); padding: 2px 6px; font-size: 11px;`;
             removeBtn.textContent = 'Remove';
             removeBtn.addEventListener('click', (e) => {
               e.stopPropagation();
@@ -500,7 +500,7 @@ export class ShellChangesetPanel {
         });
       } else if (isExpanded && docs.length === 0) {
         const emptyRow = document.createElement('div');
-        emptyRow.style.cssText = 'padding: 5px 14px 5px 34px; color: #6c7086; font-size: 12px; border-bottom: 1px solid #181825;';
+        emptyRow.style.cssText = 'padding: 5px 14px 5px 34px; color: var(--text-muted); font-size: 12px; border-bottom: 1px solid var(--border-subtle);';
         emptyRow.textContent = 'No documents';
         this._scrollContainer.appendChild(emptyRow);
       }
@@ -510,7 +510,7 @@ export class ShellChangesetPanel {
     const newBtnWrap = document.createElement('div');
     newBtnWrap.style.cssText = 'padding: 6px 14px;';
     const newBtn = document.createElement('button');
-    newBtn.style.cssText = `${BTN} background: #313244; color: #cdd6f4; width: 100%; text-align: left;`;
+    newBtn.style.cssText = `${BTN} background: var(--border-default); color: var(--text-primary); width: 100%; text-align: left;`;
     newBtn.textContent = '+ New changeset';
     newBtn.addEventListener('click', () => this._promptAndCreate(null));
     newBtnWrap.appendChild(newBtn);
@@ -520,7 +520,7 @@ export class ShellChangesetPanel {
     const orphans = this._computeOrphans();
 
     const divider = document.createElement('div');
-    divider.style.cssText = 'border-top: 1px solid #313244; margin: 4px 0 0;';
+    divider.style.cssText = 'border-top: 1px solid var(--border-default); margin: 4px 0 0;';
     this._scrollContainer.appendChild(divider);
 
     const orphanHeading = document.createElement('p');
@@ -530,7 +530,7 @@ export class ShellChangesetPanel {
 
     if (orphans.length === 0) {
       const empty = document.createElement('div');
-      empty.style.cssText = 'padding: 4px 14px 10px; color: #6c7086; font-size: 12px;';
+      empty.style.cssText = 'padding: 4px 14px 10px; color: var(--text-muted); font-size: 12px;';
       empty.textContent = 'No orphaned drafts';
       this._scrollContainer.appendChild(empty);
     } else {
@@ -540,17 +540,17 @@ export class ShellChangesetPanel {
         const row = document.createElement('div');
         row.style.cssText = `
           padding: 5px 14px 5px 28px;
-          border-bottom: 1px solid #181825;
+          border-bottom: 1px solid var(--border-subtle);
           font-size: 12px;
           cursor: pointer;
-          ${isSelected ? 'background: #313244;' : ''}
+          ${isSelected ? 'background: var(--border-default);' : ''}
         `;
 
         const topLine = document.createElement('div');
         topLine.style.cssText = 'display: flex; align-items: center; gap: 6px;';
 
         const docLabel = document.createElement('span');
-        docLabel.style.cssText = `flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #bac2de;${doc.draft_deleted ? ' opacity: 0.5; text-decoration: line-through;' : ''}`;
+        docLabel.style.cssText = `flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary);${doc.draft_deleted ? ' opacity: 0.5; text-decoration: line-through;' : ''}`;
         docLabel.textContent = `${doc.doc_type}: ${doc.slug || '(no slug)'}`;
         docLabel.title = `${doc.doc_type}: ${doc.slug}`;
 
@@ -558,7 +558,7 @@ export class ShellChangesetPanel {
 
         if (doc.draft_deleted) {
           const delBadge = document.createElement('span');
-          delBadge.style.cssText = 'font-size: 10px; padding: 1px 5px; border-radius: 4px; background: rgba(218,54,51,0.15); color: #da3633; font-weight: 500; flex-shrink: 0;';
+          delBadge.style.cssText = 'font-size: 10px; padding: 1px 5px; border-radius: 4px; background: rgba(218,54,51,0.15); color: var(--pending); font-weight: 500; flex-shrink: 0;';
           delBadge.textContent = 'Will delete';
           topLine.appendChild(delBadge);
         }
@@ -612,7 +612,7 @@ export class ShellChangesetPanel {
 
           // Discard draft button
           const discardBtn = document.createElement('button');
-          discardBtn.style.cssText = `${BTN} background: none; color: #fab387; padding: 2px 6px; font-size: 11px;`;
+          discardBtn.style.cssText = `${BTN} background: none; color: var(--pending); padding: 2px 6px; font-size: 11px;`;
           discardBtn.textContent = 'Discard';
           discardBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -621,7 +621,7 @@ export class ShellChangesetPanel {
 
           // Delete document button (staged toggle)
           const deleteBtn = document.createElement('button');
-          deleteBtn.style.cssText = `${BTN} background: none; color: ${doc.draft_deleted ? '#a6e3a1' : '#f38ba8'}; padding: 2px 6px; font-size: 11px;`;
+          deleteBtn.style.cssText = `${BTN} background: none; color: ${doc.draft_deleted ? 'var(--accent)' : 'var(--pending)'}; padding: 2px 6px; font-size: 11px;`;
           deleteBtn.textContent = doc.draft_deleted ? 'Cancel delete' : 'Delete';
           deleteBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -630,7 +630,7 @@ export class ShellChangesetPanel {
 
           // Go to button
           const goToBtn = document.createElement('button');
-          goToBtn.style.cssText = `${BTN} background: none; color: #a6e3a1; padding: 2px 6px; font-size: 11px;`;
+          goToBtn.style.cssText = `${BTN} background: none; color: var(--accent); padding: 2px 6px; font-size: 11px;`;
           goToBtn.textContent = 'Go to';
           goToBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -651,10 +651,10 @@ export class ShellChangesetPanel {
     // Footer: Clear active
     if (activeId) {
       const footer = document.createElement('div');
-      footer.style.cssText = 'padding: 8px 14px; border-top: 1px solid #313244;';
+      footer.style.cssText = 'padding: 8px 14px; border-top: 1px solid var(--border-default);';
 
       const clearBtn = document.createElement('button');
-      clearBtn.style.cssText = `${BTN} background: #313244; color: #6c7086; width: 100%; text-align: center;`;
+      clearBtn.style.cssText = `${BTN} background: var(--border-default); color: var(--text-muted); width: 100%; text-align: center;`;
       clearBtn.textContent = 'Clear active';
       clearBtn.addEventListener('click', () => {
         setActiveChangesetId(null);
@@ -705,7 +705,7 @@ export class ShellChangesetPanel {
     handle.style.cssText = `
       position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
       cursor: nwse-resize;
-      background: linear-gradient(135deg, transparent 50%, #45475a 50%, #45475a 60%, transparent 60%, transparent 70%, #45475a 70%, #45475a 80%, transparent 80%);
+      background: linear-gradient(135deg, transparent 50%, var(--border-strong) 50%, var(--border-strong) 60%, transparent 60%, transparent 70%, var(--border-strong) 70%, var(--border-strong) 80%, transparent 80%);
     `;
     handle.addEventListener('mousedown', (e) => this._startResize(e));
     return handle;
@@ -816,7 +816,7 @@ export class ShellChangesetPanel {
     diffWrap.style.cssText = 'padding-top: 6px; font-size: 11px;';
 
     const loading = document.createElement('span');
-    loading.style.cssText = 'color: #6c7086;';
+    loading.style.cssText = 'color: var(--text-muted);';
     loading.textContent = 'Loading…';
     diffWrap.appendChild(loading);
     rowEl.appendChild(diffWrap);
@@ -828,7 +828,7 @@ export class ShellChangesetPanel {
       diffWrap.innerHTML = '';
 
       if (!docDiff) {
-        diffWrap.style.color = '#6c7086';
+        diffWrap.style.color = 'var(--text-muted)';
         diffWrap.textContent = 'No diff data found';
         return;
       }
@@ -837,13 +837,13 @@ export class ShellChangesetPanel {
       const badge = document.createElement('span');
       badge.style.cssText = 'display: inline-block; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 600; margin-bottom: 4px;';
       if (docDiff.is_new) {
-        badge.style.cssText += 'background: #a6e3a1; color: #1e1e2e;';
+        badge.style.cssText += 'background: var(--accent); color: var(--accent-on);';
         badge.textContent = 'NEW';
       } else if (docDiff.has_changes) {
-        badge.style.cssText += 'background: #313244; color: #cdd6f4;';
+        badge.style.cssText += 'background: var(--border-default); color: var(--text-primary);';
         badge.textContent = `+${docDiff.additions} −${docDiff.deletions}`;
       } else {
-        badge.style.cssText += 'background: #313244; color: #6c7086;';
+        badge.style.cssText += 'background: var(--border-default); color: var(--text-muted);';
         badge.textContent = 'No changes';
       }
       diffWrap.appendChild(badge);
@@ -852,7 +852,7 @@ export class ShellChangesetPanel {
       if (docDiff.has_changes && docDiff.diff) {
         const pre = document.createElement('pre');
         pre.style.cssText = `
-          background: #11111b; color: #cdd6f4; border-radius: 6px;
+          background: var(--bg-base); color: var(--text-primary); border-radius: 6px;
           padding: 8px; margin: 4px 0 0; overflow-x: auto;
           font-size: 11px; line-height: 1.4; white-space: pre-wrap;
           max-height: 200px; overflow-y: auto;
@@ -862,13 +862,13 @@ export class ShellChangesetPanel {
           const span = document.createElement('span');
           span.style.display = 'block';
           if (line.startsWith('+') && !line.startsWith('+++')) {
-            span.style.color = '#a6e3a1';
+            span.style.color = 'var(--accent)';
           } else if (line.startsWith('-') && !line.startsWith('---')) {
-            span.style.color = '#f38ba8';
+            span.style.color = 'var(--pending)';
           } else if (line.startsWith('@@')) {
-            span.style.color = '#89b4fa';
+            span.style.color = 'var(--text-secondary)';
           } else {
-            span.style.color = '#6c7086';
+            span.style.color = 'var(--text-muted)';
           }
           span.textContent = line;
           pre.appendChild(span);
@@ -879,14 +879,14 @@ export class ShellChangesetPanel {
       // Conflict warning
       if (docDiff.also_in?.length) {
         const warn = document.createElement('div');
-        warn.style.cssText = 'color: #fab387; font-size: 11px; padding-top: 4px;';
+        warn.style.cssText = 'color: var(--pending); font-size: 11px; padding-top: 4px;';
         const names = docDiff.also_in.map(c => `"${c.title || 'Untitled'}"`).join(', ');
         warn.textContent = `⚠ Also in: ${names}`;
         diffWrap.appendChild(warn);
       }
     } catch (err) {
       diffWrap.innerHTML = '';
-      diffWrap.style.color = '#f38ba8';
+      diffWrap.style.color = 'var(--pending)';
       diffWrap.textContent = `Failed to load diff: ${err.message}`;
     }
   }
@@ -1156,12 +1156,12 @@ export class ShellChangesetPanel {
     const input = document.createElement('input');
     input.type = 'datetime-local';
     input.style.cssText = `
-      background: #313244; color: #cdd6f4; border: 1px solid #45475a;
+      background: var(--border-default); color: var(--text-primary); border: 1px solid var(--border-strong);
       border-radius: 6px; padding: 4px 8px; font-size: 12px; flex: 1;
     `;
 
     const confirmBtn = document.createElement('button');
-    confirmBtn.style.cssText = `${BTN} background: #89b4fa; color: #1e1e2e;`;
+    confirmBtn.style.cssText = `${BTN} background: var(--text-secondary); color: var(--accent-on);`;
     confirmBtn.textContent = 'Confirm';
     confirmBtn.addEventListener('click', async () => {
       if (!input.value) return;

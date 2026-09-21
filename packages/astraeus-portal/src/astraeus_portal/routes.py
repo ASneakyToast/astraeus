@@ -143,12 +143,13 @@ def _build_shell_html(portal: Portal) -> str:
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{portal.title}</title>
+  <link rel="stylesheet" href="{portal.cms_base}/static/tokens.css" />
   <style>
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
-      font-family: system-ui, -apple-system, sans-serif;
-      background: #0a0a0a;
-      color: #d4d4d4;
+      font-family: var(--font-sans);
+      background: var(--bg-base);
+      color: var(--text-primary);
       min-height: 100vh;
       display: flex;
       flex-direction: column;
@@ -172,12 +173,12 @@ def _build_shell_html(portal: Portal) -> str:
     .header-title {{
       font-size: 1.65rem;
       font-weight: 700;
-      color: #ffffff;
+      color: var(--text-primary);
       letter-spacing: -0.02em;
     }}
     .header-title-sub {{
       font-size: 0.85rem;
-      color: #6b7280;
+      color: var(--text-secondary);
       font-weight: 400;
       margin-left: 0.5rem;
     }}
@@ -187,13 +188,13 @@ def _build_shell_html(portal: Portal) -> str:
     }}
     .header-link {{
       font-size: 0.85rem;
-      color: #9ca3af;
+      color: var(--text-secondary);
       transition: color 0.15s;
     }}
-    .header-link:hover {{ color: #60a5fa; }}
+    .header-link:hover {{ color: var(--text-primary); }}
     .header-subtitle {{
       font-size: 0.95rem;
-      color: #6b7280;
+      color: var(--text-secondary);
       margin-top: 0.35rem;
       max-width: 500px;
     }}
@@ -215,16 +216,16 @@ def _build_shell_html(portal: Portal) -> str:
       display: flex;
       align-items: center;
       gap: 0.85rem;
-      background: #141414;
-      border: 1px solid #1f1f1f;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
       border-radius: 10px;
       padding: 1.15rem 1.15rem 1.15rem 1rem;
       transition: background 0.15s, border-color 0.15s, transform 0.1s;
       cursor: pointer;
     }}
     .card:hover {{
-      background: #1a1a1a;
-      border-color: #2a2a2a;
+      background: var(--bg-hover);
+      border-color: var(--border-strong);
       transform: translateY(-1px);
     }}
     .card-icon {{
@@ -240,12 +241,12 @@ def _build_shell_html(portal: Portal) -> str:
     .card-title {{
       font-size: 1rem;
       font-weight: 600;
-      color: #e4e4e4;
+      color: var(--text-primary);
       margin-bottom: 0.2rem;
     }}
     .card-desc {{
       font-size: 0.82rem;
-      color: #6b7280;
+      color: var(--text-secondary);
       line-height: 1.35;
       display: -webkit-box;
       -webkit-line-clamp: 2;
@@ -260,20 +261,20 @@ def _build_shell_html(portal: Portal) -> str:
     }}
     .tag {{
       font-size: 0.7rem;
-      background: #1d4ed8;
-      color: #bfdbfe;
+      background: var(--bg-hover);
+      color: var(--text-secondary);
       padding: 0.1rem 0.5rem;
       border-radius: 3px;
       font-weight: 500;
     }}
     .card-arrow {{
       font-size: 1.1rem;
-      color: #4b5563;
+      color: var(--text-muted);
       transition: color 0.15s, transform 0.15s;
       flex-shrink: 0;
     }}
     .card:hover .card-arrow {{
-      color: #60a5fa;
+      color: var(--text-primary);
       transform: translateX(2px);
     }}
 
@@ -281,7 +282,7 @@ def _build_shell_html(portal: Portal) -> str:
     section h2 {{
       font-size: 1rem;
       font-weight: 600;
-      color: #9ca3af;
+      color: var(--text-secondary);
       margin: 2rem 0 0.75rem;
       text-transform: uppercase;
       letter-spacing: 0.04em;
@@ -294,8 +295,8 @@ def _build_shell_html(portal: Portal) -> str:
       gap: 0.5rem;
     }}
     .pkg-item {{
-      background: #111;
-      border: 1px solid #1a1a1a;
+      background: var(--bg-surface);
+      border: 1px solid var(--bg-hover);
       border-radius: 6px;
       padding: 0.4rem 0.75rem;
       display: flex;
@@ -304,10 +305,10 @@ def _build_shell_html(portal: Portal) -> str:
       font-size: 0.8rem;
     }}
     .pkg-name {{
-      color: #9ca3af;
+      color: var(--text-secondary);
     }}
     .pkg-version {{
-      color: #6b7280;
+      color: var(--text-secondary);
       font-family: "SFMono-Regular", Consolas, monospace;
     }}
 
@@ -317,10 +318,20 @@ def _build_shell_html(portal: Portal) -> str:
       padding: 4rem 1rem;
     }}
     .empty-icon {{ font-size: 2.5rem; margin-bottom: 0.75rem; }}
-    .empty-title {{ font-size: 1.2rem; font-weight: 600; color: #9ca3af; margin-bottom: 0.5rem; }}
-    .empty-desc {{ font-size: 0.9rem; color: #6b7280; max-width: 400px; margin: 0 auto; }}
+    .empty-title {{
+      font-size: 1.2rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 0.5rem;
+    }}
+    .empty-desc {{
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      max-width: 400px;
+      margin: 0 auto;
+    }}
     .empty-desc code {{
-      background: #1a1a1a; padding: 0.1rem 0.35rem;
+      background: var(--bg-hover); padding: 0.1rem 0.35rem;
       border-radius: 3px; font-size: 0.82rem;
     }}
 
@@ -329,14 +340,14 @@ def _build_shell_html(portal: Portal) -> str:
       padding: 1.5rem 2rem;
       text-align: center;
       font-size: 0.78rem;
-      color: #4b5563;
+      color: var(--text-muted);
     }}
     .footer-link {{
-      color: #6b7280;
+      color: var(--text-secondary);
       transition: color 0.15s;
     }}
-    .footer-link:hover {{ color: #60a5fa; }}
-    .footer-version {{ color: #4b5563; }}
+    .footer-link:hover {{ color: var(--text-primary); }}
+    .footer-version {{ color: var(--text-muted); }}
 
     /* ── Responsive ───────────────────────────────── */
     @media (max-width: 640px) {{

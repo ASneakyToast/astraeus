@@ -100,6 +100,7 @@ def compose_app(
         github_url=github_url,
         auth=portal_auth,
         show_package_info=True,
+        cms_base=cms_mount,
     )
 
     # 3. Build router mounts

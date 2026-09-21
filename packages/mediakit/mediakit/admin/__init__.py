@@ -48,6 +48,8 @@ def make_admin_routes(mk: MediaKit) -> list[Route | Mount]:
         loader=PackageLoader("mediakit.admin", "templates"),
         autoescape=select_autoescape(["html"]),
     )
+    # Available to every template without threading it through each render().
+    env.globals["tokens_url"] = mk.config.tokens_url
 
     # ------------------------------------------------------------------
     # Helper: build a 256px square IIIF thumbnail URL for a given key

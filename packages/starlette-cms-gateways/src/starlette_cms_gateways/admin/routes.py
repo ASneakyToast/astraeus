@@ -70,65 +70,87 @@ def make_admin_routes(admin: GatewayAdmin) -> list:
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Gateway Admin</title>
+  <link rel="stylesheet" href="{cms_base}/static/tokens.css" />
   <style>
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
-      font-family: system-ui, -apple-system, sans-serif;
-      background: #0f0f0f;
-      color: #e0e0e0;
-      padding: 2rem;
+      font-family: var(--font-sans);
+      background: var(--bg-base);
+      color: var(--text-primary);
+      padding: var(--space-8);
       line-height: 1.5;
     }}
-    h1 {{ font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; color: #fff; }}
-    h2 {{ font-size: 1.1rem; font-weight: 600; margin-bottom: 0.75rem; color: #ccc; }}
-    #gateways {{ display: grid; gap: 1rem; }}
+    h1 {{
+      font-size: var(--font-size-xl);
+      font-weight: 600;
+      margin-bottom: var(--space-6);
+      color: var(--text-primary);
+    }}
+    h2 {{
+      font-size: var(--font-size-lg);
+      font-weight: 600;
+      margin-bottom: var(--space-3);
+      color: var(--text-secondary);
+    }}
+    #gateways {{ display: grid; gap: var(--space-4); }}
     .gateway-card {{
-      background: #1a1a1a;
-      border: 1px solid #2a2a2a;
-      border-radius: 8px;
-      padding: 1.25rem;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-lg);
+      padding: var(--space-5);
     }}
     .gateway-name {{
-      font-size: 1rem;
+      font-size: var(--font-size-lg);
       font-weight: 600;
-      color: #7dd3fc;
-      margin-bottom: 0.4rem;
+      color: var(--text-primary);
+      margin-bottom: var(--space-1);
     }}
     .gateway-meta {{
-      font-size: 0.8rem;
-      color: #888;
-      margin-bottom: 0.5rem;
+      font-size: var(--font-size-sm);
+      color: var(--text-secondary);
+      margin-bottom: var(--space-2);
     }}
-    .gateway-meta span {{ margin-right: 1rem; }}
-    .last-synced {{ font-size: 0.78rem; color: #6b7280; margin-bottom: 0.75rem; }}
+    .gateway-meta span {{ margin-right: var(--space-4); }}
+    .last-synced {{
+      font-size: var(--font-size-sm);
+      color: var(--text-muted);
+      margin-bottom: var(--space-3);
+    }}
     .sync-btn {{
-      background: #1d4ed8;
-      color: #fff;
+      background: var(--accent);
+      color: var(--accent-on);
       border: none;
-      border-radius: 5px;
-      padding: 0.45rem 1rem;
-      font-size: 0.85rem;
+      border-radius: var(--radius-md);
+      min-height: var(--target-min);
+      padding: 0 var(--space-4);
+      font-size: var(--font-size-md);
       cursor: pointer;
-      transition: background 0.15s;
+      transition: background var(--transition-fast);
     }}
-    .sync-btn:hover {{ background: #2563eb; }}
-    .sync-btn:disabled {{ background: #374151; color: #6b7280; cursor: not-allowed; }}
+    .sync-btn:hover {{ background: var(--accent-hover); }}
+    .sync-btn:disabled {{
+      background: var(--bg-hover);
+      color: var(--text-muted);
+      cursor: not-allowed;
+    }}
     .job-status {{
-      margin-top: 0.75rem;
-      font-size: 0.82rem;
+      margin-top: var(--space-3);
+      font-size: var(--font-size-md);
       min-height: 1.2em;
     }}
-    .status-running {{ color: #fbbf24; }}
-    .status-done {{ color: #34d399; }}
-    .status-error {{ color: #f87171; }}
+    /* A sync in flight is work outstanding, so it carries the one hue.
+       A finished sync is the settled state and goes quiet. */
+    .status-running {{ color: var(--pending); }}
+    .status-done {{ color: var(--text-secondary); }}
+    .status-error {{ color: var(--pending); }}
     .result-detail {{
-      margin-top: 0.5rem;
-      font-size: 0.78rem;
-      color: #9ca3af;
-      font-family: monospace;
+      margin-top: var(--space-2);
+      font-size: var(--font-size-sm);
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
     }}
-    #loading {{ color: #888; }}
-    #error-msg {{ color: #f87171; }}
+    #loading {{ color: var(--text-secondary); }}
+    #error-msg {{ color: var(--pending); }}
   </style>
 </head>
 <body>

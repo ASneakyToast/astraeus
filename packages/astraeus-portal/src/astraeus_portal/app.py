@@ -72,6 +72,8 @@ class Portal:
         auth guard is set (defaults to the CMS session-login route).
     :param header_links: Optional dict of ``{label: url}`` shown in the
         navigation header bar.
+    :param cms_base: Mount path of starlette-cms, used to load shared design
+        tokens. Defaults to the site root.
     :param show_package_info: If ``True``, attempt to import and display
         installed package versions (default ``True``).
     """
@@ -87,6 +89,7 @@ class Portal:
         login_path: str = "/api/auth/login",
         header_links: dict[str, str] | None = None,
         show_package_info: bool = True,
+        cms_base: str = "",
     ) -> None:
         self.apps = apps or list(DEFAULT_APPS)
         self.title = title
@@ -96,6 +99,10 @@ class Portal:
         self.login_path = login_path
         self.header_links = header_links or {}
         self.show_package_info = show_package_info
+        # Where starlette-cms is mounted, so the shell can load the shared
+        # design tokens it serves (ADR 020 §4). Empty means the CMS is at the
+        # site root, which is the common single-app deployment.
+        self.cms_base = cms_base.rstrip("/")
         self._app: Starlette | None = None
 
     @property
