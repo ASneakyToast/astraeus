@@ -57,13 +57,29 @@ that finds what reasoning missed.
 
 ### Tasks
 
-**FU-1A: Drive the shell on a real device.** iOS Safari and Android Chrome, on
+**FU-1A: Render it before anyone else has to.**
+
+The first four rounds of FU-1 shipped layout bugs to a phone because there was
+no way to look at the result: `jsdom` and `happy-dom` have no layout engine, so
+274 passing tests said nothing about whether a panel was on screen. A
+transform is just a string to them.
+
+The loop that works: run the CI image locally, drive it with headless Chrome at
+390x844, screenshot each route, and assert that nothing paints outside the
+viewport. Render **both pointer modes** — `--target-min` is 44px under
+`pointer: coarse` and 28px under `pointer: fine`, so a desktop browser narrowed
+to phone width collides where a real device does not, and that difference hid a
+bug through two rounds of "fixed".
+
+Anything geometric is checked this way before it is deployed.
+
+**FU-1B: Drive the shell on a real device.** iOS Safari and Android Chrome, on
 the actual deployed CMS. Walk the triage loop the design assumes: land on
 pending, open a document, fix a typo, publish through review. Then the
 authoring loop the design does *not* optimise for, to see how badly it fails:
 create a document, fill every field type, reorder blocks, attach an image.
 
-**FU-1B: Fix what the pass finds.** Two classes are near-certain and neither is
+**FU-1C: Fix what the pass finds.** Two classes are near-certain and neither is
 visible from the code:
 - **Keyboard occlusion.** The virtual keyboard covers the bottom action bar and
   probably the field being edited. `env(safe-area-inset-bottom)` does not
@@ -72,13 +88,17 @@ visible from the code:
   to the current selection, and whether formatting is reachable at all while the
   keyboard is up.
 
-**FU-1C: Resolve the ProseMirror toolbar overflow.** The open question from
+**FU-1D: Resolve the ProseMirror toolbar overflow.** ✅ Resolved — it scrolls
+horizontally rather than wrapping, which orphaned a separator onto a second row.
+An overflow menu hides formatting behind a tap while the keyboard is up.
+
+**FU-1E (was C):** The open question from
 ADR 022. At 44px targets the button set does not fit 390px. Three candidates —
 horizontal scroll, an overflow menu, or a contextual toolbar that appears on
 selection. This has been explicitly waiting for a device, because it is a
 question about thumbs and keyboards, not about CSS.
 
-**FU-1D: The image picker on a phone.** Tokens made mediakit stop looking like a
+**FU-1F: The image picker on a phone.** Tokens made mediakit stop looking like a
 different product, but it is still an iframe of a separate app inside a modal.
 Judge whether that is usable on a phone or whether it needs the native picker
 (FU-2C).
@@ -172,6 +192,8 @@ information again.
 
 - **Does the pending view become the desktop landing too?** It was built for
   small screens. Decide after using it.
+- **A seventh surface.** The login page — indigo button, ALL-CAPS labels — was
+  never part of ED-3B and is the first thing anyone sees.
 - **Should the built bundles stay in the repo?** `static/editor.js` and
   `static/embed.js` are committed esbuild output and conflicted on every
   parallel branch. Either keep committing them and always resolve by rebuilding,
