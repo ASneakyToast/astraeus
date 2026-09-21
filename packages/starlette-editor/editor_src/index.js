@@ -19,7 +19,13 @@ import { DocumentEventsSubscriber } from './events.js'
 import { EditorToolbar } from './standard/editor-toolbar.js'
 import { ChangesetPanel } from './components/changeset-panel.js'
 import { getActiveChangesetId, onActiveChangesetChange } from './changeset-store.js'
-import { closeDocDrawer, toggleDocDrawer, wireDocDrawerDismiss } from './components/doc-drawer.js'
+import {
+  closeDocDrawer,
+  showDocRoute,
+  showTypeRoute,
+  toggleDocDrawer,
+  wireDocDrawerDismiss,
+} from './components/doc-drawer.js'
 import { PendingView } from './components/pending-view.js'
 import {
   renderTypeList,
@@ -74,6 +80,16 @@ async function syncActiveChangesetInfo(csId) {
 }
 
 /**
+ * Choose a type, then advance to its documents.
+ *
+ * @param {string} typeKey
+ */
+async function selectTypeFromNav(typeKey) {
+  await selectType(typeKey);
+  if (state.activeType === typeKey) showDocRoute();
+}
+
+/**
  * Select a document, then dismiss the drawer if the selection took.
  *
  * Below 640px the list covers the editor, so it has to get out of the way — but
@@ -98,7 +114,7 @@ async function openNewDocFromList() {
  * Top-level render orchestrator — called by setState() on every state change.
  */
 function render() {
-  renderTypeList(selectType);
+  renderTypeList(selectTypeFromNav);
   renderDocList(selectDocFromList, openNewDocFromList);
   renderHeader(togglePublish, saveDocument, deleteActiveDoc);
   state.editorToolbar?.update();
@@ -140,6 +156,13 @@ function buildShell() {
 
   const docSidebar = el('aside', { class: 'sidebar-docs' },
     el('div', { class: 'sidebar-docs__header' },
+      el('button', {
+        class: 'sidebar-docs__back',
+        type: 'button',
+        title: 'Back to types',
+        'aria-label': 'Back to types',
+        onclick: showTypeRoute,
+      }, '\u2039'),
       el('span', { class: 'sidebar-docs__title', id: 'doc-list-title' }, '—'),
       el('button', {
         class: 'sidebar-docs__new-btn',
@@ -169,7 +192,7 @@ function buildShell() {
         type: 'button',
         title: 'Documents',
         'aria-label': 'Show document list',
-        onclick: toggleDocDrawer,
+        onclick: () => toggleDocDrawer(state),
       }, '☰'),
       el('div', { class: 'editor-header__title-wrap' },
         el('h1', { class: 'editor-header__title', id: 'header-title' }, 'CMS Editor'),

@@ -1,7 +1,12 @@
 // @vitest-environment happy-dom
 
 /**
- * Tests for components/doc-drawer.js — the document list as a small-screen drawer.
+ * Tests for components/doc-drawer.js — navigation as a route stack.
+ *
+ * State lives in classes on <body> rather than in transforms, because every
+ * earlier version put the geometry in a transform that silently landed in the
+ * wrong place. jsdom has no layout engine, so nothing here can catch that —
+ * these cover the state machine, and the rendered result is checked visually.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -9,38 +14,50 @@ import {
   isDocDrawerOpen,
   openDocDrawer,
   closeDocDrawer,
+  showDocRoute,
+  showTypeRoute,
   toggleDocDrawer,
   wireDocDrawerDismiss,
 } from '../components/doc-drawer.js'
 
 beforeEach(() => {
-  document.body.innerHTML = `
-    <div class="sidebar-docs__backdrop"></div>
-    <aside class="sidebar-types"></aside>
-    <aside class="sidebar-docs"></aside>
-  `
+  document.body.className = ''
+  document.body.innerHTML = '<div class="sidebar-docs__backdrop"></div>'
 })
 
-const drawer = () => document.querySelector('.sidebar-docs')
+const onDocRoute = () => document.body.classList.contains('nav-docs')
 const backdrop = () => document.querySelector('.sidebar-docs__backdrop')
 
-describe('open and close', () => {
+describe('opening and closing', () => {
   it('starts closed', () => {
     expect(isDocDrawerOpen()).toBe(false)
   })
 
-  it('opens the drawer and its backdrop together', () => {
+  it('opens with the backdrop', () => {
     openDocDrawer()
 
     expect(isDocDrawerOpen()).toBe(true)
     expect(backdrop().classList.contains('is-open')).toBe(true)
   })
 
-  it('closes both again', () => {
-    openDocDrawer()
+  it('opens on the type route when nothing is selected', () => {
+    openDocDrawer({ activeType: null })
+
+    expect(onDocRoute()).toBe(false)
+  })
+
+  it('opens straight to documents when a type is already selected', () => {
+    openDocDrawer({ activeType: 'blog_post' })
+
+    expect(onDocRoute()).toBe(true)
+  })
+
+  it('closes and clears the route', () => {
+    openDocDrawer({ activeType: 'blog_post' })
     closeDocDrawer()
 
-    expect(drawer().classList.contains('is-open')).toBe(false)
+    expect(isDocDrawerOpen()).toBe(false)
+    expect(onDocRoute()).toBe(false)
     expect(backdrop().classList.contains('is-open')).toBe(false)
   })
 
@@ -54,18 +71,45 @@ describe('open and close', () => {
 
   it('closing an already-closed drawer is harmless', () => {
     expect(() => closeDocDrawer()).not.toThrow()
-    expect(isDocDrawerOpen()).toBe(false)
+  })
+
+  it('does not throw when the backdrop is absent', () => {
+    document.body.innerHTML = ''
+
+    expect(() => openDocDrawer()).not.toThrow()
+    expect(isDocDrawerOpen()).toBe(true)
+  })
+})
+
+describe('moving between routes', () => {
+  it('advances to documents', () => {
+    openDocDrawer()
+    showDocRoute()
+
+    expect(onDocRoute()).toBe(true)
+  })
+
+  it('goes back to types without closing navigation', () => {
+    openDocDrawer({ activeType: 'blog_post' })
+    showTypeRoute()
+
+    expect(onDocRoute()).toBe(false)
+    expect(isDocDrawerOpen()).toBe(true)
   })
 })
 
 describe('dismissal', () => {
-  it('closes on Escape', () => {
+  it('Escape steps back to types before closing', () => {
     const unwire = wireDocDrawerDismiss()
-    openDocDrawer()
+    openDocDrawer({ activeType: 'blog_post' })
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(onDocRoute()).toBe(false)
+    expect(isDocDrawerOpen()).toBe(true)
 
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     expect(isDocDrawerOpen()).toBe(false)
+
     unwire()
   })
 
@@ -90,17 +134,8 @@ describe('dismissal', () => {
   })
 })
 
-describe('missing shell', () => {
-  it('does not throw when the drawer is not in the DOM', () => {
-    document.body.innerHTML = ''
-
-    expect(() => openDocDrawer()).not.toThrow()
-    expect(isDocDrawerOpen()).toBe(false)
-  })
-})
-
 describe('back gesture', () => {
-  it('pushes a history entry so back dismisses the drawer, not the site', () => {
+  it('pushes a history entry so back dismisses navigation, not the site', () => {
     const push = vi.spyOn(history, 'pushState')
 
     openDocDrawer()
@@ -139,23 +174,5 @@ describe('back gesture', () => {
     expect(back).not.toHaveBeenCalled()
     back.mockRestore()
     unwire()
-  })
-})
-
-describe('both sidebars move as one panel', () => {
-  it('opens the type list alongside the document list', () => {
-    openDocDrawer()
-
-    // Below 640px they are one navigation surface, not a rail plus a drawer.
-    expect(document.querySelector('.sidebar-types').classList.contains('is-open')).toBe(true)
-    expect(document.querySelector('.sidebar-docs').classList.contains('is-open')).toBe(true)
-  })
-
-  it('closes both', () => {
-    openDocDrawer()
-    closeDocDrawer()
-
-    expect(document.querySelector('.sidebar-types').classList.contains('is-open')).toBe(false)
-    expect(document.querySelector('.sidebar-docs').classList.contains('is-open')).toBe(false)
   })
 })

@@ -1,53 +1,38 @@
 /**
- * components/doc-drawer.js — Document list as a drawer on small screens.
+ * components/doc-drawer.js — Navigation as a route stack on small screens.
  *
- * The document list is the only way to reach a document. Below 640px it used to
- * be `display: none`, which left the shell with an editor and no way to load
- * anything into it. Here it slides over the content instead, and the layout is
- * unchanged at wider widths where the list is a column.
+ * The document list is the only route to a document. Below 640px it used to be
+ * `display: none`, which left an editor nothing could be loaded into; then a
+ * 108px type rail beside a 282px document panel, which wrapped labels to three
+ * lines and left the other half empty.
  *
- * Interim: ED-5 replaces this with a real route stack (ADR 022).
+ * Now one route at a time (ADR 022 §2): types, then documents, then back. The
+ * state lives in two classes on <body> so the stylesheet owns the geometry —
+ * every previous attempt put it in transforms that silently landed in the
+ * wrong place.
  */
 
-const OPEN_CLASS = 'is-open';
-
-/**
- * Both sidebars — below 640px they leave the layout flow and slide in together
- * as one navigation panel, so they open and close as a unit.
- *
- * @returns {HTMLElement[]}
- */
-function panels() {
-  return [...document.querySelectorAll('.sidebar-types, .sidebar-docs')];
-}
-
-/** @returns {HTMLElement|null} */
-function drawer() {
-  return document.querySelector('.sidebar-docs');
-}
-
-/** @returns {HTMLElement|null} */
-function backdrop() {
-  return document.querySelector('.sidebar-docs__backdrop');
-}
+const OPEN = 'nav-open';
+const DOCS = 'nav-docs';
 
 /** @returns {boolean} */
 export function isDocDrawerOpen() {
-  return drawer()?.classList.contains(OPEN_CLASS) ?? false;
+  return document.body.classList.contains(OPEN);
 }
 
-export function openDocDrawer() {
+/** Open navigation at the route matching what is already selected. */
+export function openDocDrawer(state = null) {
   if (isDocDrawerOpen()) return;
 
-  for (const el of panels()) el.classList.add(OPEN_CLASS);
-  backdrop()?.classList.add(OPEN_CLASS);
+  document.body.classList.add(OPEN);
+  document.body.classList.toggle(DOCS, Boolean(state?.activeType));
+  backdrop()?.classList.add('is-open');
 
-  // Push a history entry so the device back gesture dismisses the drawer
-  // instead of leaving the site, which is what back means to someone holding
-  // a phone with a panel open over the content.
+  // A history entry so the device back gesture dismisses navigation rather
+  // than leaving the site, which is what back means with a panel open.
   try {
     history.pushState({ docDrawer: true }, '');
-  } catch { /* history unavailable — the drawer still works */ }
+  } catch { /* history unavailable — navigation still works */ }
 }
 
 /**
@@ -57,8 +42,8 @@ export function openDocDrawer() {
 export function closeDocDrawer(fromHistory = false) {
   const wasOpen = isDocDrawerOpen();
 
-  for (const el of panels()) el.classList.remove(OPEN_CLASS);
-  backdrop()?.classList.remove(OPEN_CLASS);
+  document.body.classList.remove(OPEN, DOCS);
+  backdrop()?.classList.remove('is-open');
 
   if (wasOpen && !fromHistory && history.state?.docDrawer) {
     try {
@@ -67,25 +52,47 @@ export function closeDocDrawer(fromHistory = false) {
   }
 }
 
-export function toggleDocDrawer() {
+/** Move to the document list — called when a type is chosen. */
+export function showDocRoute() {
+  document.body.classList.add(DOCS);
+}
+
+/** Back to the type list, without closing navigation. */
+export function showTypeRoute() {
+  document.body.classList.remove(DOCS);
+}
+
+export function toggleDocDrawer(state = null) {
   if (isDocDrawerOpen()) {
     closeDocDrawer();
   } else {
-    openDocDrawer();
+    openDocDrawer(state);
   }
 }
 
+/** @returns {HTMLElement|null} */
+function backdrop() {
+  return document.querySelector('.sidebar-docs__backdrop');
+}
+
 /**
- * Close the drawer on Escape or on the device back gesture.
+ * Dismiss on Escape, and step back a route on the device back gesture.
  *
  * Returns an unsubscribe so a test can tear it down; the shell never does,
- * since the drawer lives as long as the page.
+ * since navigation lives as long as the page.
  *
  * @returns {() => void}
  */
 export function wireDocDrawerDismiss() {
   const onKeydown = e => {
-    if (e.key === 'Escape' && isDocDrawerOpen()) closeDocDrawer();
+    if (e.key !== 'Escape' || !isDocDrawerOpen()) return;
+
+    // Escape steps back through the stack rather than closing it outright.
+    if (document.body.classList.contains(DOCS)) {
+      showTypeRoute();
+    } else {
+      closeDocDrawer();
+    }
   };
 
   const onPopState = () => {

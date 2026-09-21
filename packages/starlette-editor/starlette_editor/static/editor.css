@@ -1482,6 +1482,10 @@ details.doc-meta[open] .doc-meta__summary::before {
   flex-shrink: 0;
 }
 
+.sidebar-docs__back {
+  display: none;
+}
+
 .sidebar-docs__backdrop {
   display: none;
   position: fixed;
@@ -1528,46 +1532,41 @@ details.doc-meta[open] .doc-meta__summary::before {
 }
 
 @media (max-width: 640px) {
-  /* Navigation is a panel, not two permanent columns (ADR 022 §2).
-     A 48px icon rail costs 12% of a 390pt screen to sit there permanently,
-     and pairing it with a 320px drawer left a dead strip of backdrop — neither
-     a rail nor a full navigation surface. Both sidebars leave the flow here and
-     slide in together over the editor, which gets the whole width back. */
+  /* One route at a time (ADR 022 §2). Two columns on a phone meant a 108px
+     type list where "Spotify Liked Dumps" wrapped to three lines, beside a
+     282px document panel sitting empty on "Select a type". Each panel takes
+     the full width and you move between them, which is what the ADR asked for
+     and what the two half-measures before this were approximating.
+
+     visibility, not transform alone: a panel offset from the left edge needs
+     its transform to clear that offset too, and that arithmetic went wrong
+     twice. This makes a closed panel unable to paint regardless. */
   .sidebar-types,
   .sidebar-docs {
     position: fixed;
     top: 0;
     bottom: 0;
-    /* visibility, not just transform: a panel offset from the left edge needs
-       its transform to clear that offset too, and getting that arithmetic
-       wrong leaves it silently painting over the content. This makes the
-       closed state unable to paint regardless. Zero-duration, delayed on
-       close so the slide still animates. */
+    left: 0;
+    width: 100%;
     visibility: hidden;
+    transform: translateX(-100%);
     transition:
       transform var(--transition-base),
       visibility 0s linear var(--transition-base);
   }
 
   .sidebar-types {
-    left: 0;
-    width: 108px;
     z-index: 41;
-    transform: translateX(-100%);
   }
 
   .sidebar-docs {
-    left: 108px;
-    width: calc(100vw - 108px);
-    z-index: 40;
-    /* -100% clears its own width; the extra 120px clears the 108px left offset
-       and the box-shadow that would otherwise bleed back on screen. */
-    transform: translateX(calc(-100% - 120px));
+    z-index: 42;
     box-shadow: 8px 0 24px rgba(0, 0, 0, 0.5);
   }
 
-  .sidebar-types.is-open,
-  .sidebar-docs.is-open {
+  /* Types while no type is chosen; documents once one is. */
+  .nav-open .sidebar-types,
+  .nav-open.nav-docs .sidebar-docs {
     visibility: visible;
     transform: translateX(0);
     transition:
@@ -1575,8 +1574,8 @@ details.doc-meta[open] .doc-meta__summary::before {
       visibility 0s;
   }
 
-  /* There is room for words again, so the 900px icon-rail collapse is undone.
-     Labels beat guessing at icons. */
+  /* There is room for words at full width, so the 900px icon-rail collapse
+     is undone — labels beat guessing at icons, and nothing wraps. */
   .sidebar-types__logo {
     display: block;
   }
@@ -1585,18 +1584,53 @@ details.doc-meta[open] .doc-meta__summary::before {
   }
   .sidebar-types__item {
     justify-content: flex-start;
-    padding: var(--space-2) var(--space-3);
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-4);
     min-height: var(--target-min);
   }
   .sidebar-types__group-label {
     font-size: var(--font-size-xs);
     min-height: var(--target-min);
-    padding: 0 var(--space-3);
+    padding: 0 var(--space-4);
     justify-content: flex-start;
   }
   .sidebar-types__group-label::before {
     font-size: var(--font-size-sm);
     margin-right: var(--space-1);
+  }
+
+  /* The toolbar does not fit 390px at 44px targets, and wrapping orphaned a
+     separator and one button onto a second row. Scrolling keeps it one row and
+     keeps the buttons full size — the alternative, an overflow menu, hides
+     formatting behind an extra tap while the keyboard is already up.
+     (Resolves the open question in ADR 022.) */
+  .pm-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .pm-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+  .pm-toolbar__btn {
+    flex-shrink: 0;
+  }
+
+  /* Back to the type list. Hidden at width, where both are columns. */
+  .sidebar-docs__back {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--target-min);
+    min-height: var(--target-min);
+    margin-right: var(--space-1);
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: var(--font-size-lg);
+    cursor: pointer;
+    flex-shrink: 0;
   }
 
   .sidebar-docs__backdrop.is-open {
