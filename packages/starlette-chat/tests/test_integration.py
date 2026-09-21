@@ -170,6 +170,7 @@ async def chat_stack() -> AsyncGenerator[tuple[CMS, ChatAPI, httpx.AsyncClient],
             async with httpx.AsyncClient(
                 transport=ASGITransport(app=chat.app),
                 base_url="http://testserver",
+                headers={"Authorization": f"Bearer {_API_KEY}"},
             ) as chat_client:
                 yield cms, chat, chat_client
     finally:

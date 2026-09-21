@@ -131,7 +131,7 @@ async def test_shell_injects_media_base():
 
 @pytest.mark.anyio
 async def test_shell_requires_auth_when_set():
-    """auth=lambda r: False → GET /shell returns 401."""
+    """auth=lambda r: False → GET /shell redirects to the login page."""
     from starlette_cms.app import CMS
     from starlette_editor.app import Editor
 
@@ -144,7 +144,10 @@ async def test_shell_requires_auth_when_set():
     ) as client:
         resp = await client.get("/editor/shell")
 
-    assert resp.status_code == 401
+    # A browser hitting the shell wants somewhere to go, not a bare 401, and
+    # ?next= returns it to the shell once signed in.
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/api/auth/login?next=/editor/shell"
 
 
 @pytest.mark.anyio
@@ -188,7 +191,7 @@ async def test_shell_async_auth():
 
 @pytest.mark.anyio
 async def test_shell_async_auth_deny():
-    """Async auth callable returning False → 401."""
+    """Async auth callable returning False → redirect to the login page."""
     from starlette_cms.app import CMS
     from starlette_editor.app import Editor
 
@@ -204,7 +207,8 @@ async def test_shell_async_auth_deny():
     ) as client:
         resp = await client.get("/editor/shell")
 
-    assert resp.status_code == 401
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/api/auth/login?next=/editor/shell"
 
 
 # ---------------------------------------------------------------------------

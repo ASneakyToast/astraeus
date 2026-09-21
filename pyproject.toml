@@ -10,6 +10,11 @@ dev-dependencies = [
     "ruff>=0.6",
     "pyright>=1.1",
     "mkdocs-material>=9.5",
+    # Three packages ship an MCP server behind an [mcp] extra and test it.
+    # The workspace dev environment never installed it, so those tests have
+    # never run here — they errored on import and were counted as expected
+    # failures for months.
+    "mcp>=1.0",
 ]
 
 [tool.ruff]
