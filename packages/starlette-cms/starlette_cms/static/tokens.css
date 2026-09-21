@@ -41,17 +41,22 @@
   --bg-selected:    #1f1f1f;
   --bg-input:       #161616;
 
-  /* Borders */
-  --border-subtle:  #222222;
-  --border-default: #2a2a2a;
-  --border-strong:  #383838;
-  --border-focus:   #9a9a9a;
+  /* Borders. Measured against --bg-base: subtle 2.09:1 for a quiet separator,
+     default 3.04:1 because input and control outlines must clear WCAG 1.4.11
+     non-text contrast, strong 4.53:1. The inherited values were 1.2–1.4:1 —
+     effectively invisible on anything but a desktop in a dark room. */
+  --border-subtle:  #474747;
+  --border-default: #5f5f5f;
+  --border-strong:  #7a7a7a;
+  --border-focus:   #c8c8c8;
 
-  /* Text */
-  --text-primary:   #e8e8e8;
-  --text-secondary: #8a8a8a;
-  --text-muted:     #555555;
-  --text-link:      #e8e8e8;
+  /* Text, measured against --bg-base: 17:1 / 7.7:1 / 4.66:1. muted is real
+     content — placeholders, dates, empty-state copy — so it clears 4.5:1
+     rather than sitting at the 2.6:1 it inherited. */
+  --text-primary:   #f0f0f0;
+  --text-secondary: #a3a3a3;
+  --text-muted:     #7c7c7c;
+  --text-link:      #f0f0f0;
 
   /* Primary action — greyscale, per rule 1. Named accent because that is the
      role it fills; it simply no longer carries a hue. */
@@ -60,9 +65,11 @@
   --accent-dim:     rgba(232, 232, 232, 0.12);
   --accent-on:      #0d0d0d;   /* text on a filled primary button */
 
-  /* The one hue: unpublished state and destructive actions (rule 2). */
-  --pending:        #c1272d;
-  --pending-dim:    rgba(193, 39, 45, 0.15);
+  /* The one hue: unpublished state and destructive actions (rule 2).
+     Lightened from #c1272d, which was 3.33:1 — under the 4.5:1 body-text
+     floor, and this carries words ("27 unpublished"), not just a dot. */
+  --pending:        #e04b45;
+  --pending-dim:    rgba(224, 75, 69, 0.15);
 
   /* Transient feedback only — toasts. Not chrome. */
   --green:          #2ea043;
@@ -124,14 +131,14 @@
   --bg-selected:    #e8e8e5;
   --bg-input:       #ffffff;
 
-  --border-subtle:  #e6e6e2;
-  --border-default: #d8d8d3;
-  --border-strong:  #bfbfb9;
+  --border-subtle:  #d5d5cf;
+  --border-default: #9a9a93;
+  --border-strong:  #77776f;
   --border-focus:   #57575a;
 
   --text-primary:   #1c1c1a;
-  --text-secondary: #6a6a65;
-  --text-muted:     #9a9a94;
+  --text-secondary: #5c5c57;
+  --text-muted:     #77776f;
   --text-link:      #1c1c1a;
 
   --accent:         #1c1c1a;

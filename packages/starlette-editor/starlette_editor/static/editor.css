@@ -1504,11 +1504,15 @@ details.doc-meta[open] .doc-meta__summary::before {
      collapse and expand — only the label text goes. */
   .sidebar-types__group-label {
     font-size: 0;
-    padding: var(--space-1) 0;
+    min-height: var(--target-min);
+    padding: 0;
     justify-content: center;
   }
+  /* Only the caret survives, so make it a real target rather than a stray
+     mark — it is still the control that collapses the group. */
   .sidebar-types__group-label::before {
-    font-size: var(--font-size-xs);
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
     margin: 0;
   }
   .sidebar-types__item {
