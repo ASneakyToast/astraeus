@@ -42,9 +42,12 @@ if (cmsBase) {
     const toolbar = new EditToolbar({ cmsBase, cmsElements, reloadUrl })
     toolbar.mount()
 
-    // Boot the changeset panel alongside the toolbar
-    const { ChangesetPanel } = await import('./changeset-panel.js')
-    const changesetPanel = new ChangesetPanel({ cmsBase, toolbar })
+    // Boot the changeset panel alongside the toolbar. Same component the shell
+    // mounts (ADR 020 §3) — only the mounting differs. No onNavigate: on the
+    // published site a document is a URL, and the panel hides "Go to" rather
+    // than offering an action that does nothing.
+    const { ChangesetPanel } = await import('../components/changeset-panel.js')
+    const changesetPanel = new ChangesetPanel({ variant: 'embed' })
     changesetPanel.mount()
     toolbar.changesetPanel = changesetPanel
 
