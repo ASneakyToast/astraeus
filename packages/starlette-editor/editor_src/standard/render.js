@@ -103,6 +103,27 @@ export function renderTypeList(selectType) {
  * @param {function} selectDoc
  * @param {function} openNewDoc
  */
+/**
+ * Filter the loaded documents by slug or title.
+ *
+ * Client-side over what is already loaded, which is the right scope while the
+ * list is a single page — it costs no request and stays responsive per
+ * keystroke. A type with more documents than one page needs a server-side
+ * search instead.
+ *
+ * @param {Array<object>} documents
+ * @param {string} filter
+ * @returns {Array<object>}
+ */
+export function filterDocuments(documents, filter) {
+  const needle = (filter || '').trim().toLowerCase();
+  if (!needle) return documents;
+
+  return documents.filter(doc =>
+    `${doc.slug || ''} ${docTitle(doc)}`.toLowerCase().includes(needle),
+  );
+}
+
 export function renderDocList(selectDoc, openNewDoc) {
   const titleEl = $('doc-list-title');
   const newBtn = $('doc-new-btn');
@@ -131,7 +152,16 @@ export function renderDocList(selectDoc, openNewDoc) {
     return;
   }
 
-  for (const doc of state.documents) {
+  const visible = filterDocuments(state.documents, state.docFilter);
+
+  if (!visible.length) {
+    listEl.appendChild(
+      el('div', { class: 'sidebar-docs__empty' }, `Nothing matches "${state.docFilter}"`),
+    );
+    return;
+  }
+
+  for (const doc of visible) {
     const isActive = doc.id === state.activeDocId;
     const isDraftDeleted = doc.draft_deleted;
 

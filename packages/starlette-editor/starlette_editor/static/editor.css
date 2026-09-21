@@ -1361,6 +1361,110 @@ details.doc-meta[open] .doc-meta__summary::before {
   z-index: 1;
 }
 
+/* ---------- Pending view ---------- */
+.pending-view {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.pending-view__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.pending-view__count {
+  font-size: var(--font-size-md);
+  color: var(--pending);
+  font-weight: 500;
+}
+
+.pending-view__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.pending-view__open {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--target-min);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  background: transparent;
+  border: none;
+  padding: var(--space-2) 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.pending-view__title {
+  font-size: var(--font-size-md);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pending-view__meta {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.pending-view__discard {
+  flex-shrink: 0;
+}
+
+.pending-view__empty {
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+}
+
+.pending-view__empty-title {
+  font-size: var(--font-size-lg);
+  color: var(--text-primary);
+  margin-bottom: var(--space-2);
+}
+
+.pending-view__empty-body {
+  font-size: var(--font-size-md);
+  color: var(--text-secondary);
+}
+
+/* ---------- Document filter ---------- */
+.sidebar-docs__search {
+  width: calc(100% - var(--space-3) * 2);
+  margin: var(--space-2) var(--space-3) 0;
+  min-height: var(--target-min);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-input);
+  padding: var(--space-1) var(--space-2);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.sidebar-docs__search:focus {
+  border-color: var(--border-focus);
+}
+
+.sidebar-docs__search::placeholder {
+  color: var(--text-muted);
+}
+
 /* ---------- Drawer toggle (small screens only) ---------- */
 .editor-header__drawer-toggle {
   display: none;
@@ -1442,6 +1546,35 @@ details.doc-meta[open] .doc-meta__summary::before {
 
   .editor-header {
     padding: 0 var(--space-3);
+  }
+
+  /* Primary actions move to the bottom edge, within thumb reach and inside the
+     safe area. The header keeps the title and the drawer toggle (ADR 022 §2). */
+  .editor-header__actions {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    padding-bottom: calc(var(--space-2) + env(safe-area-inset-bottom));
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .editor-header__actions:empty {
+    display: none;
+  }
+
+  /* Clear the action bar rather than letting it cover the last field. */
+  .editor-scroll {
+    padding-bottom: calc(var(--space-8) * 2 + env(safe-area-inset-bottom));
+  }
+
+  .publish-toggle {
+    margin-right: auto;
   }
 
   /* Floating panels are desktop windows; at this width they take the screen. */
