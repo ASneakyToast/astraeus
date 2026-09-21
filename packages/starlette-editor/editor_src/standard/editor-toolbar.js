@@ -17,6 +17,9 @@ export class EditorToolbar {
 
   mount() {
     this._el = document.createElement('div')
+    // Marker so the stylesheet can re-dock the pill on small screens; its
+    // geometry is inline, so those rules need !important to win.
+    this._el.setAttribute('data-cms-editor-toolbar', '')
     this._el.style.cssText = `
       position: fixed;
       /* Clear the iOS home indicator, which sits over a bare 24px offset. */

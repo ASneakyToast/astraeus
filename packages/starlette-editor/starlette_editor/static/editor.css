@@ -1499,6 +1499,18 @@ details.doc-meta[open] .doc-meta__summary::before {
   .sidebar-types__item span {
     display: none;
   }
+  /* Group labels arrived after this breakpoint was written and nothing hid
+     them, so they clipped mid-word in a 48px column. The groups still
+     collapse and expand — only the label text goes. */
+  .sidebar-types__group-label {
+    font-size: 0;
+    padding: var(--space-1) 0;
+    justify-content: center;
+  }
+  .sidebar-types__group-label::before {
+    font-size: var(--font-size-xs);
+    margin: 0;
+  }
   .sidebar-types__item {
     justify-content: center;
     padding: var(--space-2);
@@ -1548,13 +1560,33 @@ details.doc-meta[open] .doc-meta__summary::before {
     padding: 0 var(--space-3);
   }
 
+  /* The pill is persistent chrome — changesets, chat, instance actions — so it
+     docks to the bottom edge full width rather than floating over the content
+     it is meant to sit beside. Free positioning is a desktop affordance, and
+     its drag grip is already disabled at this width. */
+  [data-cms-editor-toolbar] {
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    top: auto !important;
+    width: 100% !important;
+    transform: none !important;
+    border-radius: 0 !important;
+    border-left: none !important;
+    border-right: none !important;
+    border-bottom: none !important;
+    justify-content: center !important;
+    padding-bottom: env(safe-area-inset-bottom) !important;
+  }
+
   /* Primary actions move to the bottom edge, within thumb reach and inside the
-     safe area. The header keeps the title and the drawer toggle (ADR 022 §2). */
+     safe area. The header keeps the title and the drawer toggle (ADR 022 §2).
+     Sits above the pill: contextual chrome stacks on persistent chrome. */
   .editor-header__actions {
     position: fixed;
     left: 0;
     right: 0;
-    bottom: 0;
+    bottom: calc(var(--target-min) + env(safe-area-inset-bottom));
     z-index: 30;
     justify-content: flex-end;
     gap: var(--space-2);
@@ -1570,7 +1602,10 @@ details.doc-meta[open] .doc-meta__summary::before {
 
   /* Clear the action bar rather than letting it cover the last field. */
   .editor-scroll {
-    padding-bottom: calc(var(--space-8) * 2 + env(safe-area-inset-bottom));
+    /* Clears the docked pill plus the action bar that can sit above it. */
+    padding-bottom: calc(
+      var(--target-min) * 2 + var(--space-6) + env(safe-area-inset-bottom)
+    );
   }
 
   .publish-toggle {
