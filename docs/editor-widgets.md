@@ -118,9 +118,9 @@ Every widget in this inventory:
 
 ## Open questions
 
-- **ProseMirror toolbar overflow.** At 44px targets the current button set does not fit a 390px
-  viewport. Scroll, overflow menu, or a contextual selection toolbar — undecided, and it needs a
-  prototype rather than a decision on paper.
+- ~~**ProseMirror toolbar overflow.**~~ Resolved in FU-1: it scrolls horizontally and stays one
+  row at full size. Wrapping orphaned a separator and one button onto a second row; an overflow
+  menu hides formatting behind a tap while the keyboard is already up.
 - **`document_ref` picker.** Depends on the merged panel's document-row rendering; sequence it
   after the merge.
 - **Mediakit admin inside the image picker.** Iframing a separate Bootstrap app is the worst
