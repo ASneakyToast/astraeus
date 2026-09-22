@@ -27,16 +27,29 @@ export class EditToolbar {
   mount() {
     this.el = document.createElement('div')
     this.el.id = 'astraeus-toolbar'
+    // A solid dark pill, so the buttons sit on a consistent surface and stay
+    // legible on any host background. (The old styling used white text on
+    // translucent-white buttons — invisible on a light site.) Values are
+    // literal, not the shared design tokens: injecting tokens.css would define
+    // :root vars that collide with the host page's own tokens.
     this.el.style.cssText = `
       position: fixed;
       bottom: 24px;
       right: 24px;
-      z-index: 9999;
+      z-index: 2147483000;
       display: flex;
-      flex-direction: column;
-      align-items: flex-end;
-      gap: 8px;
-      font-family: system-ui, sans-serif;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 6px;
+      max-width: min(560px, calc(100vw - 48px));
+      padding: 6px;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 14px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      padding-bottom: calc(6px + env(safe-area-inset-bottom));
     `
     document.body.appendChild(this.el)
     this._render()
@@ -55,8 +68,8 @@ export class EditToolbar {
       const saveIndicator = this._makeIndicator(
         this.state === 'saving' ? '⏳ Saving...' : '✓ Saved'
       )
-      const discardBtn = this._makeButton('Discard draft', 'ghost', () => this._discardDraft())
-      const publishBtn = this._makeButton('Publish', 'success', () => this._publish())
+      const discardBtn = this._makeButton('Discard draft', 'danger', () => this._discardDraft())
+      const publishBtn = this._makeButton('Publish', 'primary', () => this._publish())
       this.el.appendChild(saveIndicator)
       this.el.appendChild(discardBtn)
       this.el.appendChild(publishBtn)
@@ -86,18 +99,22 @@ export class EditToolbar {
   _makeButton(label, variant, onClick) {
     const btn = document.createElement('button')
     btn.textContent = label
+    // On the dark pill: primary is filled light, ghost is outlined light,
+    // danger carries the one accent hue (matches the tokenised palette).
     const styles = {
-      primary: 'background:#2563eb;color:#fff;border:none;',
-      success: 'background:#16a34a;color:#fff;border:none;',
-      ghost: 'background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.2);',
+      primary: 'background:#f0f0f0;color:#0d0d0d;border:1px solid #f0f0f0;',
+      ghost: 'background:transparent;color:#e8e8e8;border:1px solid #3a3a3a;',
+      danger: 'background:transparent;color:#e04b45;border:1px solid rgba(224,75,69,0.5);',
     }
     btn.style.cssText = `
-      padding: 10px 18px;
+      padding: 8px 14px;
       border-radius: 8px;
       cursor: pointer;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 500;
-      backdrop-filter: blur(8px);
+      font-family: inherit;
+      line-height: 1;
+      white-space: nowrap;
       ${styles[variant] || styles.primary}
     `
     btn.addEventListener('click', onClick)
@@ -107,13 +124,12 @@ export class EditToolbar {
   _makeIndicator(text) {
     const el = document.createElement('div')
     el.textContent = text
+    // Sits directly on the pill — no separate background.
     el.style.cssText = `
-      padding: 8px 14px;
-      border-radius: 8px;
-      background: rgba(0,0,0,0.7);
-      color: #fff;
+      padding: 8px 10px;
+      color: #a3a3a3;
       font-size: 13px;
-      backdrop-filter: blur(8px);
+      white-space: nowrap;
     `
     return el
   }
