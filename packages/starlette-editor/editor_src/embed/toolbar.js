@@ -65,11 +65,15 @@ export class EditToolbar {
     }
 
     if (this.state === 'editing' || this.state === 'saving') {
+      // Leave edit mode without discarding or publishing — the draft is kept.
+      const closeBtn = this._makeButton('✕ Close', 'ghost', () => this._stopEditing())
+      closeBtn.title = 'Stop editing — your draft is kept and can be resumed later'
       const saveIndicator = this._makeIndicator(
         this.state === 'saving' ? '⏳ Saving...' : '✓ Saved'
       )
       const discardBtn = this._makeButton('Discard draft', 'danger', () => this._discardDraft())
       const publishBtn = this._makeButton('Publish', 'primary', () => this._publish())
+      this.el.appendChild(closeBtn)
       this.el.appendChild(saveIndicator)
       this.el.appendChild(discardBtn)
       this.el.appendChild(publishBtn)
@@ -152,6 +156,16 @@ export class EditToolbar {
       await activateEditMode(el, { cmsBase: this.cmsBase, toolbar: this })
     }
     this.setState('editing')
+  }
+
+  _stopEditing() {
+    // Leave edit mode while keeping the draft. The draft lives server-side and
+    // the changeset id persists in changeset-store (localStorage), so
+    // re-entering edit mode later resumes exactly where you left off. A reload
+    // is the simplest reliable teardown of the in-page edit affordances
+    // (contentEditable, ProseMirror mounts, dashed outlines, "Open" links) —
+    // the same mechanism discard/publish already use, minus the mutation.
+    window.location.reload()
   }
 
   async _discardDraft() {

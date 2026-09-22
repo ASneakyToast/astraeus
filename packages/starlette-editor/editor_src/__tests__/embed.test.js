@@ -84,6 +84,31 @@ describe('EditToolbar', async () => {
     expect(el.textContent).toContain('Discard draft')
   })
 
+  it('editing state offers a Close button to leave edit mode', () => {
+    const toolbar = new EditToolbar({ cmsBase: 'https://cms.example.com', cmsElements: [] })
+    toolbar.mount()
+    toolbar.setState('editing')
+    const el = document.getElementById('astraeus-toolbar')
+    expect(el.textContent).toContain('Close')
+    // viewing state must NOT show it — only the Edit draft button
+    toolbar.setState('viewing')
+    expect(document.getElementById('astraeus-toolbar').textContent).not.toContain('Close')
+  })
+
+  it('clicking Close stops editing without discarding or publishing', () => {
+    const toolbar = new EditToolbar({ cmsBase: 'https://cms.example.com', cmsElements: [] })
+    const stopSpy = vi.spyOn(toolbar, '_stopEditing').mockImplementation(() => {})
+    toolbar.mount()
+    toolbar.setState('editing')
+
+    const closeBtn = [...document.getElementById('astraeus-toolbar').querySelectorAll('button')]
+      .find(b => b.textContent.includes('Close'))
+    expect(closeBtn).toBeTruthy()
+    closeBtn.click()
+
+    expect(stopSpy).toHaveBeenCalledOnce()
+  })
+
   it('setState("saving") shows saving indicator', () => {
     const toolbar = new EditToolbar({ cmsBase: 'https://cms.example.com', cmsElements: [] })
     toolbar.mount()
