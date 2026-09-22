@@ -350,3 +350,28 @@ describe('inline edits join the active changeset', async () => {
     expect(getActiveChangesetId()).toBe('cs-new')
   })
 })
+
+// ---------------------------------------------------------------------------
+// suppressAnchorNavigationWhileEditing — clicks-to-edit don't navigate
+// ---------------------------------------------------------------------------
+
+describe('suppressAnchorNavigationWhileEditing', async () => {
+  const { suppressAnchorNavigationWhileEditing } = await import('../embed/edit-mode.js')
+
+  it('cancels navigation when an editable field inside a link is clicked, but not otherwise', () => {
+    suppressAnchorNavigationWhileEditing()
+    document.body.innerHTML = `
+      <a id="edit-link" href="/somewhere"><span data-cms-field="title">Title</span></a>
+      <a id="plain-link" href="/elsewhere">Just a link</a>
+    `
+
+    const onEditable = new MouseEvent('click', { bubbles: true, cancelable: true })
+    document.querySelector('[data-cms-field]').dispatchEvent(onEditable)
+    expect(onEditable.defaultPrevented).toBe(true)
+
+    // A normal link elsewhere on the page still navigates.
+    const onPlain = new MouseEvent('click', { bubbles: true, cancelable: true })
+    document.getElementById('plain-link').dispatchEvent(onPlain)
+    expect(onPlain.defaultPrevented).toBe(false)
+  })
+})

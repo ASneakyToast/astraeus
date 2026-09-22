@@ -4,6 +4,31 @@
  */
 import { getActiveChangesetId, setActiveChangesetId } from '../changeset-store.js'
 
+let _navSuppressed = false
+
+/**
+ * While editing, stop clicks on an editable field from following an ancestor
+ * link. On listing pages the title sits inside its card's <a href>, so a click
+ * to edit would otherwise navigate away. Focus happens on mousedown, so
+ * preventing the click still lets the field take the caret. Installed once;
+ * the page reloads on discard/publish, so it never needs removing.
+ */
+export function suppressAnchorNavigationWhileEditing() {
+  if (_navSuppressed) return
+  _navSuppressed = true
+  document.addEventListener(
+    'click',
+    (e) => {
+      const target = /** @type {Element} */ (e.target)
+      if (target.closest && target.closest('[data-cms-field], [contenteditable="true"]')) {
+        const anchor = target.closest('a')
+        if (anchor) e.preventDefault()
+      }
+    },
+    true,
+  )
+}
+
 export async function activateEditMode(element, { cmsBase, toolbar }) {
   const docId = element.dataset.cmsId
 

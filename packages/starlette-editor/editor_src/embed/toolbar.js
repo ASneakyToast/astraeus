@@ -143,7 +143,10 @@ export class EditToolbar {
     // Activate every annotated document on the page, so a listing edits as a
     // whole rather than only its first entry. Each edit joins one changeset
     // (see edit-mode patchField), so the session publishes together.
-    const { activateEditMode } = await import('./edit-mode.js')
+    const { activateEditMode, suppressAnchorNavigationWhileEditing } = await import('./edit-mode.js')
+    // Listing cards wrap the title in the card's link; keep clicks-to-edit from
+    // navigating away.
+    suppressAnchorNavigationWhileEditing()
     this.activeElements = [...this.cmsElements]
     for (const el of this.activeElements) {
       await activateEditMode(el, { cmsBase: this.cmsBase, toolbar: this })
