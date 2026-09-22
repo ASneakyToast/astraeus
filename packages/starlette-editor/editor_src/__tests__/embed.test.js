@@ -120,7 +120,8 @@ describe('EditToolbar', async () => {
   })
 
   it('_publish() with no changeset publishes the one active document', async () => {
-    localStorage.clear()  // no active changeset → single-doc fallback
+    localStorage.clear()  // no active changeset → single-doc path
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const fetchMock = vi.fn().mockResolvedValue({ ok: true })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -140,9 +141,10 @@ describe('EditToolbar', async () => {
     expect(toolbar.state).toBe('published')
   })
 
-  it('_publish() with an active changeset routes to Review & Publish', async () => {
-    const { setActiveChangesetId } = await import('../changeset-store.js')
+  it('_publish() with an active changeset publishes the whole changeset', async () => {
+    const { setActiveChangesetId, getActiveChangesetId } = await import('../changeset-store.js')
     setActiveChangesetId('cs-session')
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const fetchMock = vi.fn().mockResolvedValue({ ok: true })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -150,14 +152,35 @@ describe('EditToolbar', async () => {
     const toolbar = new EditToolbar({ cmsBase, cmsElements: [{ dataset: { cmsId: 'd1' } }] })
     toolbar.mount()
     toolbar.activeElements = [{ dataset: { cmsId: 'd1' } }]
-    const reviewAndPublish = vi.fn().mockResolvedValue(undefined)
-    toolbar.changesetPanel = { reviewAndPublish }
 
     await toolbar._publish()
 
-    // Publishes the whole session, not one doc.
-    expect(reviewAndPublish).toHaveBeenCalledWith('cs-session')
+    // Ships the whole session's changeset, not one doc.
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${cmsBase}/api/changesets/cs-session/publish`,
+      expect.objectContaining({ method: 'POST', credentials: 'include' })
+    )
+    expect(toolbar.state).toBe('published')
+    // Session shipped — the active changeset is cleared so the next edits start fresh.
+    expect(getActiveChangesetId()).toBeNull()
+  })
+
+  it('_publish() does nothing when the confirm is declined', async () => {
+    const { setActiveChangesetId } = await import('../changeset-store.js')
+    setActiveChangesetId('cs-x')
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const toolbar = new EditToolbar({ cmsBase: 'https://cms.example.com', cmsElements: [] })
+    toolbar.mount()
+    toolbar.activeElements = [{ dataset: { cmsId: 'd1' } }]
+    toolbar.setState('editing')
+
+    await toolbar._publish()
+
     expect(fetchMock).not.toHaveBeenCalled()
+    expect(toolbar.state).toBe('editing')
     localStorage.clear()
   })
 

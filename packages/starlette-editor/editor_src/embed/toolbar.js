@@ -8,7 +8,7 @@
  *   publishing — spinner
  *   published  — "✓ Published — rebuilding site"
  */
-import { getActiveChangesetId } from '../changeset-store.js'
+import { getActiveChangesetId, setActiveChangesetId } from '../changeset-store.js'
 
 export class EditToolbar {
   constructor({ cmsBase, cmsElements, reloadUrl = null }) {
@@ -92,7 +92,7 @@ export class EditToolbar {
     }
 
     if (this.state === 'published') {
-      this.el.appendChild(this._makeIndicator('✓ Published — rebuilding site'))
+      this.el.appendChild(this._makeIndicator('✓ Published — site rebuilding (~30s)'))
     }
   }
 
@@ -171,25 +171,38 @@ export class EditToolbar {
   }
 
   async _publish() {
-    // A session's edits are grouped into one changeset, so publishing goes
-    // through the changeset panel's Review & Publish — which ships every
-    // edited document at once and fires a single rebuild. Publishing one doc
-    // here would strand the rest of the session.
+    // A session's edits are grouped into one changeset — publish the whole
+    // changeset so everything ships at once and fires a single rebuild.
+    // Publish directly (not via the shell's Review & Publish drawer, whose
+    // styles live in editor.css and aren't loaded on the host site).
     const changesetId = getActiveChangesetId()
-    if (changesetId && this.changesetPanel) {
-      await this.changesetPanel.reviewAndPublish(changesetId)
+
+    const url = changesetId
+      ? `${this.cmsBase}/api/changesets/${changesetId}/publish`
+      : this.activeElements[0]
+        ? `${this.cmsBase}/api/documents/${this.activeElements[0].dataset.cmsId}/publish`
+        : null
+    if (!url) return
+
+    if (!window.confirm('Publish your changes? The site will rebuild — it takes about 30 seconds to go live.')) {
       return
     }
 
-    // Fallback: no changeset (e.g. a single edit with grouping unavailable) —
-    // publish the one document directly.
-    if (!this.activeElements.length) return
     this.setState('publishing')
-    const docId = this.activeElements[0].dataset.cmsId
-    await fetch(`${this.cmsBase}/api/documents/${docId}/publish`, {
-      method: 'POST',
-      credentials: 'include',
-    })
+    let ok = false
+    try {
+      const res = await fetch(url, { method: 'POST', credentials: 'include' })
+      ok = res.ok
+    } catch { ok = false }
+
+    if (!ok) {
+      // Back to editing so the drafts aren't lost and they can retry.
+      this.setState('editing')
+      window.alert('Publish failed — your draft is safe. Please try again.')
+      return
+    }
+
+    if (changesetId) setActiveChangesetId(null) // session shipped; start fresh
     this.setState('published')
     // In local dev, ping the Astro dev server to trigger a full-page reload
     if (this.reloadUrl) {

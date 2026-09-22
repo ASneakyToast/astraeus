@@ -56,9 +56,31 @@ export async function activateEditMode(element, { cmsBase, toolbar }) {
     })
   }
 
-  // Add visual affordance to the container
-  element.style.outline = '2px dashed rgba(37, 99, 235, 0.4)'
-  element.style.outlineOffset = '4px'
+  // Individual fields get their own edit affordance (dashed outline, etc.) in
+  // activateField. Outlining the whole container as well was misleading — on a
+  // listing card it framed the entire card as editable when only the title and
+  // description are.
+
+  // On a listing card the title links to the post; nav is suppressed so the
+  // click edits instead. Offer an explicit way to open the post — to edit the
+  // body there — since edits carry across pages in one changeset.
+  const link = element.querySelector('a[href]')
+  const href = link?.getAttribute('href')
+  if (href && !element.querySelector('[data-cms-open-link]')) {
+    if (getComputedStyle(element).position === 'static') element.style.position = 'relative'
+    const open = document.createElement('a')
+    open.setAttribute('data-cms-open-link', '')
+    open.href = href
+    open.textContent = 'Open ↗'
+    open.style.cssText = `
+      position: absolute; top: 6px; right: 6px; z-index: 5;
+      padding: 4px 10px; border-radius: 999px;
+      background: #1a1a1a; color: #f0f0f0; border: 1px solid #2a2a2a;
+      font: 500 12px/1 -apple-system, system-ui, sans-serif;
+      text-decoration: none;
+    `
+    element.appendChild(open)
+  }
 }
 
 export async function activateField(el, { fieldName, fieldValue, docId, cmsBase, toolbar }) {
