@@ -561,13 +561,34 @@ def make_document_routes(cms: CMS) -> list[Route]:
 
         rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
 
+        # Link to an explicit changeset when the caller provides one (e.g. a
+        # gateway grouping a whole sync run into one changeset). Unlike PATCH,
+        # create never auto-creates a changeset — it only links when told to.
+        response_headers: dict[str, str] = {}
+        active_cs_id = request.headers.get("x-active-changeset-id")
+        if active_cs_id:
+            cs_rows = await CMSChangeset.select().where(CMSChangeset.id == active_cs_id).run()
+            if cs_rows and cs_rows[0]["status"] in ("open", "review"):
+                await CMSChangesetDocument.insert(
+                    CMSChangesetDocument(
+                        changeset_id=active_cs_id,
+                        document_id=doc_id,
+                        added_at=datetime.now(UTC),
+                    )
+                ).run()
+                response_headers["X-Changeset-Id"] = active_cs_id
+
         loop = asyncio.get_running_loop()
         extra: dict[str, Any] = {}
         if is_append_only:
             extra["append_only"] = True
         loop.create_task(fire_event(cms, "document.created", doc_id, doc_type, slug, extra=extra))
 
-        return JSONResponse(_row_to_dict(rows[0]), status_code=201)
+        return JSONResponse(
+            _row_to_dict(rows[0]),
+            status_code=201,
+            headers=response_headers if response_headers else None,
+        )
 
     async def get_document(request: Request) -> JSONResponse:
         if cms.read_auth:

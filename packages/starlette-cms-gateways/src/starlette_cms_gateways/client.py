@@ -27,6 +27,7 @@ Usage::
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 import httpx
@@ -120,6 +121,25 @@ class CMSClient:
         docs = data.get("documents", [])
         return docs[0] if docs else None
 
+    async def create_changeset(self, title: str) -> str:
+        """Create an open changeset via ``POST /api/changesets`` and return its id."""
+        http = self._get_http()
+        resp = await http.post(
+            f"{self.base_url}/api/changesets",
+            json={"title": title},
+            headers=self._auth_headers(),
+        )
+        if resp.status_code not in (200, 201):
+            raise CMSError(resp.status_code, resp.text)
+        return resp.json()["id"]
+
+    def _changeset_headers(self, changeset_id: str | None) -> dict[str, str]:
+        """Auth headers plus the active-changeset header when grouping a run."""
+        headers = self._auth_headers()
+        if changeset_id is not None:
+            headers["X-Active-Changeset-Id"] = changeset_id
+        return headers
+
     async def create_document(
         self,
         *,
@@ -128,6 +148,7 @@ class CMSClient:
         body: dict[str, Any],
         import_ref: str | None = None,
         meta: dict[str, Any] | None = None,
+        changeset_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Create a new document via ``POST /api/documents``.
@@ -148,7 +169,7 @@ class CMSClient:
         resp = await http.post(
             f"{self.base_url}/api/documents",
             json=payload,
-            headers=self._auth_headers(),
+            headers=self._changeset_headers(changeset_id),
         )
         if resp.status_code not in (200, 201):
             raise CMSError(resp.status_code, resp.text)
@@ -160,6 +181,7 @@ class CMSClient:
         *,
         body: dict[str, Any],
         meta: dict[str, Any] | None = None,
+        changeset_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Update an existing document via ``PATCH /api/documents/{id}``.
@@ -172,7 +194,7 @@ class CMSClient:
         resp = await http.patch(
             f"{self.base_url}/api/documents/{doc_id}",
             json=payload,
-            headers=self._auth_headers(),
+            headers=self._changeset_headers(changeset_id),
         )
         if resp.status_code != 200:
             raise CMSError(resp.status_code, resp.text)
@@ -195,6 +217,7 @@ class CMSClient:
         item: GatewayItem,
         block_type: str,
         auto_publish: bool = False,
+        changeset_provider: Callable[[], Awaitable[str]] | None = None,
     ) -> Literal["created", "updated", "skipped"]:
         """
         Create, update, or skip a document based on ``import_ref`` deduplication.
@@ -211,6 +234,11 @@ class CMSClient:
 
         By default (``auto_publish=False``), created/updated documents remain as
         drafts.  Pass ``auto_publish=True`` to publish immediately.
+
+        ``changeset_provider`` is an optional async callable resolved only when
+        this call actually writes (create or update, never skip). It returns the
+        id of the changeset to group the write into — the caller uses it to lazily
+        open one changeset per sync run without creating one for an all-skip run.
         """
         with tracer.start_as_current_span("gateways.client.upsert") as span:
             span.set_attribute("doc_type", block_type)
@@ -223,12 +251,14 @@ class CMSClient:
                     meta: dict[str, Any] = {"content_hash": item.content_hash()}
                     if item.title:
                         meta["title"] = item.title
+                    cs_id = await changeset_provider() if changeset_provider is not None else None
                     doc = await self.create_document(
                         doc_type=block_type,
                         slug=item.slug,
                         body=item.body,
                         import_ref=item.import_ref,
                         meta=meta,
+                        changeset_id=cs_id,
                     )
                     if auto_publish:
                         await self.publish_document(doc["id"])
@@ -258,10 +288,12 @@ class CMSClient:
                 new_meta = {**existing_meta, "content_hash": item.content_hash()}
                 if item.title:
                     new_meta["title"] = item.title
+                cs_id = await changeset_provider() if changeset_provider is not None else None
                 await self.update_document(
                     existing["id"],
                     body=item.body,
                     meta=new_meta,
+                    changeset_id=cs_id,
                 )
                 if auto_publish and not existing.get("published"):
                     await self.publish_document(existing["id"])

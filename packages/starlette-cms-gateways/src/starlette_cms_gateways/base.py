@@ -92,6 +92,8 @@ class SyncResult:
     :param updated: Number of existing documents updated.
     :param skipped: Number of documents skipped (identical content).
     :param errors: List of ``(import_ref, error_message)`` pairs.
+    :param changeset_id: The changeset the run's writes were grouped into, or
+        ``None`` when the run wrote nothing (all skipped).
     :param started_at: UTC timestamp when the sync started.
     :param finished_at: UTC timestamp when the sync finished.
     """
@@ -100,6 +102,7 @@ class SyncResult:
     updated: int = 0
     skipped: int = 0
     errors: list[tuple[str, str]] = field(default_factory=list)
+    changeset_id: str | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     finished_at: datetime | None = None
 
@@ -122,6 +125,7 @@ class SyncResult:
             "updated": self.updated,
             "skipped": self.skipped,
             "errors": self.errors,
+            "changeset_id": self.changeset_id,
             "total": self.total,
             "started_at": self.started_at.isoformat(),
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
@@ -225,6 +229,14 @@ class BaseGateway(ABC):
         """
         result = SyncResult()
 
+        # Group every write in this run into one changeset, created lazily on the
+        # first create/update so an all-skip run leaves no empty changeset behind.
+        async def get_run_changeset() -> str:
+            if result.changeset_id is None:
+                title = f"{self.service_name} sync — {datetime.now(UTC).strftime('%b %-d')}"
+                result.changeset_id = await self._client.create_changeset(title)
+            return result.changeset_id
+
         with tracer.start_as_current_span("gateways.sync") as span:
             span.set_attribute("gateway_name", self.service_name)
             try:
@@ -237,6 +249,7 @@ class BaseGateway(ABC):
                             auto_publish=self.auto_publish
                             if item.published is None
                             else item.published,
+                            changeset_provider=get_run_changeset,
                         )
                         if action == "created":
                             result.created += 1

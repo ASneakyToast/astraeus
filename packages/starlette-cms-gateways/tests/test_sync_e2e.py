@@ -261,3 +261,85 @@ async def test_sync_auto_publish_true_publishes_docs(cms_and_client):
     )
     assert doc is not None, "Document should have been created"
     assert doc.get("published") is True, "Document should be published (auto_publish=True)"
+
+
+# ---------------------------------------------------------------------------
+# One changeset per sync run
+# ---------------------------------------------------------------------------
+
+
+async def _open_changesets(client) -> list[dict]:
+    """List open changesets straight through the client's in-process transport."""
+    http = client._get_http()
+    resp = await http.get(
+        "http://testserver/api/changesets", params={"status": "open"}
+    )
+    return resp.json()["changesets"]
+
+
+async def test_sync_groups_all_writes_into_one_changeset(cms_and_client):
+    """A run that writes N docs produces exactly one changeset holding all N."""
+    _, client = cms_and_client
+    global _FAKE_DB
+    _FAKE_DB = [
+        {"id": "G1", "name": "One", "score": 1.0},
+        {"id": "G2", "name": "Two", "score": 2.0},
+        {"id": "G3", "name": "Three", "score": 3.0},
+    ]
+
+    gateway = DraftTestGateway(cms_client=client)
+    result = await gateway.sync()
+
+    assert result.created == 3
+    assert result.changeset_id is not None
+
+    changesets = await _open_changesets(client)
+    assert len(changesets) == 1, "The whole run should land in a single changeset"
+    assert changesets[0]["id"] == result.changeset_id
+    assert changesets[0]["document_count"] == 3
+
+
+async def test_all_skip_run_creates_no_changeset(cms_and_client):
+    """A run where every item is skipped leaves no new (empty) changeset behind."""
+    _, client = cms_and_client
+    global _FAKE_DB
+    _FAKE_DB = [{"id": "S1", "name": "Same", "score": 1.0}]
+
+    gateway = DraftTestGateway(cms_client=client)
+    r1 = await gateway.sync()
+    assert r1.created == 1
+    assert r1.changeset_id is not None
+
+    # Identical data → all skipped, so no changeset should be created this run.
+    r2 = await gateway.sync()
+    assert r2.skipped == 1
+    assert r2.changeset_id is None
+
+    changesets = await _open_changesets(client)
+    assert len(changesets) == 1, "Only the first run's changeset should exist"
+
+
+async def test_update_run_groups_only_written_docs(cms_and_client):
+    """A later run's changeset holds only the docs it actually wrote."""
+    _, client = cms_and_client
+    global _FAKE_DB
+    _FAKE_DB = [
+        {"id": "M1", "name": "Keep", "score": 1.0},
+        {"id": "M2", "name": "Before", "score": 2.0},
+    ]
+
+    gateway = DraftTestGateway(cms_client=client)
+    r1 = await gateway.sync()
+    assert r1.created == 2
+
+    # Change one item; the other is untouched.
+    _FAKE_DB[1] = {"id": "M2", "name": "After", "score": 22.0}
+    r2 = await gateway.sync()
+    assert r2.updated == 1
+    assert r2.skipped == 1
+    assert r2.changeset_id is not None
+    assert r2.changeset_id != r1.changeset_id
+
+    changesets = await _open_changesets(client)
+    run2 = next(c for c in changesets if c["id"] == r2.changeset_id)
+    assert run2["document_count"] == 1, "Only the updated doc belongs to run 2"
