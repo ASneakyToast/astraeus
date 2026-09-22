@@ -423,3 +423,64 @@ describe('suppressAnchorNavigationWhileEditing', async () => {
     expect(onPlain.defaultPrevented).toBe(false)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Collapsible body field on a listing card (Expand/Collapse toggle)
+// ---------------------------------------------------------------------------
+
+describe('collapsible body field', async () => {
+  const { activateEditMode } = await import('../embed/edit-mode.js')
+  const flush = () => new Promise((r) => setTimeout(r, 0))
+
+  beforeEach(() => {
+    document.body.innerHTML = ''
+    vi.restoreAllMocks()
+  })
+
+  it('gates the body behind an Expand/Collapse toggle and mounts the editor once', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ body: { body_markdown: { type: 'doc', content: [] } } }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { mountProseMirrorOnElement } = await import('../embed/prosemirror-embed.js')
+    mountProseMirrorOnElement.mockClear()
+
+    const card = document.createElement('article')
+    card.dataset.cmsId = 'doc-1'
+    const preview = document.createElement('div')
+    preview.dataset.cmsField = 'body_markdown'
+    preview.setAttribute('data-cms-collapsible', '')
+    preview.textContent = 'Truncated preview…'
+    card.appendChild(preview)
+    document.body.appendChild(card)
+
+    await activateEditMode(card, { cmsBase: 'https://cms.example.com', toolbar: { setState: vi.fn() } })
+
+    // Toggle exists; preview still shown; editor not mounted yet.
+    const toggle = [...card.querySelectorAll('button')].find((b) => b.textContent.includes('Expand'))
+    expect(toggle).toBeTruthy()
+    expect(preview.style.display).not.toBe('none')
+    expect(mountProseMirrorOnElement).not.toHaveBeenCalled()
+
+    // Expand → mounts editor, hides preview, relabels to Collapse.
+    toggle.click()
+    await flush()
+    expect(mountProseMirrorOnElement).toHaveBeenCalledOnce()
+    expect(preview.style.display).toBe('none')
+    expect(toggle.textContent).toContain('Collapse')
+
+    // Collapse → preview returns, no re-mount.
+    toggle.click()
+    await flush()
+    expect(preview.style.display).not.toBe('none')
+    expect(toggle.textContent).toContain('Expand')
+
+    // Re-expand → editor stays mounted once (visibility only).
+    toggle.click()
+    await flush()
+    expect(mountProseMirrorOnElement).toHaveBeenCalledOnce()
+    expect(preview.style.display).toBe('none')
+  })
+})

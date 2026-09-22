@@ -47,6 +47,15 @@ export async function activateEditMode(element, { cmsBase, toolbar }) {
     const fieldValue = body[fieldName]
     if (fieldValue === undefined) continue
 
+    // On a listing, the body is shown only as a truncated preview. Don't drop
+    // the full editor into the card straight away — gate it behind an
+    // Expand/Collapse toggle so the card stays compact until you choose to edit
+    // the whole body inline.
+    if (fieldEl.dataset.cmsCollapsible !== undefined) {
+      attachCollapsibleField(fieldEl, { fieldName, fieldValue, docId, cmsBase, toolbar })
+      continue
+    }
+
     await activateField(fieldEl, {
       fieldName,
       fieldValue,
@@ -81,6 +90,60 @@ export async function activateEditMode(element, { cmsBase, toolbar }) {
     `
     element.appendChild(open)
   }
+}
+
+/**
+ * Gate a body field behind an Expand/Collapse toggle on a listing card.
+ *
+ * The card keeps its truncated preview for reading; clicking "Expand" mounts the
+ * full field editor (e.g. ProseMirror) into a hidden host beside the preview and
+ * hides the preview. "Collapse" swaps them back. The editor is mounted once and
+ * only its visibility toggles, so edits survive collapsing and re-expanding.
+ */
+function attachCollapsibleField(preview, { fieldName, fieldValue, docId, cmsBase, toolbar }) {
+  // Empty host the full editor mounts into; sits right after the preview.
+  const host = document.createElement('div')
+  host.dataset.cmsField = fieldName
+  host.style.display = 'none'
+
+  const toggle = document.createElement('button')
+  toggle.type = 'button'
+  toggle.style.cssText = `
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-top: 8px; padding: 4px 10px; border-radius: 999px;
+    background: #1a1a1a; color: #f0f0f0; border: 1px solid #2a2a2a;
+    font: 500 12px/1 -apple-system, system-ui, sans-serif;
+    cursor: pointer;
+  `
+
+  let mounted = false
+  const setLabel = (expanded) => {
+    toggle.textContent = expanded ? 'Collapse ⌃ body' : 'Expand ⌄ body'
+  }
+  setLabel(false)
+
+  toggle.addEventListener('click', async (e) => {
+    // The toggle can sit inside a card link; never navigate on click.
+    e.preventDefault()
+    e.stopPropagation()
+    const expanded = host.style.display !== 'none'
+    if (expanded) {
+      host.style.display = 'none'
+      preview.style.display = ''
+      setLabel(false)
+      return
+    }
+    if (!mounted) {
+      await activateField(host, { fieldName, fieldValue, docId, cmsBase, toolbar })
+      mounted = true
+    }
+    preview.style.display = 'none'
+    host.style.display = ''
+    setLabel(true)
+  })
+
+  preview.after(toggle)
+  toggle.after(host)
 }
 
 export async function activateField(el, { fieldName, fieldValue, docId, cmsBase, toolbar }) {
