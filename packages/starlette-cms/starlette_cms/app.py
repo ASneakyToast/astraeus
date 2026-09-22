@@ -276,6 +276,11 @@ class CMS:
                 allow_origins=self.cors_origins,
                 allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
                 allow_headers=["*"],
+                # PATCH sets these so a client can adopt a server-created
+                # changeset. CORS hides response headers from cross-origin JS
+                # by default, so the embed on the published site could not read
+                # them — only the same-origin shell could. Expose them.
+                expose_headers=["X-Changeset-Id", "X-Changeset-Title"],
                 allow_credentials=True,
             ))
 

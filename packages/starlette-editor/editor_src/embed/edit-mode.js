@@ -2,6 +2,8 @@
  * Activates inline edit mode for a [data-cms-id] element.
  * Fetches the draft body, replaces static content with live editable fields.
  */
+import { getActiveChangesetId, setActiveChangesetId } from '../changeset-store.js'
+
 export async function activateEditMode(element, { cmsBase, toolbar }) {
   const docId = element.dataset.cmsId
 
@@ -122,12 +124,25 @@ export async function activateField(el, { fieldName, fieldValue, docId, cmsBase,
 // ────────────────────────────────────────────────────────────────────────────
 
 async function patchField(cmsBase, docId, fieldName, value) {
-  await fetch(`${cmsBase}/api/documents/${docId}`, {
+  // Carry the active changeset so every edit in a session lands in one
+  // publishable group. changeset-store persists it in localStorage, so it
+  // survives navigating between pages on the site.
+  const headers = { 'Content-Type': 'application/json' }
+  const activeId = getActiveChangesetId()
+  if (activeId) headers['X-Active-Changeset-Id'] = activeId
+
+  const res = await fetch(`${cmsBase}/api/documents/${docId}`, {
     method: 'PATCH',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ body: { [fieldName]: value } }),
   })
+
+  // Adopt a changeset the server auto-created when none was active, so the
+  // rest of the session — and the changeset panel, via the store event —
+  // groups into it too. Header reads are case-insensitive.
+  const created = res.headers.get('X-Changeset-Id')
+  if (created && created !== activeId) setActiveChangesetId(created)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -256,3 +256,73 @@ describe('activateField field-type detection', async () => {
     expect(el.contentEditable === 'inherit' || el.contentEditable === undefined).toBe(true)
   })
 })
+
+// ---------------------------------------------------------------------------
+// patchField — changeset grouping (via the contentEditable input path)
+// ---------------------------------------------------------------------------
+
+describe('inline edits join the active changeset', async () => {
+  const { activateField } = await import('../embed/edit-mode.js')
+  const { getActiveChangesetId, setActiveChangesetId } = await import('../changeset-store.js')
+
+  beforeEach(() => {
+    document.body.innerHTML = ''
+    localStorage.clear()
+    vi.restoreAllMocks()
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  /** Drive one debounced edit and return the fetch mock's call args. */
+  async function editOnce(fetchImpl) {
+    const fetchMock = vi.fn(fetchImpl)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const el = document.createElement('h1')
+    el.textContent = 'Before'
+    document.body.appendChild(el)
+
+    await activateField(el, {
+      fieldName: 'title',
+      fieldValue: 'Before',
+      docId: 'doc-1',
+      cmsBase: 'https://cms.example.com',
+      toolbar: { setState: vi.fn() },
+    })
+
+    el.textContent = 'After'
+    el.dispatchEvent(new Event('input'))
+    await vi.runAllTimersAsync()
+
+    return fetchMock
+  }
+
+  const okResponse = (headers = {}) => ({ ok: true, headers: new Headers(headers) })
+
+  it('sends the active changeset id as a header', async () => {
+    setActiveChangesetId('cs-live')
+    const fetchMock = await editOnce(() => Promise.resolve(okResponse()))
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(init.headers['X-Active-Changeset-Id']).toBe('cs-live')
+  })
+
+  it('omits the header when no changeset is active', async () => {
+    const fetchMock = await editOnce(() => Promise.resolve(okResponse()))
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect('X-Active-Changeset-Id' in init.headers).toBe(false)
+  })
+
+  it('adopts a changeset the server auto-creates', async () => {
+    expect(getActiveChangesetId()).toBeNull()
+    await editOnce(() => Promise.resolve(okResponse({ 'X-Changeset-Id': 'cs-new' })))
+
+    // Now stored, so the panel and later edits group into it.
+    expect(getActiveChangesetId()).toBe('cs-new')
+  })
+})
