@@ -8,13 +8,15 @@
  *   publishing — spinner
  *   published  — "✓ Published — rebuilding site"
  */
+import { getActiveChangesetId } from '../changeset-store.js'
+
 export class EditToolbar {
   constructor({ cmsBase, cmsElements, reloadUrl = null }) {
     this.cmsBase = cmsBase
     this.cmsElements = cmsElements  // all [data-cms-id] elements on page
     this.reloadUrl = reloadUrl      // optional dev-server reload endpoint
     this.state = 'viewing'          // 'viewing' | 'editing' | 'saving' | 'publishing' | 'published'
-    this.activeElement = null       // currently-editing [data-cms-id] element
+    this.activeElements = []        // every [data-cms-id] activated for editing
     this.el = null                  // the toolbar DOM element
     this.changesetPanel = null      // set externally by index.js after ChangesetPanel is created
     this._chatPanel = null          // set via setChatPanel()
@@ -122,30 +124,49 @@ export class EditToolbar {
   }
 
   async _startEditing() {
-    // Import and activate edit mode for the first cms element
-    // (multi-element selection is a future enhancement)
-    const el = this.cmsElements[0]
+    // Activate every annotated document on the page, so a listing edits as a
+    // whole rather than only its first entry. Each edit joins one changeset
+    // (see edit-mode patchField), so the session publishes together.
     const { activateEditMode } = await import('./edit-mode.js')
-    this.activeElement = el
-    await activateEditMode(el, { cmsBase: this.cmsBase, toolbar: this })
+    this.activeElements = [...this.cmsElements]
+    for (const el of this.activeElements) {
+      await activateEditMode(el, { cmsBase: this.cmsBase, toolbar: this })
+    }
     this.setState('editing')
   }
 
   async _discardDraft() {
-    if (!this.activeElement) return
-    const docId = this.activeElement.dataset.cmsId
-    await fetch(`${this.cmsBase}/api/documents/${docId}/discard-draft`, {
-      method: 'POST',
-      credentials: 'include',
-    })
+    if (!this.activeElements.length) return
+    // Discard every edited document's draft, not just one — the session
+    // spanned all of them.
+    await Promise.all(
+      this.activeElements.map(el =>
+        fetch(`${this.cmsBase}/api/documents/${el.dataset.cmsId}/discard-draft`, {
+          method: 'POST',
+          credentials: 'include',
+        }),
+      ),
+    )
     // Reload to get the published state
     window.location.reload()
   }
 
   async _publish() {
-    if (!this.activeElement) return
+    // A session's edits are grouped into one changeset, so publishing goes
+    // through the changeset panel's Review & Publish — which ships every
+    // edited document at once and fires a single rebuild. Publishing one doc
+    // here would strand the rest of the session.
+    const changesetId = getActiveChangesetId()
+    if (changesetId && this.changesetPanel) {
+      await this.changesetPanel.reviewAndPublish(changesetId)
+      return
+    }
+
+    // Fallback: no changeset (e.g. a single edit with grouping unavailable) —
+    // publish the one document directly.
+    if (!this.activeElements.length) return
     this.setState('publishing')
-    const docId = this.activeElement.dataset.cmsId
+    const docId = this.activeElements[0].dataset.cmsId
     await fetch(`${this.cmsBase}/api/documents/${docId}/publish`, {
       method: 'POST',
       credentials: 'include',

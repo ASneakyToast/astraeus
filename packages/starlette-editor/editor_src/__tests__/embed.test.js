@@ -119,7 +119,8 @@ describe('EditToolbar', async () => {
     expect(el.textContent).toContain('Edit draft')
   })
 
-  it('_publish() calls fetch with correct URL and sets state to published', async () => {
+  it('_publish() with no changeset publishes the one active document', async () => {
+    localStorage.clear()  // no active changeset → single-doc fallback
     const fetchMock = vi.fn().mockResolvedValue({ ok: true })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -127,7 +128,7 @@ describe('EditToolbar', async () => {
     const mockEl = { dataset: { cmsId: 'doc-123' } }
     const toolbar = new EditToolbar({ cmsBase, cmsElements: [mockEl] })
     toolbar.mount()
-    toolbar.activeElement = mockEl
+    toolbar.activeElements = [mockEl]
     toolbar.setState('editing')
 
     await toolbar._publish()
@@ -139,7 +140,28 @@ describe('EditToolbar', async () => {
     expect(toolbar.state).toBe('published')
   })
 
-  it('_discardDraft() calls fetch and reloads', async () => {
+  it('_publish() with an active changeset routes to Review & Publish', async () => {
+    const { setActiveChangesetId } = await import('../changeset-store.js')
+    setActiveChangesetId('cs-session')
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const cmsBase = 'https://cms.example.com'
+    const toolbar = new EditToolbar({ cmsBase, cmsElements: [{ dataset: { cmsId: 'd1' } }] })
+    toolbar.mount()
+    toolbar.activeElements = [{ dataset: { cmsId: 'd1' } }]
+    const reviewAndPublish = vi.fn().mockResolvedValue(undefined)
+    toolbar.changesetPanel = { reviewAndPublish }
+
+    await toolbar._publish()
+
+    // Publishes the whole session, not one doc.
+    expect(reviewAndPublish).toHaveBeenCalledWith('cs-session')
+    expect(fetchMock).not.toHaveBeenCalled()
+    localStorage.clear()
+  })
+
+  it('_discardDraft() discards every active document and reloads', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true })
     vi.stubGlobal('fetch', fetchMock)
     const reloadMock = vi.fn()
@@ -149,17 +171,19 @@ describe('EditToolbar', async () => {
     })
 
     const cmsBase = 'https://cms.example.com'
-    const mockEl = { dataset: { cmsId: 'doc-456' } }
-    const toolbar = new EditToolbar({ cmsBase, cmsElements: [mockEl] })
+    const els = [{ dataset: { cmsId: 'doc-456' } }, { dataset: { cmsId: 'doc-789' } }]
+    const toolbar = new EditToolbar({ cmsBase, cmsElements: els })
     toolbar.mount()
-    toolbar.activeElement = mockEl
+    toolbar.activeElements = els
 
     await toolbar._discardDraft()
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      `${cmsBase}/api/documents/doc-456/discard-draft`,
-      expect.objectContaining({ method: 'POST', credentials: 'include' })
-    )
+    for (const id of ['doc-456', 'doc-789']) {
+      expect(fetchMock).toHaveBeenCalledWith(
+        `${cmsBase}/api/documents/${id}/discard-draft`,
+        expect.objectContaining({ method: 'POST', credentials: 'include' })
+      )
+    }
     expect(reloadMock).toHaveBeenCalled()
   })
 })

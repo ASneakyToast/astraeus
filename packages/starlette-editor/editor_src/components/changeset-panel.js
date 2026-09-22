@@ -964,6 +964,17 @@ export class ChangesetPanel {
     if (existing) existing.remove();
   }
 
+  /**
+   * Open Review & Publish for a changeset. Public entry for other surfaces
+   * (e.g. the embed toolbar's Publish) to route a whole session through the
+   * same review flow as the panel's own publish button.
+   *
+   * @param {string} changesetId
+   */
+  async reviewAndPublish(changesetId) {
+    await this._handlePublish(changesetId);
+  }
+
   async _handlePublish(changesetId) {
     try {
       const diffData = await fetchChangesetDiff(changesetId);
