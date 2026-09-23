@@ -22,6 +22,7 @@ from starlette.websockets import WebSocket
 
 from starlette_cms.api.changesets import link_document_to_changeset
 from starlette_cms.auth import check_session_auth
+from starlette_cms.collab import collab_room
 from starlette_cms.tables import CMSDocument
 
 if TYPE_CHECKING:
@@ -80,10 +81,19 @@ def make_collab_routes(cms: CMS) -> list:
     async def collab_ws(websocket: WebSocket) -> None:
         """Handle a ProseMirror collab WebSocket connection."""
         document_id: str = websocket.path_params["document_id"]
+        # The rich-text field being edited. Required: the editor only ever edits
+        # one field, and without knowing which, an accepted step would overwrite
+        # the whole document body with that field's doc. Rejecting field-less
+        # connections also stops a stale cached client from doing exactly that.
+        field = websocket.query_params.get("field")
 
         # Auth check before accepting
         if not _check_ws_auth(websocket, cms):
             await websocket.close(code=4401)
+            return
+
+        if not field:
+            await websocket.close(code=4400)
             return
 
         await websocket.accept()
@@ -92,10 +102,12 @@ def make_collab_routes(cms: CMS) -> list:
         # Distinct from the client-generated clientID in step messages.
         client_id = str(uuid.uuid4())
         manager = cms.collab_manager
+        # Connections, peers and broadcasts are scoped to this field's session.
+        room = collab_room(document_id, field)
 
-        # Load or create the authority for this document
+        # Load or create the authority for this document's field
         try:
-            authority = await manager.get_or_create_authority(document_id)
+            authority = await manager.get_or_create_authority(document_id, field)
         except KeyError:
             await websocket.send_json({"type": "error", "message": "Document not found"})
             await websocket.close(code=4404)
@@ -113,11 +125,11 @@ def make_collab_routes(cms: CMS) -> list:
         linked_cs: str | None = None
 
         # Register connection and bind the server-assigned client_id
-        await manager.add_connection(document_id, websocket)
+        await manager.add_connection(room, websocket)
         manager._bind_client(websocket, client_id)
 
         # Send initial state including current peer list
-        peers = manager.get_peers_for_doc(document_id)
+        peers = manager.get_peers_for_doc(room)
         await websocket.send_json(
             {
                 "type": "init",
@@ -155,7 +167,7 @@ def make_collab_routes(cms: CMS) -> list:
             manager.register_peer(client_id, display, peer_type)
             if send_peer_joined:
                 await manager.broadcast_peer_event(
-                    document_id,
+                    room,
                     {
                         "type": "peer_joined",
                         "peer": {
@@ -184,7 +196,7 @@ def make_collab_routes(cms: CMS) -> list:
                     p_type = data.get("client_type", "human")
                     manager.register_peer(client_id, p_display, p_type)
                     await manager.broadcast_peer_event(
-                        document_id,
+                        room,
                         {
                             "type": "peer_joined",
                             "peer": {
@@ -198,14 +210,14 @@ def make_collab_routes(cms: CMS) -> list:
 
                 elif msg_type == "editing":
                     await manager.broadcast_peer_event(
-                        document_id,
+                        room,
                         {"type": "editing", "client_id": client_id, "doc_id": document_id},
                         exclude=websocket,
                     )
 
                 elif msg_type == "editing_done":
                     await manager.broadcast_peer_event(
-                        document_id,
+                        room,
                         {"type": "editing_done", "client_id": client_id},
                         exclude=websocket,
                     )
@@ -261,7 +273,7 @@ def make_collab_routes(cms: CMS) -> list:
                         # Broadcast to ALL connections (including sender — sender
                         # uses this as its confirmation receipt)
                         await manager.broadcast(
-                            document_id,
+                            room,
                             {
                                 "type": "steps",
                                 "steps": result.steps,
@@ -281,13 +293,13 @@ def make_collab_routes(cms: CMS) -> list:
             pass  # disconnect / receive error
         finally:
             manager.unregister_peer(client_id)
-            await manager.remove_connection(document_id, websocket)
+            await manager.remove_connection(room, websocket)
             # Broadcast peer_left to remaining connections after removal
             await manager.broadcast_peer_event(
-                document_id,
+                room,
                 {"type": "peer_left", "client_id": client_id},
             )
-            await manager.gc_if_idle(document_id)
+            await manager.gc_if_idle(room)
 
     # ------------------------------------------------------------------
     # Document-events WebSocket — WS /api/events

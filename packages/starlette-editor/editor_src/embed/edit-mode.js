@@ -259,11 +259,7 @@ async function patchField(cmsBase, docId, fieldName, value, toolbar) {
   if (!res.ok) {
     // A failed save was previously swallowed, so the editor looked fine right
     // up until a reload wiped the un-persisted edits. Make it visible.
-    toolbar?.setSaveError?.(
-      res.status === 401
-        ? '⚠ Not saved — session expired, log in again'
-        : `⚠ Not saved — server error ${res.status}`,
-    )
+    toolbar?.setSaveError?.(await _saveErrorMessage(res))
     return
   }
 
@@ -274,6 +270,23 @@ async function patchField(cmsBase, docId, fieldName, value, toolbar) {
   // groups into it too. Header reads are case-insensitive.
   const created = res.headers.get('X-Changeset-Id')
   if (created && created !== activeId) setActiveChangesetId(created)
+}
+
+/**
+ * Turn a failed PATCH response into a toolbar message that says what to do.
+ * A 422 names the failing field (from the validation `detail`), since a bare
+ * status code gives no clue which part of the document is wrong.
+ */
+async function _saveErrorMessage(res) {
+  if (res.status === 401) return '⚠ Not saved — session expired, log in again'
+
+  if (res.status === 422) {
+    const data = await res.json().catch(() => null)
+    const field = data?.detail?.[0]?.loc?.at(-1) ?? data?.field
+    if (field) return `⚠ Not saved — "${field}" is invalid`
+  }
+
+  return `⚠ Not saved — server error ${res.status}`
 }
 
 // ────────────────────────────────────────────────────────────────────────────

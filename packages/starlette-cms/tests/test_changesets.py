@@ -335,6 +335,55 @@ async def test_publish_changeset_promotes_draft_body(cs_cms: CMS, cs_client: htt
 
 
 # ---------------------------------------------------------------------------
+# Test 13b/13c: publish refuses a draft that fails the document model.
+#
+# Publishing promotes a draft verbatim. A draft no write path validated — the
+# collab socket used to write a bare rich-text doc over the whole body — must
+# not go live: the publish is refused and nothing changes.
+# ---------------------------------------------------------------------------
+
+# The shape the old collab bug left behind: a bare rich-text doc, no title.
+_CORRUPT_DRAFT = {"type": "doc", "content": [{"type": "paragraph"}]}
+
+
+async def test_publish_changeset_refuses_invalid_draft(cs_client: httpx.AsyncClient) -> None:
+    doc_id = await _create_doc(cs_client)
+    before = (await CMSDocument.select().where(CMSDocument.id == doc_id).run())[0]["body"]
+    await (
+        CMSDocument.update({"draft_body": json.dumps(_CORRUPT_DRAFT)})
+        .where(CMSDocument.id == doc_id)
+        .run()
+    )
+
+    cs_id = (await cs_client.post("/api/changesets", json={"title": "CS-Invalid"})).json()["id"]
+    await cs_client.post(f"/api/changesets/{cs_id}/documents/{doc_id}")
+    resp = await cs_client.post(f"/api/changesets/{cs_id}/publish")
+
+    assert resp.status_code == 400
+    assert "title" in resp.json()["error"]
+    after = (await CMSDocument.select().where(CMSDocument.id == doc_id).run())[0]
+    assert after["body"] == before
+    changeset = (await CMSChangeset.select().where(CMSChangeset.id == cs_id).run())[0]
+    assert changeset["status"] == "open"
+
+
+async def test_publish_document_refuses_invalid_draft(cs_client: httpx.AsyncClient) -> None:
+    doc_id = await _create_doc(cs_client)
+    before = (await CMSDocument.select().where(CMSDocument.id == doc_id).run())[0]["body"]
+    await (
+        CMSDocument.update({"draft_body": json.dumps(_CORRUPT_DRAFT)})
+        .where(CMSDocument.id == doc_id)
+        .run()
+    )
+
+    resp = await cs_client.post(f"/api/documents/{doc_id}/publish")
+
+    assert resp.status_code == 422
+    after = (await CMSDocument.select().where(CMSDocument.id == doc_id).run())[0]
+    assert after["body"] == before
+
+
+# ---------------------------------------------------------------------------
 # Test 14: publish fires exactly ONE "changeset.published" webhook
 # ---------------------------------------------------------------------------
 

@@ -110,12 +110,32 @@ describe('CollabConnection._wsUrl()', () => {
       view,
       schema: {},
       documentId: 'doc-1',
+      field: 'body_markdown',
       cmsBase: 'https://cms.example.com',
       initialVersion: 0,
       toolbar: makeToolbar(),
       clientID: 'abc',
     })
-    expect(conn._wsUrl()).toBe('wss://cms.example.com/api/documents/doc-1/collab')
+    expect(conn._wsUrl()).toBe('wss://cms.example.com/api/documents/doc-1/collab?field=body_markdown')
+    conn.destroy()
+  })
+
+  it('carries the api key alongside the field for the shell', () => {
+    const view = makeMinimalView()
+    const conn = new CollabConnection({
+      view,
+      schema: {},
+      documentId: 'doc-1',
+      field: 'body_markdown',
+      cmsBase: 'https://cms.example.com',
+      initialVersion: 0,
+      toolbar: makeToolbar(),
+      clientID: 'abc',
+      apiKey: 'k1',
+    })
+    expect(conn._wsUrl()).toBe(
+      'wss://cms.example.com/api/documents/doc-1/collab?field=body_markdown&api_key=k1'
+    )
     conn.destroy()
   })
 
@@ -125,12 +145,13 @@ describe('CollabConnection._wsUrl()', () => {
       view,
       schema: {},
       documentId: 'doc-42',
+      field: 'body_markdown',
       cmsBase: 'http://localhost:8000',
       initialVersion: 0,
       toolbar: makeToolbar(),
       clientID: 'abc',
     })
-    expect(conn._wsUrl()).toBe('ws://localhost:8000/api/documents/doc-42/collab')
+    expect(conn._wsUrl()).toBe('ws://localhost:8000/api/documents/doc-42/collab?field=body_markdown')
     conn.destroy()
   })
 })
@@ -142,6 +163,7 @@ describe('CollabConnection._connect()', () => {
       view,
       schema: {},
       documentId: 'doc-99',
+      field: 'body_markdown',
       cmsBase: 'https://cms.example.com',
       initialVersion: 0,
       toolbar: makeToolbar(),
@@ -150,7 +172,7 @@ describe('CollabConnection._connect()', () => {
     // A MockWebSocket instance should have been created
     expect(MockWebSocket.instances.length).toBe(1)
     expect(MockWebSocket.instances[0].url).toBe(
-      'wss://cms.example.com/api/documents/doc-99/collab'
+      'wss://cms.example.com/api/documents/doc-99/collab?field=body_markdown'
     )
   })
 })

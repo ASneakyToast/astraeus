@@ -61,6 +61,7 @@ export async function mountProseMirrorOnElement(el, { doc, docId, fieldName, cms
     view,
     schema: pmSchema,
     documentId: docId,
+    field: fieldName,
     cmsBase,
     initialVersion: 0,
     toolbar,
