@@ -72,7 +72,7 @@ def cms_with_doc():
 
 def test_init_message_has_peers_array(cms_with_doc):
     client, doc_id = cms_with_doc
-    with client.websocket_connect(f"/api/documents/{doc_id}/collab") as ws:
+    with client.websocket_connect(f"/api/documents/{doc_id}/collab?field=body") as ws:
         data = ws.receive_json()
     assert data["type"] == "init"
     assert "peers" in data
@@ -86,7 +86,7 @@ def test_init_message_has_peers_array(cms_with_doc):
 
 def test_peer_joined_broadcast(cms_with_doc):
     client, doc_id = cms_with_doc
-    url = f"/api/documents/{doc_id}/collab"
+    url = f"/api/documents/{doc_id}/collab?field=body"
 
     with client.websocket_connect(url) as ws_a:
         ws_a.receive_json()  # consume init for A
@@ -113,7 +113,7 @@ def test_peer_joined_broadcast(cms_with_doc):
 
 def test_peer_left_on_disconnect(cms_with_doc):
     client, doc_id = cms_with_doc
-    url = f"/api/documents/{doc_id}/collab"
+    url = f"/api/documents/{doc_id}/collab?field=body"
 
     with client.websocket_connect(url) as ws_a:
         ws_a.receive_json()  # consume init for A
@@ -141,7 +141,7 @@ def test_peer_left_on_disconnect(cms_with_doc):
 
 def test_ai_peer_type_in_peer_joined(cms_with_doc):
     client, doc_id = cms_with_doc
-    url = f"/api/documents/{doc_id}/collab"
+    url = f"/api/documents/{doc_id}/collab?field=body"
 
     with client.websocket_connect(url) as ws_a:
         ws_a.receive_json()  # consume init for A
@@ -168,7 +168,7 @@ def test_ai_peer_type_in_peer_joined(cms_with_doc):
 
 def test_editing_message_broadcast(cms_with_doc):
     client, doc_id = cms_with_doc
-    url = f"/api/documents/{doc_id}/collab"
+    url = f"/api/documents/{doc_id}/collab?field=body"
     step = {"stepType": "replace", "from": 0, "to": 1, "slice": {"content": []}}
 
     with client.websocket_connect(url) as ws_a:

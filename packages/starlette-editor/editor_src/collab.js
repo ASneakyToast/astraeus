@@ -22,10 +22,11 @@ import { getActiveChangesetId, setActiveChangesetId } from './changeset-store.js
 export { collab }
 
 export class CollabConnection {
-  constructor({ view, schema, documentId, cmsBase, initialVersion, toolbar, clientID, apiKey = null }) {
+  constructor({ view, schema, documentId, field, cmsBase, initialVersion, toolbar, clientID, apiKey = null }) {
     this.view = view              // EditorView instance
     this.schema = schema          // ProseMirror Schema
     this.documentId = documentId
+    this.field = field            // rich-text field being edited, e.g. 'body_markdown'
     this.cmsBase = cmsBase
     this.version = initialVersion
     this.toolbar = toolbar
@@ -64,8 +65,11 @@ export class CollabConnection {
   _wsUrl() {
     // Convert https://cms.example.com → wss://cms.example.com
     const base = this.cmsBase.replace(/^https?/, match => match === 'https' ? 'wss' : 'ws')
-    const url = `${base}/api/documents/${this.documentId}/collab`
-    return this.apiKey ? `${url}?api_key=${this.apiKey}` : url
+    // The server scopes the session to this field; without it an edit would
+    // overwrite the whole document body, so it rejects field-less connections.
+    const params = new URLSearchParams({ field: this.field })
+    if (this.apiKey) params.set('api_key', this.apiKey)
+    return `${base}/api/documents/${this.documentId}/collab?${params}`
   }
 
   _connect() {

@@ -17,7 +17,11 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from nanoid import generate as nanoid_generate
-from starlette_cms.api.changesets import _snapshot_document_version, link_document_to_changeset
+from starlette_cms.api.changesets import (
+    _snapshot_document_version,
+    body_validation_error,
+    link_document_to_changeset,
+)
 from starlette_cms.api.webhooks import fire_event
 from starlette_cms.auth import require_auth
 from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSDocumentVersion
@@ -846,6 +850,16 @@ def make_document_routes(cms: CMS) -> list[Route]:
                     operation="publish",
                 )
                 draft_body_raw = None
+
+        # Never promote a draft that fails the document model — publishing is
+        # verbatim, so this is the last chance to stop a broken body going live.
+        if draft_body_raw is not None:
+            error = body_validation_error(cms, doc_type, draft_body_raw)
+            if error is not None:
+                return JSONResponse(
+                    {"error": f"Draft can't be published — {error}"},
+                    status_code=422,
+                )
 
         # Snapshot current body before overwriting
         current_body = row.get("body")

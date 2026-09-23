@@ -220,15 +220,18 @@ export class EditToolbar {
 
     this.setState('publishing')
     let ok = false
+    let reason = ''
     try {
       const res = await fetch(url, { method: 'POST', credentials: 'include' })
       ok = res.ok
+      // The server refuses to publish an invalid draft and says which one.
+      if (!ok) reason = (await res.json().catch(() => null))?.error ?? ''
     } catch { ok = false }
 
     if (!ok) {
       // Back to editing so the drafts aren't lost and they can retry.
       this.setState('editing')
-      window.alert('Publish failed — your draft is safe. Please try again.')
+      window.alert(`Publish failed — nothing was published.${reason ? `\n\n${reason}` : ''}`)
       return
     }
 

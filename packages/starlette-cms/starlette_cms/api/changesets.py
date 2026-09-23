@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 from nanoid import generate
+from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
@@ -221,6 +222,22 @@ async def _publish_changeset_logic(changeset_id: str, cms: "CMS") -> dict[str, A
     )
     doc_ids = [r["document_id"] for r in join_rows]
 
+    # Validate every draft before publishing anything: a malformed body must
+    # never go live, and one bad document must not leave the changeset
+    # half-published. The HTTP endpoint turns this ValueError into a 400.
+    for doc_id in doc_ids:
+        doc_rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
+        if not doc_rows or doc_rows[0].get("draft_deleted") is True:
+            continue
+        draft = doc_rows[0].get("draft_body")
+        if draft is None:
+            continue
+        draft = json.loads(draft) if isinstance(draft, str) else draft
+        error = body_validation_error(cms, doc_rows[0]["doc_type"], draft)
+        if error is not None:
+            name = doc_rows[0].get("slug") or doc_id
+            raise ValueError(f"{name!r} can't be published — {error}")
+
     # Publish each document, promoting draft_body if present
     for doc_id in doc_ids:
         doc_rows = await CMSDocument.select().where(CMSDocument.id == doc_id).run()
@@ -366,6 +383,29 @@ def _extract_text(pm_doc: dict[str, Any]) -> str:
 
     _walk(pm_doc)
     return "".join(parts).strip()
+
+
+def body_validation_error(cms: CMS, doc_type: str, body: dict) -> str | None:
+    """Return a short message if *body* fails its document model, else ``None``.
+
+    Publishing promotes a draft verbatim, so without this a draft that no write
+    path validated (e.g. one the collab socket produced) could go live broken.
+    Uses the same model lookup as the document PATCH handler. Doc types with no
+    registered model are not validated.
+    """
+    doc_model = cms._document_types.get(doc_type)
+    if doc_model is None and doc_type in cms.registry:
+        doc_model = cms.registry.get(doc_type)
+    if doc_model is None:
+        return None
+
+    try:
+        doc_model.model_validate(body)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        location = ".".join(str(part) for part in first.get("loc", ())) or "body"
+        return f"{location}: {first.get('msg')}"
+    return None
 
 
 # Doc types that never participate in changesets (chat is ephemeral).

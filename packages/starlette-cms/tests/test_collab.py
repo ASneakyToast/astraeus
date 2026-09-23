@@ -139,7 +139,7 @@ async def async_cms_with_doc():
 
 def test_ws_connect_receives_init(cms_with_doc):
     client, doc_id = cms_with_doc
-    with client.websocket_connect(f"/api/documents/{doc_id}/collab") as ws:
+    with client.websocket_connect(f"/api/documents/{doc_id}/collab?field=body") as ws:
         data = ws.receive_json()
         assert data["type"] == "init"
         assert "doc" in data
@@ -156,7 +156,7 @@ def test_ws_send_steps_accepted(cms_with_doc):
     step = {"stepType": "replace", "from": 0, "to": 1, "slice": {"content": []}}
     updated_doc = {"title": "Updated"}
 
-    with client.websocket_connect(f"/api/documents/{doc_id}/collab") as ws:
+    with client.websocket_connect(f"/api/documents/{doc_id}/collab?field=body") as ws:
         ws.receive_json()  # init
 
         ws.send_json(
@@ -187,8 +187,8 @@ async def test_draft_updated_in_db(async_cms_with_doc):
     # Seed the authority via a WebSocket-like direct call
     from starlette_cms.tables import CMSDocument
 
-    authority = await cms.collab_manager.get_or_create_authority(doc_id)
-    updated_doc = {"title": "After step"}
+    authority = await cms.collab_manager.get_or_create_authority(doc_id, "body")
+    updated_doc = {"type": "doc", "content": [{"type": "paragraph"}]}
     base_version = authority._version
     async with authority._lock:
         result = authority.apply_steps(
@@ -213,7 +213,11 @@ async def test_draft_updated_in_db(async_cms_with_doc):
     assert rows[0]["draft_version"] == 1
     stored = rows[0]["draft_body"]
     parsed = json.loads(stored) if isinstance(stored, str) else stored
-    assert parsed == updated_doc
+    # The edited field is merged into the body — sibling fields survive. This
+    # used to assert the field doc *replaced* the whole body, which is the bug
+    # that wiped a blog post's title/description on its first body edit.
+    assert parsed["body"] == updated_doc
+    assert parsed["title"] == "Async"
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +229,7 @@ async def test_steps_persisted_in_db(async_cms_with_doc):
     aclient, doc_id, cms = async_cms_with_doc
     from starlette_cms.tables import CMSStep
 
-    authority = await cms.collab_manager.get_or_create_authority(doc_id)
+    authority = await cms.collab_manager.get_or_create_authority(doc_id, "body")
     step = {"stepType": "replace", "from": 0, "to": 1, "slice": {}}
     base_version = authority._version
 
@@ -250,7 +254,7 @@ def test_ws_version_mismatch_rejected(cms_with_doc):
     client, doc_id = cms_with_doc
     step = {"stepType": "replace", "from": 0, "to": 1, "slice": {}}
 
-    with client.websocket_connect(f"/api/documents/{doc_id}/collab") as ws:
+    with client.websocket_connect(f"/api/documents/{doc_id}/collab?field=body") as ws:
         ws.receive_json()  # init
 
         ws.send_json(
@@ -277,10 +281,10 @@ def test_ws_two_client_broadcast(cms_with_doc):
     client, doc_id = cms_with_doc
     step = {"stepType": "replace", "from": 0, "to": 1, "slice": {}}
 
-    with client.websocket_connect(f"/api/documents/{doc_id}/collab") as ws_a:
+    with client.websocket_connect(f"/api/documents/{doc_id}/collab?field=body") as ws_a:
         ws_a.receive_json()  # init for A
 
-        with client.websocket_connect(f"/api/documents/{doc_id}/collab") as ws_b:
+        with client.websocket_connect(f"/api/documents/{doc_id}/collab?field=body") as ws_b:
             ws_b.receive_json()  # init for B
 
             ws_a.send_json(
@@ -312,7 +316,7 @@ def test_ws_two_client_broadcast(cms_with_doc):
 
 def test_ws_ping_pong(cms_with_doc):
     client, doc_id = cms_with_doc
-    with client.websocket_connect(f"/api/documents/{doc_id}/collab") as ws:
+    with client.websocket_connect(f"/api/documents/{doc_id}/collab?field=body") as ws:
         ws.receive_json()  # init
         ws.send_json({"type": "ping"})
         msg = ws.receive_json()
@@ -326,7 +330,7 @@ def test_ws_ping_pong(cms_with_doc):
 
 def test_ws_document_not_found(cms_with_doc):
     client, _ = cms_with_doc
-    with client.websocket_connect("/api/documents/nonexistent-id/collab") as ws:
+    with client.websocket_connect("/api/documents/nonexistent-id/collab?field=body") as ws:
         msg = ws.receive_json()
         assert msg["type"] == "error"
         assert "not found" in msg["message"].lower()
@@ -339,7 +343,7 @@ def test_ws_document_not_found(cms_with_doc):
 
 def test_ws_auth_none_allows_unauthenticated(cms_with_doc):
     client, doc_id = cms_with_doc
-    with client.websocket_connect(f"/api/documents/{doc_id}/collab") as ws:
+    with client.websocket_connect(f"/api/documents/{doc_id}/collab?field=body") as ws:
         data = ws.receive_json()
     assert data["type"] == "init"
 
@@ -357,7 +361,7 @@ def test_ws_auth_apikey_wrong_key_rejected(authed_cms_with_doc):
 
     try:
         with client.websocket_connect(
-            f"/api/documents/{doc_id}/collab?api_key=wrong-key"
+            f"/api/documents/{doc_id}/collab?field=body&api_key=wrong-key"
         ) as ws:
             ws.receive_json()
         # If we get here, auth was not enforced
@@ -374,7 +378,7 @@ def test_ws_auth_apikey_wrong_key_rejected(authed_cms_with_doc):
 def test_ws_auth_apikey_correct_key_accepted(authed_cms_with_doc):
     client, doc_id, _ = authed_cms_with_doc
     with client.websocket_connect(
-        f"/api/documents/{doc_id}/collab?api_key=test-secret"
+        f"/api/documents/{doc_id}/collab?field=body&api_key=test-secret"
     ) as ws:
         data = ws.receive_json()
     assert data["type"] == "init"
@@ -422,7 +426,7 @@ def test_ws_auth_session_cookie_accepted():
             token = generate_session_token("admin", secret)
             # No api_key in the URL — the cookie alone must authorise the socket.
             with client.websocket_connect(
-                f"/api/documents/{doc_id}/collab",
+                f"/api/documents/{doc_id}/collab?field=body",
                 headers={"Cookie": f"cms_session={token}"},
             ) as ws:
                 data = ws.receive_json()
@@ -433,6 +437,22 @@ def test_ws_auth_session_cookie_accepted():
             pass
 
     assert data["type"] == "init"
+
+
+# ---------------------------------------------------------------------------
+# Test 11c: No ?field= → connection refused.
+#
+# Without the field the server can't know where the edit belongs, and the old
+# behaviour (persist the field doc as the whole body) destroyed documents. A
+# stale cached client that predates the field param must be refused outright.
+# ---------------------------------------------------------------------------
+
+
+def test_ws_without_field_rejected(cms_with_doc):
+    client, doc_id = cms_with_doc
+    with pytest.raises(Exception):
+        with client.websocket_connect(f"/api/documents/{doc_id}/collab") as ws:
+            ws.receive_json()
 
 
 # ---------------------------------------------------------------------------

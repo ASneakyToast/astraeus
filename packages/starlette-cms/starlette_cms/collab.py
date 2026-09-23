@@ -2,12 +2,13 @@
 Collaborative editing authority for starlette-cms.
 
 Implements the server side of the prosemirror-collab protocol.
-One CollabAuthority instance per document manages connected clients.
+One CollabAuthority instance per (document, rich-text field) manages connected
+clients.
 
 Usage::
 
     manager = CollabManager()
-    authority = await manager.get_or_create_authority(document_id)
+    authority = await manager.get_or_create_authority(document_id, "body_markdown")
     async with authority._lock:
         result = authority.apply_steps(steps, client_id, client_version, updated_doc)
 """
@@ -25,6 +26,23 @@ if TYPE_CHECKING:
     from starlette.websockets import WebSocket
 
 
+def collab_room(document_id: str, field: str) -> str:
+    """Key for one rich-text field's collab session: authority, connections, peers.
+
+    Scoping by field keeps two editors on the same document from receiving each
+    other's steps (which would apply one field's edits to another's doc).
+    """
+    return f"{document_id}:{field}"
+
+
+def _effective_body(row: dict) -> dict:
+    """Return a document row's draft body if it has one, else its published body."""
+    raw = row.get("draft_body")
+    if raw is None:
+        raw = row.get("body", "{}")
+    return (json.loads(raw) if isinstance(raw, str) else raw) or {}
+
+
 @dataclass
 class CollabResult:
     """Result of applying a batch of ProseMirror steps to the authority."""
@@ -37,19 +55,26 @@ class CollabResult:
 
 class CollabAuthority:
     """
-    Server-side authority for a single document's collaborative editing state.
+    Server-side authority for one rich-text field of one document.
 
-    Holds the current authoritative document state and version counter.
+    Holds the field's authoritative ProseMirror doc and version counter.
     ``apply_steps`` must be called while the caller holds ``self._lock``.
 
+    The editor only ever edits a single field (e.g. ``body_markdown``), so the
+    authority is scoped to that field. It used to hold the whole document body
+    and persist the client's field doc *as* the body, which wiped every sibling
+    field (title, description, …) on the first body edit.
+
     :param document_id: The CMS document ID this authority manages.
-    :param draft_body: Current authoritative document state (dict).
+    :param field: The rich-text body field this authority edits.
+    :param field_doc: The field's current ProseMirror doc (dict), or ``None``.
     :param version: Current version number (incremented per accepted step).
     """
 
-    def __init__(self, document_id: str, draft_body: dict, version: int) -> None:
+    def __init__(self, document_id: str, field: str, field_doc: dict | None, version: int) -> None:
         self.document_id = document_id
-        self._doc = draft_body
+        self.field = field
+        self._doc = field_doc
         self._version = version
         self._lock = asyncio.Lock()
         self._last_activity = time.monotonic()
@@ -119,9 +144,22 @@ class CollabAuthority:
         ]
         await CMSStep.insert(*step_rows).run()
 
+        # Merge this field into the current body instead of replacing the body.
+        # Re-read rather than caching the body, so concurrent PATCH edits to
+        # sibling fields (title, description, …) are not overwritten.
+        rows = (
+            await CMSDocument.select(CMSDocument.body, CMSDocument.draft_body)
+            .where(CMSDocument.id == self.document_id)
+            .limit(1)
+            .run()
+        )
+        if not rows:
+            return
+        merged_body = {**_effective_body(rows[0]), self.field: self._doc}
+
         await CMSDocument.update(
             {
-                CMSDocument.draft_body: json.dumps(self._doc),
+                CMSDocument.draft_body: json.dumps(merged_body),
                 CMSDocument.draft_version: self._version,
             }
         ).where(CMSDocument.id == self.document_id).run()
@@ -143,18 +181,22 @@ class CollabManager:
         self._ws_to_client_id: dict = {}  # WebSocket → server-assigned client_id
         self._manager_lock = asyncio.Lock()
 
-    async def get_or_create_authority(self, document_id: str) -> CollabAuthority:
-        """Return the existing authority for *document_id*, or load one from DB.
+    async def get_or_create_authority(self, document_id: str, field: str) -> CollabAuthority:
+        """Return the authority for *field* of *document_id*, loading it if needed.
+
+        Authorities are keyed by :func:`collab_room` — one per (document, field),
+        matching the room key the WebSocket handler uses for connections.
 
         :raises KeyError: if no CMSDocument with *document_id* exists.
         """
-        if document_id in self._authorities:
-            return self._authorities[document_id]
+        room = collab_room(document_id, field)
+        if room in self._authorities:
+            return self._authorities[room]
 
         async with self._manager_lock:
             # Re-check inside the lock
-            if document_id in self._authorities:
-                return self._authorities[document_id]
+            if room in self._authorities:
+                return self._authorities[room]
 
             from starlette_cms.tables import CMSDocument
 
@@ -173,16 +215,10 @@ class CollabManager:
                 raise KeyError(document_id)
 
             row = rows[0]
-            raw_draft = row.get("draft_body")
-            if raw_draft is not None:
-                draft_body = json.loads(raw_draft) if isinstance(raw_draft, str) else raw_draft
-            else:
-                raw_body = row.get("body", "{}")
-                draft_body = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
-
+            field_doc = _effective_body(row).get(field)
             version = row.get("draft_version") or 0
-            authority = CollabAuthority(document_id, draft_body, version)
-            self._authorities[document_id] = authority
+            authority = CollabAuthority(document_id, field, field_doc, version)
+            self._authorities[room] = authority
             return authority
 
     async def add_connection(self, document_id: str, ws: WebSocket) -> None:
