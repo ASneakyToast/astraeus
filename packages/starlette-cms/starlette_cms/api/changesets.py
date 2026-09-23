@@ -368,6 +368,111 @@ def _extract_text(pm_doc: dict[str, Any]) -> str:
     return "".join(parts).strip()
 
 
+# Doc types that never participate in changesets (chat is ephemeral).
+CHANGESET_EXCLUDED_TYPES = {"chat_session", "chat_message"}
+
+
+async def link_document_to_changeset(
+    doc_id: str,
+    doc_type: str,
+    active_cs_id: str | None,
+) -> tuple[str, str] | None:
+    """Ensure *doc_id* is grouped into an open changeset for publishing.
+
+    Shared by the document PATCH handler and the collab (rich-text) WebSocket, so
+    both write paths group edits into the same changeset. Without this a
+    body-only edit (which streams over the collab socket) would never be linked
+    to a changeset and so would be dropped by a batch publish.
+
+    - If *active_cs_id* names an open/review changeset, link the doc to it.
+    - Otherwise, if the doc is already in an open changeset, leave it there.
+    - Otherwise create a date-titled changeset and link the doc to it. This also
+      heals a stale *active_cs_id* (one already published or deleted), which used
+      to leave the edit orphaned from every changeset.
+
+    :returns: ``(changeset_id, title)`` when a NEW changeset was created, so the
+        caller can tell the client to adopt it, else ``None``.
+    """
+    if doc_type in CHANGESET_EXCLUDED_TYPES:
+        return None
+
+    if active_cs_id:
+        cs_rows = await CMSChangeset.select().where(CMSChangeset.id == active_cs_id).run()
+        if cs_rows and cs_rows[0]["status"] in ("open", "review"):
+            existing = (
+                await CMSChangesetDocument.select()
+                .where(
+                    CMSChangesetDocument.changeset_id == active_cs_id,
+                    CMSChangesetDocument.document_id == doc_id,
+                )
+                .run()
+            )
+            if not existing:
+                await CMSChangesetDocument.insert(
+                    CMSChangesetDocument(
+                        changeset_id=active_cs_id,
+                        document_id=doc_id,
+                        added_at=datetime.now(UTC),
+                    )
+                ).run()
+            return None
+
+    # No usable active changeset — reuse an open one the doc already belongs to.
+    in_cs = (
+        await CMSChangesetDocument.select(CMSChangesetDocument.changeset_id)
+        .where(CMSChangesetDocument.document_id == doc_id)
+        .run()
+    )
+    if in_cs:
+        cs_ids = [r["changeset_id"] for r in in_cs]
+        open_cs = (
+            await CMSChangeset.select(CMSChangeset.id)
+            .where(
+                CMSChangeset.id.is_in(cs_ids),
+                CMSChangeset.status.is_in(["open", "review"]),
+            )
+            .run()
+        )
+        if open_cs:
+            return None
+
+    # Create a fresh date-titled changeset ("Sep 22", "Sep 22 (2)", …) and link.
+    today = datetime.now(UTC)
+    auto_title = today.strftime("%b %-d")
+    existing_today = (
+        await CMSChangeset.select(CMSChangeset.title)
+        .where(CMSChangeset.title.like(f"{auto_title}%"))
+        .run()
+    )
+    if existing_today:
+        existing_titles = {r["title"] for r in existing_today}
+        if auto_title in existing_titles:
+            suffix = 2
+            while f"{auto_title} ({suffix})" in existing_titles:
+                suffix += 1
+            auto_title = f"{auto_title} ({suffix})"
+
+    new_cs_id = generate(size=21)
+    await CMSChangeset.insert(
+        CMSChangeset(
+            id=new_cs_id,
+            title=auto_title,
+            status="open",
+            created_at=today,
+            publish_at=None,
+            published_at=None,
+        )
+    ).run()
+    await CMSChangesetDocument.insert(
+        CMSChangesetDocument(
+            changeset_id=new_cs_id,
+            document_id=doc_id,
+            added_at=today,
+        )
+    ).run()
+    return (new_cs_id, auto_title)
+
+
 # ---------------------------------------------------------------------------
 # Route factory
 # ---------------------------------------------------------------------------

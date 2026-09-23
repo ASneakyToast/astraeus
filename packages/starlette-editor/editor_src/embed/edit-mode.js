@@ -165,7 +165,7 @@ export async function activateField(el, { fieldName, fieldValue, docId, cmsBase,
       _openMarkdownModal(fieldValue, async (newValue) => {
         fieldValue = newValue
         toolbar.setState('saving')
-        await patchField(cmsBase, docId, fieldName, newValue)
+        await patchField(cmsBase, docId, fieldName, newValue, toolbar)
         toolbar.setState('editing')
       })
     })
@@ -184,7 +184,7 @@ export async function activateField(el, { fieldName, fieldValue, docId, cmsBase,
       clearTimeout(debounceTimer)
       toolbar.setState('saving')
       debounceTimer = setTimeout(async () => {
-        await patchField(cmsBase, docId, fieldName, el.textContent)
+        await patchField(cmsBase, docId, fieldName, el.textContent, toolbar)
         toolbar.setState('editing')
       }, 800)
     })
@@ -199,7 +199,7 @@ export async function activateField(el, { fieldName, fieldValue, docId, cmsBase,
       _openTagsEditor(el, fieldValue, async (newTags) => {
         fieldValue = newTags
         toolbar.setState('saving')
-        await patchField(cmsBase, docId, fieldName, newTags)
+        await patchField(cmsBase, docId, fieldName, newTags, toolbar)
         toolbar.setState('editing')
       })
     })
@@ -215,7 +215,7 @@ export async function activateField(el, { fieldName, fieldValue, docId, cmsBase,
       _openImageEditor(el, fieldValue, CONFIG, async (newValue) => {
         fieldValue = newValue
         toolbar.setState('saving')
-        await patchField(cmsBase, docId, fieldName, newValue)
+        await patchField(cmsBase, docId, fieldName, newValue, toolbar)
         // Update the live <img> in the element without a reload
         const img = el.querySelector('img')
         if (img && newValue.src) {
@@ -233,7 +233,7 @@ export async function activateField(el, { fieldName, fieldValue, docId, cmsBase,
 // PATCH helper
 // ────────────────────────────────────────────────────────────────────────────
 
-async function patchField(cmsBase, docId, fieldName, value) {
+async function patchField(cmsBase, docId, fieldName, value, toolbar) {
   // Carry the active changeset so every edit in a session lands in one
   // publishable group. changeset-store persists it in localStorage, so it
   // survives navigating between pages on the site.
@@ -241,12 +241,33 @@ async function patchField(cmsBase, docId, fieldName, value) {
   const activeId = getActiveChangesetId()
   if (activeId) headers['X-Active-Changeset-Id'] = activeId
 
-  const res = await fetch(`${cmsBase}/api/documents/${docId}`, {
-    method: 'PATCH',
-    credentials: 'include',
-    headers,
-    body: JSON.stringify({ body: { [fieldName]: value } }),
-  })
+  let res
+  try {
+    res = await fetch(`${cmsBase}/api/documents/${docId}`, {
+      method: 'PATCH',
+      credentials: 'include',
+      headers,
+      body: JSON.stringify({ body: { [fieldName]: value } }),
+    })
+  } catch {
+    // Network/CORS failure — the edit is not saved. Surface it rather than
+    // letting the reload silently drop the work (see the toolbar error pill).
+    toolbar?.setSaveError?.('⚠ Not saved — connection failed')
+    return
+  }
+
+  if (!res.ok) {
+    // A failed save was previously swallowed, so the editor looked fine right
+    // up until a reload wiped the un-persisted edits. Make it visible.
+    toolbar?.setSaveError?.(
+      res.status === 401
+        ? '⚠ Not saved — session expired, log in again'
+        : `⚠ Not saved — server error ${res.status}`,
+    )
+    return
+  }
+
+  toolbar?.clearSaveError?.()
 
   // Adopt a changeset the server auto-created when none was active, so the
   // rest of the session — and the changeset panel, via the store event —

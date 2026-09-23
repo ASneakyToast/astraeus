@@ -381,6 +381,61 @@ def test_ws_auth_apikey_correct_key_accepted(authed_cms_with_doc):
 
 
 # ---------------------------------------------------------------------------
+# Test 11b: Auth=apikey but a valid session cookie → init received.
+#
+# The public-site embed carries no API key; it authenticates the WebSocket with
+# the same cms_session cookie the HTTP write path uses. Regression test for the
+# bug where inline body edits silently failed to connect (close 4401) because
+# _check_ws_auth never checked the session cookie.
+# ---------------------------------------------------------------------------
+
+
+def test_ws_auth_session_cookie_accepted():
+    from starlette_cms.session import generate_session_token
+
+    secret = "test-session-secret"
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    cms = CMS(
+        database_url=f"sqlite:///{tmp.name}",
+        auth="apikey",
+        api_key="test-secret",
+        read_auth=False,
+        session_secret=secret,
+    )
+
+    @cms.block("note")
+    class NoteBlock:
+        title: str = TextField(required=True)
+
+    app = Starlette(routes=[Mount("/", app=cms.app)], lifespan=cms.lifespan)
+    try:
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.post(
+                "/api/documents",
+                json={"doc_type": "note", "slug": "cookie-note", "body": {"title": "Hi"}},
+                headers={"Authorization": "Bearer test-secret"},
+            )
+            assert resp.status_code == 201, resp.text
+            doc_id = resp.json()["id"]
+
+            token = generate_session_token("admin", secret)
+            # No api_key in the URL — the cookie alone must authorise the socket.
+            with client.websocket_connect(
+                f"/api/documents/{doc_id}/collab",
+                headers={"Cookie": f"cms_session={token}"},
+            ) as ws:
+                data = ws.receive_json()
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+    assert data["type"] == "init"
+
+
+# ---------------------------------------------------------------------------
 # Test 12: History endpoint returns checkpoints after steps
 # ---------------------------------------------------------------------------
 

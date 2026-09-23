@@ -17,6 +17,7 @@
  */
 import { collab, sendableSteps, receiveTransaction, getVersion } from 'prosemirror-collab'
 import { Step } from 'prosemirror-transform'
+import { getActiveChangesetId, setActiveChangesetId } from './changeset-store.js'
 
 export { collab }
 
@@ -73,6 +74,7 @@ export class CollabConnection {
 
     this.ws.onopen = () => {
       this._reconnectDelay = 1000  // reset backoff on successful connect
+      this.toolbar?.clearSaveError?.()  // a prior connection error is resolved
       // Start ping interval
       this._pingInterval = setInterval(() => {
         if (this.ws.readyState === WebSocket.OPEN) {
@@ -86,14 +88,19 @@ export class CollabConnection {
       this._handleMessage(msg)
     }
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (event) => {
       clearInterval(this._pingInterval)
       this._pingInterval = null
-      if (!this._destroyed) {
-        // Exponential backoff reconnect
-        setTimeout(() => this._connect(), this._reconnectDelay)
-        this._reconnectDelay = Math.min(this._reconnectDelay * 2, 30000)
+      if (this._destroyed) return
+      // 4401 = auth rejected by the server. Reconnecting keeps failing, so stop
+      // and surface it — the body-edit equivalent of a 401 on the PATCH path.
+      if (event.code === 4401) {
+        this.toolbar?.setSaveError?.('⚠ Body not saved — session expired, log in again')
+        return
       }
+      // Exponential backoff reconnect
+      setTimeout(() => this._connect(), this._reconnectDelay)
+      this._reconnectDelay = Math.min(this._reconnectDelay * 2, 30000)
     }
 
     this.ws.onerror = () => {
@@ -104,6 +111,13 @@ export class CollabConnection {
   _handleMessage(msg) {
     if (msg.type === 'pong') {
       // Keep-alive response — no action needed
+      return
+    }
+
+    if (msg.type === 'changeset') {
+      // Server created a changeset to hold this body edit — adopt it so the rest
+      // of the session (title/description PATCHes, other cards) groups into it.
+      setActiveChangesetId(msg.id)
       return
     }
 
@@ -217,6 +231,10 @@ export class CollabConnection {
       clientID: this.clientID,
       version: sendable.version,
       doc: this.view.state.doc.toJSON(),  // include updated doc for server
+      // Group this body edit into the session's changeset. The server links the
+      // doc and, if it had to create a changeset, echoes it back (see below) so
+      // plain-text edits join the same one.
+      activeChangesetId: getActiveChangesetId(),
     }))
   }
 
