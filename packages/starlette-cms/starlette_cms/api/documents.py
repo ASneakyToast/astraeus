@@ -17,7 +17,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from nanoid import generate as nanoid_generate
-from starlette_cms.api.changesets import _snapshot_document_version
+from starlette_cms.api.changesets import _snapshot_document_version, link_document_to_changeset
 from starlette_cms.api.webhooks import fire_event
 from starlette_cms.auth import require_auth
 from starlette_cms.tables import CMSChangeset, CMSChangesetDocument, CMSDocument, CMSDocumentVersion
@@ -751,91 +751,15 @@ def make_document_routes(cms: CMS) -> list[Route]:
             fire_event(cms, "document.updated", doc_id, doc_type, updated_row.get("slug", ""))
         )
 
-        # Auto-link to changeset — skip non-content doc types
-        CHANGESET_EXCLUDED_TYPES = {"chat_session", "chat_message"}
+        # Auto-link to a changeset so this edit is grouped for publishing. Shared
+        # with the collab (rich-text) write path via link_document_to_changeset.
         response_headers: dict[str, str] = {}
         active_cs_id = request.headers.get("x-active-changeset-id")
-
-        if doc_type in CHANGESET_EXCLUDED_TYPES:
-            pass
-        elif active_cs_id:
-            # Verify changeset exists and is open, then link
-            cs_rows = await CMSChangeset.select().where(CMSChangeset.id == active_cs_id).run()
-            if cs_rows and cs_rows[0]["status"] in ("open", "review"):
-                existing = (
-                    await CMSChangesetDocument.select()
-                    .where(
-                        CMSChangesetDocument.changeset_id == active_cs_id,
-                        CMSChangesetDocument.document_id == doc_id,
-                    )
-                    .run()
-                )
-                if not existing:
-                    await CMSChangesetDocument.insert(
-                        CMSChangesetDocument(
-                            changeset_id=active_cs_id,
-                            document_id=doc_id,
-                            added_at=datetime.now(UTC),
-                        )
-                    ).run()
-        else:
-            # Check if doc is already in an open changeset
-            in_cs = (
-                await CMSChangesetDocument.select(CMSChangesetDocument.changeset_id)
-                .where(CMSChangesetDocument.document_id == doc_id)
-                .run()
-            )
-            already_in_open = False
-            if in_cs:
-                cs_ids = [r["changeset_id"] for r in in_cs]
-                open_cs = (
-                    await CMSChangeset.select(CMSChangeset.id)
-                    .where(
-                        CMSChangeset.id.is_in(cs_ids),
-                        CMSChangeset.status.is_in(["open", "review"]),
-                    )
-                    .run()
-                )
-                already_in_open = len(open_cs) > 0
-
-            if not already_in_open:
-                today = datetime.now(UTC)
-                auto_title = today.strftime("%b %-d")
-
-                # Handle collisions: "Aug 9" → "Aug 9 (2)"
-                existing_today = (
-                    await CMSChangeset.select(CMSChangeset.title)
-                    .where(CMSChangeset.title.like(f"{auto_title}%"))
-                    .run()
-                )
-                if existing_today:
-                    existing_titles = {r["title"] for r in existing_today}
-                    if auto_title in existing_titles:
-                        suffix = 2
-                        while f"{auto_title} ({suffix})" in existing_titles:
-                            suffix += 1
-                        auto_title = f"{auto_title} ({suffix})"
-
-                new_cs_id = nanoid_generate(size=21)
-                await CMSChangeset.insert(
-                    CMSChangeset(
-                        id=new_cs_id,
-                        title=auto_title,
-                        status="open",
-                        created_at=today,
-                        publish_at=None,
-                        published_at=None,
-                    )
-                ).run()
-                await CMSChangesetDocument.insert(
-                    CMSChangesetDocument(
-                        changeset_id=new_cs_id,
-                        document_id=doc_id,
-                        added_at=today,
-                    )
-                ).run()
-                response_headers["X-Changeset-Id"] = new_cs_id
-                response_headers["X-Changeset-Title"] = auto_title
+        created = await link_document_to_changeset(doc_id, doc_type, active_cs_id)
+        if created is not None:
+            new_cs_id, auto_title = created
+            response_headers["X-Changeset-Id"] = new_cs_id
+            response_headers["X-Changeset-Title"] = auto_title
 
         result = _row_to_dict(updated_row, use_draft=True)
         return JSONResponse(result, headers=response_headers if response_headers else None)

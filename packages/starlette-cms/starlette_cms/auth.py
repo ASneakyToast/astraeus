@@ -18,8 +18,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from starlette.requests import Request
+from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse
+
+from starlette_cms.session import validate_session_token
 
 if TYPE_CHECKING:
     from starlette_cms.app import CMS
@@ -78,19 +80,21 @@ async def require_auth(request: Request, cms: CMS) -> JSONResponse | None:
     return None
 
 
-def check_session_auth(request: Request, cms: CMS) -> bool:
+def check_session_auth(conn: HTTPConnection, cms: CMS) -> bool:
     """
-    Return ``True`` if the request carries a valid ``cms_session`` cookie.
+    Return ``True`` if the connection carries a valid ``cms_session`` cookie.
 
-    :param request: The incoming Starlette request.
+    Accepts any Starlette ``HTTPConnection`` — both ``Request`` (HTTP) and
+    ``WebSocket`` — so the collab WebSocket can authenticate with the same
+    session cookie the HTTP write path uses.
+
+    :param conn: The incoming Starlette request or websocket.
     :param cms: The CMS instance (must have ``session_secret`` set).
     :returns: ``True`` if the session cookie is present and valid, ``False`` otherwise.
     """
-    from starlette_cms.session import validate_session_token
-
     if cms.session_secret is None:
         return False
-    token = request.cookies.get("cms_session")
+    token = conn.cookies.get("cms_session")
     if not token:
         return False
     return bool(validate_session_token(token, cms.session_secret))

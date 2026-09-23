@@ -20,6 +20,10 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket
 
+from starlette_cms.api.changesets import link_document_to_changeset
+from starlette_cms.auth import check_session_auth
+from starlette_cms.tables import CMSDocument
+
 if TYPE_CHECKING:
     from starlette_cms.app import CMS
 
@@ -28,10 +32,19 @@ def _check_ws_auth(websocket: WebSocket, cms: CMS) -> bool:
     """Return True if the WebSocket connection is authorised.
 
     Checks (in order):
-    1. ``?api_key=<key>`` query param when ``cms.auth == "apikey"``
-    2. ``cms_session`` cookie (session-based auth)
+    1. ``cms_session`` cookie (session-based auth) — used by the inline editor
+       embed on the public site, which carries no API key.
+    2. ``?api_key=<key>`` query param (or ``Authorization: Bearer``) when
+       ``cms.auth == "apikey"`` — used by the shell editor.
     3. ``cms.auth == "none"``
+
+    The session cookie takes precedence, mirroring ``check_auth`` on the HTTP
+    write path. Without it, an ``apikey`` or callable auth mode rejected every
+    cookie-authenticated embed connection, so inline body edits silently failed.
     """
+    if check_session_auth(websocket, cms):
+        return True
+
     if cms.auth == "none":
         return True
 
@@ -47,7 +60,8 @@ def _check_ws_auth(websocket: WebSocket, cms: CMS) -> bool:
 
     if callable(cms.auth):
         # For callable auth we cannot await here (no async), so reject for now.
-        # Callable auth is an advanced use case; WebSocket clients should use apikey.
+        # WebSocket clients should authenticate with the session cookie (checked
+        # above) or apikey.
         return False
 
     return False
@@ -86,6 +100,17 @@ def make_collab_routes(cms: CMS) -> list:
             await websocket.send_json({"type": "error", "message": "Document not found"})
             await websocket.close(code=4404)
             return
+
+        # Doc type is needed to group body edits into a changeset (below).
+        doc_type_rows = (
+            await CMSDocument.select(CMSDocument.doc_type)
+            .where(CMSDocument.id == document_id)
+            .run()
+        )
+        doc_type: str = doc_type_rows[0]["doc_type"] if doc_type_rows else ""
+        # Changeset this connection's persisted edits are already grouped into,
+        # so we link once per changeset rather than on every step batch.
+        linked_cs: str | None = None
 
         # Register connection and bind the server-assigned client_id
         await manager.add_connection(document_id, websocket)
@@ -213,6 +238,25 @@ def make_collab_routes(cms: CMS) -> list:
                             await authority._persist_steps(steps, step_client_id, base_version)
                         except Exception:
                             pass  # DB persistence failure should not drop the connection
+
+                        # Group this body edit into a changeset so a batch publish
+                        # includes it — the collab path bypasses the HTTP PATCH that
+                        # normally does this. The client sends its active changeset
+                        # id; when we create a fresh one, tell the client to adopt
+                        # it so title/description edits join the same changeset.
+                        active_cs_id = data.get("activeChangesetId")
+                        if active_cs_id != linked_cs:
+                            try:
+                                created = await link_document_to_changeset(
+                                    document_id, doc_type, active_cs_id
+                                )
+                                linked_cs = created[0] if created else active_cs_id
+                                if created is not None:
+                                    await websocket.send_json(
+                                        {"type": "changeset", "id": created[0], "title": created[1]}
+                                    )
+                            except Exception:
+                                pass  # never drop the connection over changeset bookkeeping
 
                         # Broadcast to ALL connections (including sender — sender
                         # uses this as its confirmation receipt)

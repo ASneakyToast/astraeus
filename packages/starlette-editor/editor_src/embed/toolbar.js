@@ -22,6 +22,7 @@ export class EditToolbar {
     this._chatPanel = null          // set via setChatPanel()
     this._chatBtn = null            // ref to the 💬 button for badge updates
     this._unread = 0                // unread chat message count
+    this._saveError = null          // message shown when a save/connection fails
   }
 
   mount() {
@@ -68,9 +69,11 @@ export class EditToolbar {
       // Leave edit mode without discarding or publishing — the draft is kept.
       const closeBtn = this._makeButton('✕ Close', 'ghost', () => this._stopEditing())
       closeBtn.title = 'Stop editing — your draft is kept and can be resumed later'
-      const saveIndicator = this._makeIndicator(
-        this.state === 'saving' ? '⏳ Saving...' : '✓ Saved'
-      )
+      // A failed save takes over the indicator — the whole point is that it is
+      // impossible to miss, unlike the silent failure this replaces.
+      const saveIndicator = this._saveError
+        ? this._makeIndicator(this._saveError, '#e04b45')
+        : this._makeIndicator(this.state === 'saving' ? '⏳ Saving...' : '✓ Saved')
       const discardBtn = this._makeButton('Discard draft', 'danger', () => this._discardDraft())
       const publishBtn = this._makeButton('Publish', 'primary', () => this._publish())
       this.el.appendChild(closeBtn)
@@ -125,17 +128,30 @@ export class EditToolbar {
     return btn
   }
 
-  _makeIndicator(text) {
+  _makeIndicator(text, color = '#a3a3a3') {
     const el = document.createElement('div')
     el.textContent = text
     // Sits directly on the pill — no separate background.
     el.style.cssText = `
       padding: 8px 10px;
-      color: #a3a3a3;
+      color: ${color};
       font-size: 13px;
       white-space: nowrap;
     `
     return el
+  }
+
+  /** Show a save/connection failure in the toolbar until the next success. */
+  setSaveError(message) {
+    this._saveError = message
+    this._render()
+  }
+
+  /** Clear a previously shown save error (called after a successful save). */
+  clearSaveError() {
+    if (!this._saveError) return
+    this._saveError = null
+    this._render()
   }
 
   setState(newState) {
