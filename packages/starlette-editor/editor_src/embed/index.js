@@ -54,7 +54,18 @@ if (cmsBase) {
     // Boot the AI chat panel (bottom-left, peer of the changeset panel)
     const { ChatPanel } = await import('../components/chat-panel.js')
     const apiKey = scriptEl?.dataset?.cmsApiKey ?? null
-    const currentDocId = cmsElements[0]?.dataset?.cmsId ?? null
+    // The document the chat acts on. A single-document page has an obvious
+    // answer; on a listing, "the first card" is a guess that edited the wrong
+    // post, so start with none and follow the card the user last clicked or
+    // typed into. With none selected the assistant asks which one.
+    const docIds = new Set(cmsElements.map(el => el.dataset.cmsId))
+    let currentDocId = docIds.size === 1 ? [...docIds][0] : null
+    for (const eventName of ['pointerdown', 'focusin']) {
+      document.addEventListener(eventName, (e) => {
+        const card = e.target.closest?.('[data-cms-id]')
+        if (card) currentDocId = card.dataset.cmsId
+      }, true)
+    }
 
     // collab is lazily initialised by edit-mode.js; stubs for getDocContext until then
     let collab = null

@@ -11,8 +11,40 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
+
+_EMPTY_DOC: dict[str, Any] = {"type": "doc", "content": []}
+
+
+def _field_doc(document: dict[str, Any], field: str) -> dict[str, Any]:
+    """Return *field*'s ProseMirror doc from a fetched document, or an empty doc."""
+    body = document.get("body") or {}
+    if isinstance(body, str):
+        body = json.loads(body)
+    return body.get(field) or _EMPTY_DOC
+
+
+async def _receive_until(ws: Any, wanted: set[str], context: dict[str, Any]) -> dict[str, Any]:
+    """Read collab messages until one whose type is in *wanted* arrives.
+
+    The server interleaves other messages (peer presence, and ``changeset`` when
+    it groups an edit into a changeset it just created), so the next message is
+    not necessarily the reply. A created changeset is adopted into *context* so
+    later edits in this turn join it rather than making another.
+
+    :raises RuntimeError: if the server reports an error (e.g. document gone).
+    """
+    while True:
+        message = json.loads(await ws.recv())
+        message_type = message.get("type")
+        if message_type in wanted:
+            return message
+        if message_type == "changeset":
+            context["active_changeset_id"] = message.get("id")
+        elif message_type == "error":
+            raise RuntimeError(message.get("message", "collab error"))
 
 
 # ---------------------------------------------------------------------------
@@ -60,12 +92,21 @@ class ToolDispatcher:
         if tool_name == "edit_document":
             doc_id = tool_input.get("doc_id") or (context or {}).get("doc_id")
             if not doc_id:
-                return {"status": "error", "message": "No doc_id in context or tool input"}
+                # On a page listing several documents none is selected until the
+                # user clicks into one, so ask rather than guess.
+                return {
+                    "status": "error",
+                    "message": (
+                        "No document selected. Ask the user which one they mean, "
+                        "or pass doc_id (search_documents can find it)."
+                    ),
+                }
             return await self._edit_document(
                 doc_id=doc_id,
                 markdown_content=tool_input["markdown_content"],
                 edit_rationale=tool_input.get("edit_rationale", ""),
                 context=context,
+                field=tool_input.get("field") or None,
             )
 
         elif tool_name == "search_documents":
@@ -111,26 +152,38 @@ class ToolDispatcher:
         markdown_content: str,
         edit_rationale: str,
         context: dict[str, Any],
+        field: str | None = None,
     ) -> dict[str, Any]:
-        """Apply edits to a live document via the collab WebSocket."""
+        """Apply edits to one rich-text field of a live document via the collab WebSocket.
+
+        The socket is scoped to a single field. This tool used to send a doc
+        without one, which overwrote the document's whole body (title,
+        description, …) with it; the CMS now refuses field-less connections.
+        """
         from .diff import diff_docs
         from .prosemirror import markdown_to_pm
 
         import websockets
 
-        current_draft = (context or {}).get("draft_body") or await self._fetch_draft(doc_id)
-        new_doc = markdown_to_pm(markdown_content)
-        steps = diff_docs(current_draft, new_doc)
+        ctx = context if context is not None else {}
 
-        if not steps:
+        document = await self._fetch_document(doc_id)
+        if document is None:
+            return {"status": "error", "message": f"Document {doc_id!r} not found"}
+
+        try:
+            field = await self._resolve_rich_text_field(document.get("doc_type", ""), field)
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
+
+        new_doc = markdown_to_pm(markdown_content)
+        if not diff_docs(_field_doc(document, field), new_doc):
             return {"status": "no_change", "message": "No differences found"}
 
-        ws_url = (
-            f"{self._collab_ws_base}/api/documents/{doc_id}/collab"
-            f"?api_key={self._api_key}"
-        )
+        query = urlencode({"field": field, "api_key": self._api_key})
+        ws_url = f"{self._collab_ws_base}/api/documents/{doc_id}/collab?{query}"
 
-        for attempt in range(2):
+        for _attempt in range(2):
             try:
                 async with websockets.connect(ws_url) as ws:
                     # Send presence as AI client
@@ -143,75 +196,97 @@ class ToolDispatcher:
                             }
                         )
                     )
-                    # Wait for init
-                    init = json.loads(await ws.recv())
-                    server_version = init.get("version", 0)
+                    # init carries the field's authoritative doc at the server's
+                    # version, so diff against it rather than the earlier fetch —
+                    # a reconnect after a reject picks up whatever landed meanwhile.
+                    init = await _receive_until(ws, {"init"}, ctx)
+                    steps = diff_docs(init.get("doc") or _EMPTY_DOC, new_doc)
+                    if not steps:
+                        return {"status": "no_change", "message": "No differences found"}
 
                     # Send editing status
                     await ws.send(json.dumps({"type": "editing", "doc_id": doc_id}))
 
-                    # Submit steps
+                    # Submit steps. The server groups the edit into this changeset
+                    # (or creates one and tells us), so no separate link call.
                     await ws.send(
                         json.dumps(
                             {
                                 "type": "steps",
                                 "steps": steps,
                                 "clientID": "claude-assistant",
-                                "version": server_version,
+                                "version": init.get("version", 0),
                                 "doc": new_doc,
+                                "activeChangesetId": ctx.get("active_changeset_id"),
                             }
                         )
                     )
 
                     # Wait for confirm or reject
-                    result = json.loads(await ws.recv())
+                    result = await _receive_until(ws, {"steps", "reject"}, ctx)
                     await ws.send(json.dumps({"type": "editing_done"}))
 
             except Exception as exc:
                 return {"status": "error", "message": str(exc)}
 
             if result.get("type") == "steps":
-                await self._auto_link_changeset(doc_id, context)
                 return {
                     "status": "accepted",
                     "step_count": len(steps),
                     "edit_rationale": edit_rationale,
                     "doc_id": doc_id,
+                    "field": field,
                 }
-
-            # On reject: re-fetch current doc and re-diff
-            if attempt == 0:
-                current_draft = await self._fetch_draft(doc_id)
-                steps = diff_docs(current_draft, new_doc)
-                if not steps:
-                    return {
-                        "status": "no_change",
-                        "message": "No differences after re-fetch",
-                    }
+            # Rejected: someone else's steps landed first — reconnect and re-diff.
 
         return {
             "status": "conflict",
             "message": "Version conflict after retry — ask user to try again",
         }
 
-    async def _fetch_draft(self, doc_id: str) -> dict[str, Any]:
-        """Fetch the current draft body for a document."""
+    async def _fetch_document(self, doc_id: str) -> dict[str, Any] | None:
+        """Fetch a document; its ``body`` reflects the current draft, if any."""
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{self._cms_base}/api/documents/{doc_id}",
                 headers=self._headers,
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                # Prefer draft_body if present, fall back to body
-                draft = data.get("draft_body") or data.get("body")
-                if isinstance(draft, str):
-                    try:
-                        draft = json.loads(draft)
-                    except (json.JSONDecodeError, TypeError):
-                        draft = {}
-                return draft or {"type": "doc", "content": []}
-        return {"type": "doc", "content": []}
+        return resp.json() if resp.status_code == 200 else None
+
+    async def _resolve_rich_text_field(self, doc_type: str, field: str | None) -> str:
+        """Pick the rich-text field of *doc_type* to edit.
+
+        With no *field*, a doc type's single rich-text field is used. Raises
+        ``ValueError`` with guidance for the model when that isn't possible.
+        """
+        schema = await self._get_available_doc_types()
+        if schema.get("status") != "ok":
+            raise ValueError(f"Couldn't load the CMS schema: {schema.get('message')}")
+
+        properties = schema["schema"].get(doc_type, {}).get("schema", {}).get("properties", {})
+        rich_fields = [
+            name
+            for name, prop in properties.items()
+            if prop.get("cms:field_meta", {}).get("field_type") == "rich_text"
+        ]
+
+        if field:
+            if field in rich_fields:
+                return field
+            raise ValueError(
+                f"{field!r} is not a rich-text field of {doc_type!r} "
+                f"(rich-text fields: {', '.join(rich_fields) or 'none'})"
+            )
+        if len(rich_fields) == 1:
+            return rich_fields[0]
+        if not rich_fields:
+            raise ValueError(
+                f"{doc_type!r} has no rich-text field — use update_document for its fields"
+            )
+        raise ValueError(
+            f"{doc_type!r} has several rich-text fields ({', '.join(rich_fields)}); "
+            "pass field to choose one"
+        )
 
     # ------------------------------------------------------------------
     # Other tools
@@ -429,17 +504,27 @@ def make_tools(dispatcher: ToolDispatcher, context: dict[str, Any]) -> list:
         markdown_content: str,
         edit_rationale: str,
         scope: str = "full",
+        doc_id: str = "",
+        field: str = "",
     ) -> dict:
-        """Apply edits to the document being edited. Write changes as Markdown."""
-        return await dispatcher.dispatch(
-            "edit_document",
-            {
-                "markdown_content": markdown_content,
-                "edit_rationale": edit_rationale,
-                "scope": scope,
-            },
-            context,
-        )
+        """Rewrite a document's rich-text prose (e.g. a blog post body) as Markdown.
+
+        markdown_content replaces the whole field. Only rich-text fields are
+        editable here — use update_document for fields like title or tags.
+        doc_id defaults to the document the user is working on; pass one found
+        via search_documents to target another. field is only needed when the
+        document type has more than one rich-text field.
+        """
+        tool_input: dict[str, Any] = {
+            "markdown_content": markdown_content,
+            "edit_rationale": edit_rationale,
+            "scope": scope,
+        }
+        if doc_id:
+            tool_input["doc_id"] = doc_id
+        if field:
+            tool_input["field"] = field
+        return await dispatcher.dispatch("edit_document", tool_input, context)
 
     @lc_tool
     async def search_documents(

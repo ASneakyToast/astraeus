@@ -408,20 +408,155 @@ async def test_tool_no_change() -> None:
     pm_doc = markdown_to_pm(md)
 
     with respx.mock(base_url=CMS_BASE) as mock:
-        # _fetch_draft returns same doc as new_doc
+        # The document's rich-text field already holds the same doc as new_doc
         mock.get("/api/documents/doc-same").mock(
             return_value=httpx.Response(
                 200,
-                json={"id": "doc-same", "body": json.dumps(pm_doc)},
+                json={
+                    "id": "doc-same",
+                    "doc_type": "blog_post",
+                    "body": {"title": "Same", "body_markdown": pm_doc},
+                },
             )
         )
+        mock.get("/api/schema").mock(return_value=httpx.Response(200, json=_BLOG_SCHEMA))
 
         # Provide same markdown → diff should be empty
         result = await dispatcher._edit_document(
             doc_id="doc-same",
             markdown_content=md,
             edit_rationale="no change test",
-            context={},  # no draft_body in context → will fetch
+            context={},
         )
 
     assert result["status"] == "no_change"
+
+
+# ---------------------------------------------------------------------------
+# 6b. edit_document edits one rich-text field over a field-scoped socket
+# ---------------------------------------------------------------------------
+
+# Minimal /api/schema payload: a blog post with one rich-text field.
+_BLOG_SCHEMA = {
+    "blog_post": {
+        "block_type": "blog_post",
+        "schema": {
+            "properties": {
+                "title": {"type": "string"},
+                "body_markdown": {"cms:field_meta": {"field_type": "rich_text"}},
+            }
+        },
+    },
+    "definition": {
+        "block_type": "definition",
+        "schema": {"properties": {"term": {"type": "string"}}},
+    },
+}
+
+
+class _FakeCollabSocket:
+    """Scripted stand-in for a ``websockets`` connection: replays *replies* and
+    records what the tool sends."""
+
+    def __init__(self, replies: list[dict]) -> None:
+        self._replies = [json.dumps(r) for r in replies]
+        self.sent: list[dict] = []
+
+    async def __aenter__(self) -> _FakeCollabSocket:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def send(self, raw: str) -> None:
+        self.sent.append(json.loads(raw))
+
+    async def recv(self) -> str:
+        return self._replies.pop(0)
+
+
+def _mock_blog_doc(mock: respx.MockRouter, doc_id: str) -> None:
+    mock.get(f"/api/documents/{doc_id}").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": doc_id,
+                "doc_type": "blog_post",
+                "body": {"title": "Keep me", "body_markdown": {"type": "doc", "content": []}},
+            },
+        )
+    )
+    mock.get("/api/schema").mock(return_value=httpx.Response(200, json=_BLOG_SCHEMA))
+
+
+@pytest.mark.asyncio
+async def test_edit_document_scopes_socket_to_rich_text_field() -> None:
+    """The tool resolves the doc type's rich-text field, opens the socket with
+    ?field=, and reads past the server's interleaved changeset message.
+
+    It used to open the socket with no field (which overwrote the whole body)
+    and treat the first reply as the result (which misread ``changeset``).
+    """
+    dispatcher = ToolDispatcher(cms_base=CMS_BASE, api_key=API_KEY, collab_ws_base="ws://cms.local")
+    socket = _FakeCollabSocket(
+        [
+            {"type": "init", "doc": {"type": "doc", "content": []}, "version": 3, "peers": []},
+            {"type": "changeset", "id": "cs-new", "title": "Sep 23"},
+            {"type": "steps", "steps": [], "clientIDs": ["claude-assistant"], "version": 4},
+        ]
+    )
+    context: dict[str, Any] = {}
+
+    with (
+        respx.mock(base_url=CMS_BASE) as mock,
+        patch("websockets.connect", return_value=socket) as connect,
+    ):
+        _mock_blog_doc(mock, "doc-1")
+        result = await dispatcher._edit_document(
+            doc_id="doc-1",
+            markdown_content="A new paragraph.",
+            edit_rationale="rewrite",
+            context=context,
+        )
+
+    assert result["status"] == "accepted"
+    assert result["field"] == "body_markdown"
+    assert "field=body_markdown" in connect.call_args.args[0]
+    steps_message = next(m for m in socket.sent if m["type"] == "steps")
+    assert steps_message["version"] == 3
+    # The server-created changeset is adopted for the rest of the turn.
+    assert context["active_changeset_id"] == "cs-new"
+
+
+@pytest.mark.asyncio
+async def test_edit_document_refuses_doc_without_rich_text_field() -> None:
+    """A doc type with no rich-text field gets guidance, not a socket write."""
+    dispatcher = ToolDispatcher(cms_base=CMS_BASE, api_key=API_KEY, collab_ws_base="ws://cms.local")
+
+    with respx.mock(base_url=CMS_BASE) as mock, patch("websockets.connect") as connect:
+        mock.get("/api/documents/def-1").mock(
+            return_value=httpx.Response(
+                200, json={"id": "def-1", "doc_type": "definition", "body": {"term": "x"}}
+            )
+        )
+        mock.get("/api/schema").mock(return_value=httpx.Response(200, json=_BLOG_SCHEMA))
+        result = await dispatcher._edit_document(
+            doc_id="def-1", markdown_content="text", edit_rationale="", context={}
+        )
+
+    assert result["status"] == "error"
+    assert "update_document" in result["message"]
+    connect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_edit_document_without_selected_doc_asks() -> None:
+    """On a listing no document is selected; the tool asks instead of guessing."""
+    dispatcher = ToolDispatcher(cms_base=CMS_BASE, api_key=API_KEY, collab_ws_base="ws://cms.local")
+
+    result = await dispatcher.dispatch(
+        "edit_document", {"markdown_content": "text", "edit_rationale": ""}, {"doc_id": None}
+    )
+
+    assert result["status"] == "error"
+    assert "which one" in result["message"]
