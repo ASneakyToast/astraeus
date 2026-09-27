@@ -18,6 +18,7 @@
 import { collab, sendableSteps, receiveTransaction, getVersion } from 'prosemirror-collab'
 import { Step } from 'prosemirror-transform'
 import { getActiveChangesetId, setActiveChangesetId } from './changeset-store.js'
+import { stateForServerCopy } from './collab-sync.js'
 
 export { collab }
 
@@ -127,8 +128,18 @@ export class CollabConnection {
 
     if (msg.type === 'init') {
       // Server sends current state — handles reconnects where we may have
-      // missed steps. Update local version to match server.
+      // missed steps. Take its copy and version (see collab-sync.js): keeping
+      // our own loaded copy let a stale editor overwrite the draft, and never
+      // updating the collab plugin's version got every step rejected once the
+      // server's version moved past 0.
       this.version = msg.version
+      const synced = stateForServerCopy(this.view.state, {
+        docJSON: msg.doc,
+        version: msg.version,
+        clientID: this.clientID,
+        schema: this.schema,
+      })
+      if (synced) this.view.updateState(synced)
       // Populate peer map from the server's current peer list
       this._peers = new Map()
       for (const p of (msg.peers ?? [])) {
@@ -186,8 +197,11 @@ export class CollabConnection {
       // Closing the socket here used to strand them. Nothing resends after a
       // reconnect, so the edits stayed local — and the next keystroke sent them
       // at the same stale version, rejecting and reconnecting again.
+      //
+      // Not saved yet, so don't say so: this used to show "Saved", which hid
+      // the version mismatch that dropped every body edit.
       this.version = msg.version
-      this.toolbar.setState('editing')
+      this.toolbar.setState('saving')
     }
   }
 

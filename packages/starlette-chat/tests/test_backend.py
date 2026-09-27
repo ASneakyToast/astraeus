@@ -475,8 +475,8 @@ class _FakeCollabSocket:
         return self._replies.pop(0)
 
 
-def _mock_blog_doc(mock: respx.MockRouter, doc_id: str) -> None:
-    mock.get(f"/api/documents/{doc_id}").mock(
+def _mock_blog_doc(mock: respx.MockRouter, doc_id: str) -> respx.Route:
+    route = mock.get(f"/api/documents/{doc_id}").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -487,6 +487,7 @@ def _mock_blog_doc(mock: respx.MockRouter, doc_id: str) -> None:
         )
     )
     mock.get("/api/schema").mock(return_value=httpx.Response(200, json=_BLOG_SCHEMA))
+    return route
 
 
 @pytest.mark.asyncio
@@ -511,7 +512,7 @@ async def test_edit_document_scopes_socket_to_rich_text_field() -> None:
         respx.mock(base_url=CMS_BASE) as mock,
         patch("websockets.connect", return_value=socket) as connect,
     ):
-        _mock_blog_doc(mock, "doc-1")
+        doc_route = _mock_blog_doc(mock, "doc-1")
         result = await dispatcher._edit_document(
             doc_id="doc-1",
             markdown_content="A new paragraph.",
@@ -521,6 +522,9 @@ async def test_edit_document_scopes_socket_to_rich_text_field() -> None:
 
     assert result["status"] == "accepted"
     assert result["field"] == "body_markdown"
+    # The early no-change check must compare against the draft, not the
+    # published copy the API returns by default.
+    assert doc_route.calls.last.request.url.params["draft"] == "true"
     assert "field=body_markdown" in connect.call_args.args[0]
     steps_message = next(m for m in socket.sent if m["type"] == "steps")
     assert steps_message["version"] == 3

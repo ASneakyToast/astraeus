@@ -60,11 +60,17 @@ export async function fetchDocuments(docType, { limit = 50, offset = 0 } = {}) {
 }
 
 /**
+ * Load a document for editing — its draft body if it has one.
+ *
+ * Without ?draft=true the API returns the published body, so reopening a
+ * document with unpublished edits showed stale (or empty) fields, and typing
+ * into the rich-text editor then overwrote the real draft over the socket.
+ *
  * @param {string} id
  * @returns {Promise<object>}
  */
 export async function fetchDocument(id) {
-  const res = await apiFetch(`/api/documents/${id}`);
+  const res = await apiFetch(`/api/documents/${id}?draft=true`);
   if (!res.ok) throw new Error(`Document fetch failed: ${res.status}`);
   return res.json();
 }
