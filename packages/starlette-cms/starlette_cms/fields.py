@@ -360,3 +360,29 @@ class DocumentRef(_BaseField):
         if optional:
             return (str | None, {"default": None})
         return (str, {"default": ...})
+
+
+@dataclass
+class DoodleField(_BaseField):
+    """
+    A list of freehand SVG doodles, each with a responsive placement spec.
+
+    Stored as a plain JSON array in the document body — same shape as
+    ``ListField(item_type=...)`` without the polymorphism, tagged with its
+    own field_type so the editor mounts a draw/place widget instead of the
+    generic block canvas. A document can have zero, one, or many doodles.
+
+    Example::
+
+        doodles: list = DoodleField(label="Doodles")
+    """
+
+    def field_meta(self) -> dict[str, Any]:
+        m = super().field_meta()
+        m["field_type"] = "doodles"
+        return m
+
+    def to_pydantic(self, annotation: Any, optional: bool) -> tuple[Any, dict[str, Any]]:
+        if optional:
+            return (list[dict] | None, {"default": None})
+        return (list[dict], {"default_factory": list})
