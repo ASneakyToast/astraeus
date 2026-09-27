@@ -1,0 +1,315 @@
+{
+  "$defs": {
+    "_HeroBlock": {
+      "properties": {
+        "block_type": {
+          "const": "hero",
+          "default": "hero",
+          "title": "Block Type",
+          "type": "string"
+        },
+        "heading": {
+          "cms:field_meta": {
+            "label": "Heading"
+          },
+          "title": "Heading",
+          "type": "string"
+        }
+      },
+      "required": [
+        "heading"
+      ],
+      "title": "_HeroBlock",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "block_typed": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_HeroBlock"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "cms:field_meta": {
+        "field_type": "block"
+      },
+      "default": null
+    },
+    "block_untyped": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "cms:field_meta": {
+        "field_type": "block"
+      },
+      "default": null,
+      "title": "Block Untyped"
+    },
+    "boolean": {
+      "cms:field_meta": {
+        "default": true
+      },
+      "default": true,
+      "title": "Boolean",
+      "type": "boolean"
+    },
+    "doc_ref_optional": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "cms:field_meta": {
+        "field_type": "document_ref",
+        "on_delete": "nullify",
+        "ref_block_type": "post"
+      },
+      "default": null,
+      "title": "Doc Ref Optional"
+    },
+    "doc_ref_required": {
+      "cms:field_meta": {
+        "field_type": "document_ref",
+        "on_delete": "block",
+        "ref_block_type": "post"
+      },
+      "title": "Doc Ref Required",
+      "type": "string"
+    },
+    "image_optional": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "cms:field_meta": {
+        "field_type": "image"
+      },
+      "default": null,
+      "title": "Image Optional"
+    },
+    "image_required": {
+      "cms:field_meta": {
+        "field_type": "image"
+      },
+      "title": "Image Required",
+      "type": "string"
+    },
+    "json_optional": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "items": {},
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "cms:field_meta": {
+        "schema": {
+          "type": "object"
+        }
+      },
+      "default": null,
+      "title": "Json Optional"
+    },
+    "json_required": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "items": {},
+          "type": "array"
+        }
+      ],
+      "title": "Json Required"
+    },
+    "list_homogeneous": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/_HeroBlock"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "cms:field_meta": {
+        "field_type": "block_list"
+      },
+      "default": null,
+      "title": "List Homogeneous"
+    },
+    "list_polymorphic": {
+      "anyOf": [
+        {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "hero": "#/$defs/_HeroBlock"
+              },
+              "propertyName": "block_type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/_HeroBlock"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "cms:field_meta": {
+        "field_type": "block_list"
+      },
+      "default": null,
+      "title": "List Polymorphic"
+    },
+    "list_untyped": {
+      "anyOf": [
+        {
+          "items": {},
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "cms:field_meta": {
+        "field_type": "block_list"
+      },
+      "default": null,
+      "title": "List Untyped"
+    },
+    "number_optional": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": 5.0,
+      "title": "Number Optional"
+    },
+    "number_required": {
+      "cms:field_meta": {
+        "max_value": 10,
+        "min_value": 0,
+        "precision": 2
+      },
+      "maximum": 10,
+      "minimum": 0,
+      "title": "Number Required",
+      "type": "number"
+    },
+    "rich_optional": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "cms:field_meta": {
+        "field_type": "rich_text"
+      },
+      "default": null,
+      "title": "Rich Optional"
+    },
+    "rich_required": {
+      "additionalProperties": true,
+      "cms:field_meta": {
+        "field_type": "rich_text"
+      },
+      "title": "Rich Required",
+      "type": "object"
+    },
+    "select_required": {
+      "cms:field_meta": {
+        "choices": [
+          "a",
+          "b"
+        ]
+      },
+      "enum": [
+        "a",
+        "b"
+      ],
+      "title": "Select Required",
+      "type": "string"
+    },
+    "text_optional": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Text Optional"
+    },
+    "text_required": {
+      "title": "Text Required",
+      "type": "string"
+    },
+    "url_field": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "cms:field_meta": {
+        "format": "url",
+        "max_length": 2048
+      },
+      "default": null,
+      "title": "Url Field"
+    }
+  },
+  "required": [
+    "text_required",
+    "rich_required",
+    "image_required",
+    "number_required",
+    "select_required",
+    "json_required",
+    "doc_ref_required"
+  ],
+  "title": "_FullCoverageDoc",
+  "type": "object"
+}
