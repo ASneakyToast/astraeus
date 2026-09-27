@@ -85,6 +85,10 @@ vi.mock('prosemirror-collab', () => {
   return { collab, sendableSteps, receiveTransaction, getVersion }
 })
 
+// The server-copy sync needs real ProseMirror states; it has its own tests in
+// collab-sync.test.js. Here the stub view never matches it, so skip it.
+vi.mock('../collab-sync.js', () => ({ stateForServerCopy: vi.fn(() => null) }))
+
 vi.mock('prosemirror-transform', () => {
   const Step = {
     fromJSON: vi.fn((schema, json) => ({ toJSON: () => json })),
@@ -288,7 +292,10 @@ describe('CollabConnection._handleMessage()', () => {
     // reconnect, so the edits never reached the server.
     expect(conn.version).toBe(3)
     expect(ws.readyState).toBe(MockWebSocket.OPEN)
-    expect(toolbar.setState).toHaveBeenCalledWith('editing')
+    // Rejected steps aren't saved; "Saved" here hid the version mismatch that
+    // dropped every body edit.
+    expect(toolbar.setState).toHaveBeenCalledWith('saving')
+    expect(toolbar.setState).not.toHaveBeenCalledWith('editing')
     conn.destroy()
   })
 

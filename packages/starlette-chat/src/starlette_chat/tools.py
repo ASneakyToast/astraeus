@@ -245,10 +245,15 @@ class ToolDispatcher:
         }
 
     async def _fetch_document(self, doc_id: str) -> dict[str, Any] | None:
-        """Fetch a document; its ``body`` reflects the current draft, if any."""
+        """Fetch a document with its draft body (the published body if no draft).
+
+        The API returns the published body unless asked for the draft, and the
+        edit must be judged against the draft — that's what the socket edits.
+        """
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{self._cms_base}/api/documents/{doc_id}",
+                params={"draft": "true"},
                 headers=self._headers,
             )
         return resp.json() if resp.status_code == 200 else None
