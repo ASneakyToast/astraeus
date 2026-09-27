@@ -19,146 +19,38 @@ Usage::
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Union
+from typing import Any
 
 import pydantic
 from pydantic import Field, create_model
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 
-from starlette_cms.fields import (
-    BlockField,
-    BoolField,
-    DocumentRef,
-    ImageField,
-    JSONField,
-    ListField,
-    NumberField,
-    RichTextField,
-    SelectField,
-    TextField,
-    URLField,
-    _BaseField,
-)
+from starlette_cms.fields import DocumentRef, ImageField, _BaseField
 
 
 def _make_field(
     annotation: Any,
-    default: Any,
+    default: _BaseField,
     field_meta: dict[str, Any],
 ) -> tuple[Any, FieldInfo]:
     """
     Convert a (annotation, _BaseField default) pair into a (type, FieldInfo) tuple
     suitable for ``pydantic.create_model``.
 
+    Delegates entirely to ``default.to_pydantic()`` — every ``_BaseField``
+    subclass (built-in or from a plugin) owns its own Pydantic representation
+    (see fields.py), so adding a new field type never requires editing this
+    function.
+
     :param annotation: The raw type annotation from the class (may be ``str``, ``dict``, etc.)
     :param default: The _BaseField instance used as the class attribute default.
     :param field_meta: Pre-computed field_meta dict from the field instance.
     """
-    # Build the json_schema_extra dict; None means "no extra" (omit from schema)
     extra: dict[str, Any] | None = {"cms:field_meta": field_meta} if field_meta else None
-
     optional = not getattr(default, "required", False)
-
-    if isinstance(default, TextField):
-        if optional:
-            return (str | None, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value]
-        return (str, Field(..., json_schema_extra=extra))  # type: ignore[return-value]
-
-    if isinstance(default, RichTextField):
-        if optional:
-            return (dict | None, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value]
-        return (dict, Field(..., json_schema_extra=extra))  # type: ignore[return-value]
-
-    if isinstance(default, ImageField):
-        if optional:
-            return (str | None, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value]
-        return (str, Field(..., json_schema_extra=extra))  # type: ignore[return-value]
-
-    if isinstance(default, ListField):
-        if default.blocks:
-            # Polymorphic block list — discriminated union
-            union_type: Any = Union[tuple(default.blocks)]  # type: ignore[arg-type]  # noqa: UP007
-            item_ann = Annotated[union_type, Field(discriminator="block_type")]
-            list_type: Any = list[item_ann]  # type: ignore[valid-type]
-        elif default.item_type is not None:
-            list_type = list[default.item_type]  # type: ignore[valid-type]
-        else:
-            list_type = list[Any]
-
-        if optional:
-            return (list_type | None, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value]
-        return (list_type, Field(default_factory=list, json_schema_extra=extra))  # type: ignore[return-value]
-
-    if isinstance(default, BlockField):
-        block_cls = default.block_type
-        if block_cls is None:
-            # Use the annotation type only when it's a concrete model class.
-            # `hero: dict = BlockField(required=False)` → fall back to dict.
-            # `hero: HeroModel = BlockField(...)` → use HeroModel.
-            _scalar_types = (str, int, float, bool, dict, list)
-            if isinstance(annotation, type) and annotation not in _scalar_types:
-                block_cls = annotation
-            else:
-                block_cls = dict
-        if optional:
-            return (block_cls | None, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value, operator]
-        return (block_cls, Field(..., json_schema_extra=extra))  # type: ignore[return-value]
-
-    if isinstance(default, NumberField):
-        validators: dict[str, Any] = {}
-        if default.min_value is not None:
-            validators["ge"] = default.min_value
-        if default.max_value is not None:
-            validators["le"] = default.max_value
-        if default.default is not None:
-            field_default: Any = default.default
-        else:
-            field_default = None if optional else ...
-        float_type: Any = float | None if optional else float
-        return (float_type, Field(default=field_default, json_schema_extra=extra, **validators))  # type: ignore[return-value]
-
-    if isinstance(default, SelectField):
-        import warnings
-        from typing import Literal
-
-        if default.choices:
-            lit_type: Any = Literal[tuple(default.choices)]  # type: ignore[valid-type]
-        else:
-            warnings.warn(
-                "SelectField has no choices — falling back to str",
-                stacklevel=4,
-            )
-            lit_type = str
-        if optional:
-            return (lit_type | None, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value]
-        return (lit_type, Field(..., json_schema_extra=extra))  # type: ignore[return-value]
-
-    if isinstance(default, BoolField):
-        return (bool, Field(default=default.default, json_schema_extra=extra))  # type: ignore[return-value]
-
-    if isinstance(default, URLField):
-        if optional:
-            return (str | None, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value]
-        return (str, Field(..., json_schema_extra=extra))  # type: ignore[return-value]
-
-    if isinstance(default, JSONField):
-        json_type: Any = dict | list | None
-        if not optional:
-            json_type = dict | list
-            return (json_type, Field(..., json_schema_extra=extra))  # type: ignore[return-value]
-        return (json_type, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value]
-
-    if isinstance(default, DocumentRef):
-        if optional:
-            return (str | None, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value]
-        return (str, Field(..., json_schema_extra=extra))  # type: ignore[return-value]
-
-    # Fallback: use annotation as-is
-    fallback_type: Any = annotation if annotation is not None else Any
-    if optional:
-        return (fallback_type | None, Field(default=None, json_schema_extra=extra))  # type: ignore[return-value]
-    return (fallback_type, Field(..., json_schema_extra=extra))  # type: ignore[return-value]
+    py_type, kwargs = default.to_pydantic(annotation, optional)
+    return (py_type, Field(json_schema_extra=extra, **kwargs))  # type: ignore[return-value]
 
 
 def _collect_field_defs(cls: type) -> dict[str, tuple[Any, FieldInfo]]:
