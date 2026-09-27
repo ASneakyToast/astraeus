@@ -46,8 +46,18 @@ export async function activateEditMode(element, { cmsBase, toolbar }) {
   const fieldEls = element.querySelectorAll('[data-cms-field]')
   for (const fieldEl of fieldEls) {
     const fieldName = fieldEl.dataset.cmsField
-    const fieldValue = body[fieldName]
-    if (fieldValue === undefined) continue
+    let fieldValue = body[fieldName]
+    if (fieldValue === undefined) {
+      // A field's key can be absent from a document's stored body — most
+      // often because the field type was added to the schema after this
+      // particular document was last saved (nothing backfills existing rows).
+      // Registry-dispatched field types are exactly the mechanism meant to
+      // support that: a plugin field type shouldn't require every existing
+      // document to be re-saved before it becomes editable. Untyped/legacy
+      // fields keep the original behavior — genuinely absent means skip.
+      if (!getFieldWidget(fieldEl.dataset.cmsFieldType)) continue
+      fieldValue = null
+    }
 
     // On a listing, the body is shown only as a truncated preview. Don't drop
     // the full editor into the card straight away — gate it behind an
@@ -167,6 +177,7 @@ export async function activateField(el, { fieldName, fieldValue, docId, cmsBase,
         mode: 'overlay',
         container,
         anchorEl: el,
+        close,
         onSave: async (newValue) => {
           fieldValue = newValue
           close()
@@ -327,6 +338,12 @@ function _addEditAffordance(el) {
   el.style.outline = '1px dashed rgba(37, 99, 235, 0.5)'
   el.style.cursor = 'pointer'
   el.title = 'Click to edit'
+  // A field's own render CSS may set pointer-events: none for its unactivated,
+  // purely-decorative display (e.g. a doodle overlay, so it never blocks
+  // clicks on real content beneath it) — activation always needs to override
+  // that on this element specifically, or the click that's supposed to open
+  // its editor can never reach it in the first place.
+  el.style.pointerEvents = 'auto'
 }
 
 // ────────────────────────────────────────────────────────────────────────────
