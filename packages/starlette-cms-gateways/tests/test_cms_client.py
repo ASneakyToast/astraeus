@@ -27,8 +27,9 @@ def _doc(
     body: dict | None = None,
     published: bool = False,
     content_hash: str | None = None,
+    published_at: str | None = None,
 ) -> dict:
-    """Build a fake CMS document dict."""
+    """Build a fake CMS document dict. A published document has been published at some time."""
     meta: dict = {}
     if content_hash:
         meta["content_hash"] = content_hash
@@ -40,6 +41,7 @@ def _doc(
         "body": body or {"title": "Test"},
         "meta": meta,
         "published": published,
+        "published_at": published_at or ("2026-09-01T00:00:00+00:00" if published else None),
     }
 
 
@@ -171,6 +173,7 @@ async def test_upsert_skips_when_hash_unchanged():
         import_ref="svc:type:SAME",
         body={"title": "Same"},
         content_hash=item.content_hash(),
+        published=True,
     )
 
     patch_called = False

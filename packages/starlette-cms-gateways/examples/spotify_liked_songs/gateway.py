@@ -51,11 +51,12 @@ class SpotifyLikedSongsGateway(BaseGateway):
     Documents are held as drafts by default; set ``auto_publish = True`` to
     publish immediately on creation.
 
-    Incremental sync: if a :class:`~starlette_cms_gateways.jobstore.JobStore`
-    is provided (automatically wired when running via ``GatewayAdmin``), the
-    gateway reads the timestamp of the most recent successful sync and stops
-    paginating once it reaches tracks added before that date.  On the first
-    run (no prior successful sync), all tracks are fetched.
+    Incremental sync: ``fetch`` calls :meth:`resolve_window`, which reads the sync
+    cursor the framework keeps in the CMS (the start of the last run that did not
+    raise, pulled back by ``cursor_overlap``), and stops paging at tracks liked
+    before it.  With no cursor the window is ``all_time`` and every track is
+    fetched.  Never derive a cursor from ``get_last_synced()``: that is when a
+    run *finished*.
     """
 
     service_name = "spotify_liked_songs"
@@ -93,10 +94,8 @@ class SpotifyLikedSongsGateway(BaseGateway):
         """
         import asyncio
 
-        # Determine the cursor for incremental sync.
-        since: datetime | None = None
-        if self._job_store is not None:
-            since = await self._job_store.get_last_synced(self._job_store_key)
+        # The framework's cursor for this run, or None for a full fetch.
+        since = (await self.resolve_window()).changed_since
 
         offset = 0
         limit = 50  # Spotify's max per request

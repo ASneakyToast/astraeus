@@ -83,16 +83,22 @@ The framework handles everything except the external API call:
   skip based on a content hash stored in `meta`.
 - **Idempotent syncs** — running `sync` twice on the same data is safe; unchanged items are skipped
   (content hash comparison), so re-syncing is cheap and has no side effects.
-- **Cursor management is your responsibility** — if you need incremental sync (e.g. "only fetch items
-  since last run"), store your own cursor in a CMS singleton, a file, or an external store. The framework
-  does not inject a `since` parameter.
+- **Cursor, retry list and job history live in the CMS** — in its own database, so they persist and are
+  backed up with the content. A worker outside the CMS process (the CLI, an MCP sidecar) reads and writes
+  them through the gateway API, so there is one cursor however a run starts. The framework still does not
+  inject a `since` into `fetch()`: a gateway that wants a datetime cursor calls `await
+  self.resolve_window()`. After any run that did not raise, the cursor moves to the run's start; items a run
+  deferred (a person's draft is in the way) or failed on go on a retry list instead of holding it back, and
+  an optional `refetch(import_refs)` hook lets the next run rebuild them. See ADR 018.
+- **Each document is published as soon as it is written** (`auto_publish = True`), so one failure strands
+  one document, not a run, and no changeset is left open.
 
 ## CLI
 
 ```bash
 gateways list                             # list installed gateways
-gateways sync <name> --cms-url ... \      # run a sync
-    --api-key ...
+gateways sync <name> --cms-url ... \      # run a sync; the cursor lives in the CMS
+    --api-key ... [--range all_time]
 ```
 
 ## `BaseGateway` reference

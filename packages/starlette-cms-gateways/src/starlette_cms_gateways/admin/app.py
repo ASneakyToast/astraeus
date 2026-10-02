@@ -1,12 +1,13 @@
 """
 GatewayAdmin — mountable Starlette sub-application for the gateway admin UI.
 
-Extends starlette-cms at init time by registering four API routes on the CMS
+Extends starlette-cms at init time by registering the gateway API routes on the CMS
 via :meth:`~starlette_cms.app.CMS.register_extension_route`, then serves a
 shell page from its own sub-application.
 
-Sync job records are stored in a dedicated SQLite database (separate from the
-CMS content database) so they never appear in the block registry or editor UI.
+Sync state (job records, the cursor, the retry list) is stored in the CMS's own
+SQLite file by default: the one file that is persistent and backed up. The tables
+sit beside the CMS's and never appear in the block registry or editor UI.
 
 Usage::
 
@@ -31,6 +32,10 @@ API:     GET  /cms/api/gateways
          GET  /cms/api/gateways/{name}
          POST /cms/api/gateways/{name}/sync
          GET  /cms/api/gateways/{name}/sync/{run_id}
+         GET/PUT /cms/api/gateways/{name}/cursor     (sync state for outside workers)
+         GET/PUT /cms/api/gateways/{name}/retry
+         POST    /cms/api/gateways/{name}/runs
+         PATCH   /cms/api/gateways/{name}/runs/{run_id}
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 from starlette.applications import Starlette
 
@@ -47,14 +53,28 @@ from starlette_cms_gateways.jobstore import JobStore
 if TYPE_CHECKING:
     from starlette_cms.app import CMS
 
-DEFAULT_JOBS_DB = "gateway_jobs.db"
+FALLBACK_JOBS_DB = "gateway_jobs.db"
+
+
+def sqlite_path(database_url: str) -> str | None:
+    """
+    The file behind a ``sqlite:///...`` URL, or ``None`` for anything else
+    (Postgres, in-memory). Reads the URL the way ``starlette_cms.db`` does.
+    """
+    parsed = urlparse(database_url)
+    if parsed.scheme.lower() != "sqlite":
+        return None
+    path = parsed.path
+    if path.lstrip("/") == ":memory:" or not path:
+        return None
+    return path[1:] if path.startswith("//") else path
 
 
 class GatewayAdmin:
     """
     Mountable Starlette gateway admin sub-application.
 
-    :param cms: The CMS instance to extend.  Four gateway API routes are
+    :param cms: The CMS instance to extend.  The gateway API routes are
         registered on it via
         :meth:`~starlette_cms.app.CMS.register_extension_route` at init time.
         Must be called before the first access of ``cms.app``.
@@ -64,14 +84,17 @@ class GatewayAdmin:
         ``/shell`` HTML page.  API routes always use the CMS auth model
         (``Authorization: Bearer <api_key>``).  Defaults to ``None`` — set
         this when the admin is exposed on a public server.
-    :param jobs_db_path: Path to the SQLite database file used to persist sync
-        job records.  Defaults to ``gateway_jobs.db`` in the current working
-        directory.  Use an absolute path in production (e.g. next to the CMS
-        database file).  Ignored if *job_store* is provided.
+    :param jobs_db_path: SQLite file for sync state (job records, the cursor, the
+        retry list).  Defaults to **the CMS's own database file**, so the state is
+        as persistent and as backed up as the content (a Litestream replica of the
+        CMS database carries it too).  When the CMS is not on a SQLite file
+        (Postgres, in-memory) the default falls back to ``gateway_jobs.db`` in the
+        working directory, with a warning: pass a path that outlives restarts.
+        Ignored if *job_store* is provided.
     :param job_store: A pre-built :class:`~starlette_cms_gateways.jobstore.JobStore`
         instance.  Use this to share a job store across multiple components or
         to control the database path explicitly.  When provided, *jobs_db_path*
-        is ignored (a warning is emitted if a non-default path was also passed).
+        is ignored (a warning is emitted if one was also passed).
     """
 
     def __init__(
@@ -81,7 +104,7 @@ class GatewayAdmin:
         mount_path: str = "/gateways",
         auth: Callable | None = None,
         login_path: str = "/api/auth/login",
-        jobs_db_path: str | Path = DEFAULT_JOBS_DB,
+        jobs_db_path: str | Path | None = None,
         job_store: JobStore | None = None,
     ) -> None:
         self.cms = cms
@@ -90,16 +113,27 @@ class GatewayAdmin:
         self.login_path = login_path
 
         if job_store is not None:
-            if jobs_db_path != DEFAULT_JOBS_DB:
+            if jobs_db_path is not None:
                 warnings.warn(
                     "jobs_db_path is ignored when job_store is provided",
                     stacklevel=2,
                 )
             self.jobs = job_store
         else:
+            if jobs_db_path is None:
+                jobs_db_path = sqlite_path(cms.database_url)
+                if jobs_db_path is None:
+                    warnings.warn(
+                        f"The CMS is not on a SQLite file, so gateway state (cursor, retry "
+                        f"list, job history) goes to {FALLBACK_JOBS_DB!r} in the working "
+                        "directory. Pass jobs_db_path= pointing at storage that outlives "
+                        "restarts.",
+                        stacklevel=2,
+                    )
+                    jobs_db_path = FALLBACK_JOBS_DB
             self.jobs = JobStore(jobs_db_path)
 
-        # Register the four gateway API routes on the CMS.
+        # Register the gateway API routes on the CMS.
         # Must happen before cms.app is accessed.
         from starlette_cms_gateways.admin.api import make_gateway_api_routes
 

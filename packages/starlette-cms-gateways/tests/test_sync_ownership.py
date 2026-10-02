@@ -8,9 +8,9 @@ These pin the contract a gateway's author relies on:
   ``updated_at`` churn);
 * only fields the gateway *owns* are hashed and written on update, so a hand
   edit to any other field survives every later sync;
-* a gateway that auto-publishes publishes updates too, in one changeset;
+* a gateway that auto-publishes publishes each document as it is written;
 * a document someone is mid-edit on is left alone and retried;
-* the cursor advances after a clean run and only then.
+* the cursor advances after every run that did not raise.
 """
 
 from __future__ import annotations
@@ -221,21 +221,33 @@ async def test_hand_edit_survives_a_sync_with_nothing_new(env):
     assert transport.writes() == []
 
 
-async def test_run_changeset_is_published_not_left_open(env):
-    client, http, _ = env
-    SOURCE["a"] = {"items": [1]}
+async def test_publishing_one_at_a_time_leaves_no_open_changesets(env):
+    """Each document is published as soon as it is written, and no changeset is opened.
+
+    The CMS links every PATCH into a date-titled changeset unless told not to; with
+    one publish per document that would leave one open changeset per updated doc.
+    """
+    client, http, transport = env
+    SOURCE.update({"a": {"items": [1]}, "b": {"items": [1]}})
     gw = OwnedGateway(cms_client=client)
-    result = await gw.sync()
-    assert result.changeset_id is not None
+    created = await gw.sync()
+    assert created.changeset_id is None
 
     SOURCE["a"]["items"] = [1, 2]
-    await gw.sync()
+    SOURCE["b"]["items"] = [1, 2]
+    transport.calls.clear()
+    updated = await gw.sync()
+    assert updated.updated == 2 and updated.changeset_id is None
 
+    # Each PATCH is followed by that document's own publish; no batch publish.
+    paths = [p for m, p in transport.writes()]
+    assert not any(p.startswith("/api/changesets") for p in paths)
+    assert sum(1 for p in paths if p.endswith("/publish")) == 2
     resp = await http.get("/api/changesets", params={"status": "open"})
-    assert resp.status_code == 200
-    body = resp.json()
-    open_sets = body["changesets"] if isinstance(body, dict) else body
-    assert open_sets == [], "an auto-publishing gateway must not leave open changesets"
+    assert resp.json()["changesets"] == [], "must not leave open changesets"
+    for k in ("a", "b"):
+        assert (await _doc(client, k))["body"]["items"] == [1, 2]
+        assert (await _doc(client, k))["has_draft"] is False
 
 
 async def test_review_gateway_still_leaves_drafts_for_review(env):
@@ -462,13 +474,14 @@ async def test_gateway_that_never_resolves_a_window_gets_no_cursor(env, tmp_path
     assert await store.get_cursor("owned_service") is None
 
 
-async def test_run_with_item_errors_or_deferrals_does_not_advance_the_cursor(env, tmp_path):
+async def test_cursor_advances_after_a_run_that_deferred_or_errored(env, tmp_path):
+    """Deferred and failed items go on the retry list; they never hold the cursor back."""
     client, _, _ = env
     SOURCE["a"] = {"items": [1]}
     store = JobStore(tmp_path / "jobs.db")
     gw = OwnedGateway(cms_client=client, job_store=store)
     await gw.sync()
-    good = await store.get_cursor("owned_service")
+    before = await store.get_cursor("owned_service")
 
     doc = await _doc(client, "a")
     await client.update_document(doc["id"], body={"notes": "wip"})
@@ -476,11 +489,17 @@ async def test_run_with_item_errors_or_deferrals_does_not_advance_the_cursor(env
     r = await gw.sync()
 
     assert r.deferred == ["owned:a"]
-    assert await store.get_cursor("owned_service") == good, "a deferred doc must be retried"
+    assert await store.get_cursor("owned_service") == r.started_at > before
+    assert [(e.import_ref, e.reason) for e in await store.get_retry("owned_service")] == [
+        ("owned:a", "deferred")
+    ]
 
-    # A body the CMS rejects is an item error, not a crash.
+    # A body the CMS rejects is an item error, not a crash, and goes on the list too.
     SOURCE["a"]["items"] = "not-a-list"
     await client.discard_draft(doc["id"])
     r = await gw.sync()
     assert r.has_errors
-    assert await store.get_cursor("owned_service") == good
+    assert await store.get_cursor("owned_service") == r.started_at
+    assert [(e.import_ref, e.reason) for e in await store.get_retry("owned_service")] == [
+        ("owned:a", "error")
+    ]

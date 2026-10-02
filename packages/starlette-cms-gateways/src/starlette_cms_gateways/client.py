@@ -27,6 +27,7 @@ Usage::
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Any, Literal
 
@@ -36,6 +37,7 @@ from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 
 from starlette_cms_gateways.base import GatewayItem
+from starlette_cms_gateways.drafts import draft_verdict
 
 logger = structlog.get_logger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -182,19 +184,29 @@ class CMSClient:
         body: dict[str, Any],
         meta: dict[str, Any] | None = None,
         changeset_id: str | None = None,
+        link_changeset: bool = True,
     ) -> dict[str, Any]:
         """
         Update an existing document via ``PATCH /api/documents/{id}``.
+
+        The CMS links every PATCH into an open changeset, creating a date-titled
+        one when none is given. Pass ``link_changeset=False`` when the caller
+        publishes the document itself straight away: it sends ``X-Skip-Changeset``
+        so no changeset is opened that nothing would ever publish or close.
+        ``changeset_id``, when given, always wins.
         """
         http = self._get_http()
         payload: dict[str, Any] = {"body": body}
         if meta:
             payload["meta"] = meta
 
+        headers = self._changeset_headers(changeset_id)
+        if changeset_id is None and not link_changeset:
+            headers["X-Skip-Changeset"] = "1"
         resp = await http.patch(
             f"{self.base_url}/api/documents/{doc_id}",
             json=payload,
-            headers=self._changeset_headers(changeset_id),
+            headers=headers,
         )
         if resp.status_code != 200:
             raise CMSError(resp.status_code, resp.text)
@@ -233,6 +245,54 @@ class CMSClient:
             raise CMSError(resp.status_code, resp.text)
         return resp.json()
 
+    async def get_draft_body(self, doc_id: str) -> dict[str, Any]:
+        """The document's pending draft body (the live body when there is no draft)."""
+        http = self._get_http()
+        resp = await http.get(
+            f"{self.base_url}/api/documents/{doc_id}",
+            params={"draft": "true"},
+            headers=self._auth_headers(),
+        )
+        if resp.status_code != 200:
+            raise CMSError(resp.status_code, resp.text)
+        return resp.json().get("body") or {}
+
+    async def gateway_request(
+        self, method: str, path: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """
+        Call the CMS gateway API: ``{method} /api/gateways/{path}``.
+
+        This is how a worker outside the CMS process reads and writes the sync
+        cursor, the retry list and the job history, which live in the CMS's
+        database. Returns the JSON body (``{}`` when there is none).
+        """
+        http = self._get_http()
+        resp = await http.request(
+            method,
+            f"{self.base_url}/api/gateways/{path}",
+            json=payload,
+            headers=self._auth_headers(),
+        )
+        if resp.status_code not in (200, 201):
+            raise CMSError(resp.status_code, resp.text)
+        return resp.json() if resp.content else {}
+
+    async def _draft_is_gateways(
+        self, existing: dict[str, Any], owned_fields: Iterable[str] | None
+    ) -> bool:
+        """
+        True when the pending draft on *existing* is the gateway's own leftover.
+
+        A person's draft — one that changes anything but owned fields, or a staged
+        deletion or publish-state change — is not. See :mod:`starlette_cms_gateways.drafts`.
+        """
+        if existing.get("draft_deleted") or existing.get("draft_published") is not None:
+            return False
+        draft = await self.get_draft_body(existing["id"])
+        verdict, _ = draft_verdict(existing.get("body") or {}, draft, owned_fields)
+        return verdict != "human-edits"
+
     async def upsert(
         self,
         *,
@@ -241,7 +301,6 @@ class CMSClient:
         auto_publish: bool = False,
         changeset_provider: Callable[[], Awaitable[str]] | None = None,
         owned_fields: Iterable[str] | None = None,
-        publish_with_changeset: bool = False,
     ) -> Literal["created", "updated", "skipped", "deferred"]:
         """
         Create, update, skip or defer a document based on ``import_ref``
@@ -250,29 +309,39 @@ class CMSClient:
         Decision logic:
 
         1. Look up an existing document by ``(block_type, import_ref)``.
-        2. None found → create with the *whole* body.  Return ``"created"``.
-        3. Found and the hash of the *owned* fields matches the stored one →
-           write nothing.  Return ``"skipped"``.
-        4. Found, hash differs, but a human holds a pending draft on it or
-           deliberately unpublished it → write nothing.  Return ``"deferred"``.
-           Patching would merge into their draft, and publishing would push their
-           work-in-progress live.
-        5. Found, hash differs → PATCH **only the owned fields**, so anything a
-           human added or edited elsewhere survives, then publish if asked.
-           Return ``"updated"``.
+        2. None found → create with the *whole* body, and publish it if
+           *auto_publish*.  Return ``"created"``.
+        3. Found with a pending **draft**.  Checked *before* the hash, because a
+           matching hash can hide a draft whose publish failed.
 
-        ``owned_fields=None`` treats the whole body as owned.  The hash is kept
-        in ``meta.content_hash`` so it survives restarts.  It is a hash of what
-        the gateway *sent*, never of what the CMS stored back (the CMS validates
-        and rewrites bodies).
+           * A person's draft (it changes more than owned fields, or a person
+             unpublished the document) → write nothing.  ``"deferred"`` if the
+             source changed, ``"skipped"`` if it did not (nothing to wait for).
+           * The gateway's own draft → fall through to step 5 and finish it: a
+             PATCH whose publish failed is re-PATCHed and published.  On a
+             review gateway (*auto_publish* False) a draft that is already
+             current is ``"skipped"``; a stale one is re-PATCHed, which is what
+             lets a never-published draft take a second and third update.
+        4. Found, no draft, and the hash of the *owned* fields matches → write
+           nothing.  ``"skipped"``.  The exception: an auto-publish gateway whose
+           document was created but never published (the publish failed) →
+           publish it.  ``"updated"``.  A document a person unpublished stays
+           unpublished; if the source changed meanwhile → ``"deferred"``.
+        5. Otherwise PATCH **only the owned fields**, so anything a person added
+           or edited elsewhere survives, then publish **that document** right
+           away if *auto_publish*.  ``"updated"``.
+
+        ``owned_fields=None`` treats the whole body as owned, and then any draft
+        is a person's (nothing can be told apart).  The hash is kept in
+        ``meta.content_hash`` so it survives restarts.  It is a hash of what the
+        gateway *sent*, never of what the CMS stored back (the CMS validates and
+        rewrites bodies).
 
         ``changeset_provider`` is an optional async callable resolved only when
         this call actually writes. It returns the id of the changeset to group
-        the write into — the caller uses it to lazily open one changeset per
-        sync run without creating one for an all-skip run.
-
-        ``publish_with_changeset`` says the caller will publish that changeset
-        itself, so the document is not also published here.
+        the write into: the review batch of a gateway that does not publish.
+        Without one the PATCH opts out of the CMS's auto-changeset
+        (``X-Skip-Changeset``), since publishing here leaves nothing to batch.
         """
         with tracer.start_as_current_span("gateways.client.upsert") as span:
             span.set_attribute("doc_type", block_type)
@@ -294,17 +363,15 @@ class CMSClient:
                         meta=meta,
                         changeset_id=cs_id,
                     )
-                    if auto_publish and not publish_with_changeset:
+                    if auto_publish:
                         await self.publish_document(doc["id"])
                     span.set_attribute("action", "created")
                     return "created"
 
                 existing_meta = existing.get("meta") or {}
                 if isinstance(existing_meta, str):
-                    import json as _json
-
                     try:
-                        existing_meta = _json.loads(existing_meta)
+                        existing_meta = json.loads(existing_meta)
                     except Exception:
                         logger.warning(
                             "starlette_cms_gateways.client.meta_parse_failed",
@@ -313,20 +380,41 @@ class CMSClient:
                         existing_meta = {}
 
                 published = bool(existing.get("published"))
-                never_published = not published and not existing.get("published_at")
+                ever_published = published or bool(existing.get("published_at"))
+                unpublished_by_person = ever_published and not published
+                same = existing_meta.get("content_hash", "") == new_hash
 
-                if existing_meta.get("content_hash", "") == new_hash:
-                    span.set_attribute("action", "skipped")
-                    return "skipped"
-
-                if existing.get("has_draft") or (not published and not never_published):
+                def deferred(reason: str) -> Literal["deferred"]:
                     logger.info(
                         "starlette_cms_gateways.client.deferred",
                         import_ref=item.import_ref,
-                        pending_draft=bool(existing.get("has_draft")),
+                        reason=reason,
                     )
                     span.set_attribute("action", "deferred")
                     return "deferred"
+
+                if existing.get("has_draft"):
+                    mine = not unpublished_by_person and await self._draft_is_gateways(
+                        existing, owned_fields
+                    )
+                    if not mine:
+                        if same:  # nothing to write, so nothing to wait for either
+                            span.set_attribute("action", "skipped")
+                            return "skipped"
+                        return deferred("a person's draft or unpublish is in the way")
+                    if same and not auto_publish:
+                        span.set_attribute("action", "skipped")
+                        return "skipped"  # review gateway: the draft already says this
+                elif same:
+                    if auto_publish and not ever_published:
+                        # Created, but the publish never happened. Nothing to write.
+                        await self.publish_document(existing["id"])
+                        span.set_attribute("action", "updated")
+                        return "updated"
+                    span.set_attribute("action", "skipped")
+                    return "skipped"
+                elif unpublished_by_person:
+                    return deferred("unpublished by a person")
 
                 cs_id = await changeset_provider() if changeset_provider is not None else None
                 await self.update_document(
@@ -334,8 +422,9 @@ class CMSClient:
                     body=item.owned_body(owned_fields),
                     meta={**existing_meta, "content_hash": new_hash},
                     changeset_id=cs_id,
+                    link_changeset=False,
                 )
-                if auto_publish and not publish_with_changeset:
+                if auto_publish:
                     await self.publish_document(existing["id"])
                 span.set_attribute("action", "updated")
                 return "updated"
