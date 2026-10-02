@@ -60,3 +60,17 @@ Considered. Pro: one install, one command. Con: couples the release cycle of CMS
 - Tool names and descriptions must be agent-legible — good descriptions are more important than they'd be in a typical API
 - The MCP server must handle auth correctly: `Authorization: Bearer {key}` on every mutating request
 - Future: if both MCP servers are commonly used together, a convenience `astraeus mcp serve` that launches both as a composed server is a reasonable v2 addition
+
+---
+
+## Tool design conventions (added 2026-10)
+
+Weaker models drive these tools, and a list call that returned 1.36M characters (a misnamed `document_type` argument was silently dropped, so every document came back with its full body) showed what an unbounded, forgiving tool costs. All MCP servers follow these rules:
+
+- **List tools return summaries**, never bodies. Bodies come from the single-document get tool, or an explicit `include_body=True` opt-in.
+- **Bounded pages**: default `limit` 10, maximum 50, `offset`, and `total` / `returned` / `has_more` / `next_offset` in every list response.
+- **Size caps**: any response over 20,000 characters is cut with a `truncated` flag and a `notice` saying how to get the rest.
+- **Unknown parameters fail loudly** with a "did you mean" message. FastMCP's argument model ignores extra keys by default, so each server replaces it with a strict subclass after registering its tools.
+- **Errors carry a `hint`** naming the tool to call next.
+- **Annotations** (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) on every tool; publish and unpublish are `openWorldHint` because they fire the site-rebuild webhook.
+- **`mcp` is pinned `<2`**: 2.x renamed `FastMCP`.
