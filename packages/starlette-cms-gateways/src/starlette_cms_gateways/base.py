@@ -208,8 +208,13 @@ class SyncResult:
         *deferred*: reported, not remembered.
     :param cursor: The cursor the run stored, or ``None`` if it stored none
         (no state wired, a ``custom`` run, or a gateway that never resolved a window).
-    :param changeset_id: The review-batch changeset of a gateway that does not
-        publish, or ``None`` (a gateway that publishes opens no changeset).
+    :param changeset_id: The run's changeset: the one it published (every write
+        destined to go live is in it) or, when it published nothing, the open review
+        changeset it wrote into. ``None`` when the run wrote nothing.
+    :param review_changeset_id: The open changeset holding what this run left for
+        review (a gateway with ``auto_publish = False``, or an item with
+        ``published=False``), or ``None``. It is ``changeset_id`` too when nothing
+        was published.
     :param started_at: UTC timestamp when the sync started.
     :param finished_at: UTC timestamp when the sync finished.
     """
@@ -222,6 +227,7 @@ class SyncResult:
     errors: list[tuple[str, str]] = field(default_factory=list)
     cursor: datetime | None = None
     changeset_id: str | None = None
+    review_changeset_id: str | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     finished_at: datetime | None = None
 
@@ -248,6 +254,7 @@ class SyncResult:
             "errors": self.errors,
             "cursor": self.cursor.isoformat() if self.cursor else None,
             "changeset_id": self.changeset_id,
+            "review_changeset_id": self.review_changeset_id,
             "total": self.total,
             "started_at": self.started_at.isoformat(),
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
@@ -287,10 +294,10 @@ class BaseGateway(ABC):
     """CMS block type name for synced documents."""
 
     auto_publish: ClassVar[bool] = False
-    """If False (default), documents are created as drafts and must be explicitly
-    published.  Set True to publish each document immediately, right after its
-    create or update succeeds (one at a time, so a failure strands one document,
-    not a run).  If False, a run's writes are grouped into one review changeset.
+    """If False (default), a run's writes are left in one open review changeset for a
+    person to publish.  Set True to publish them yourself: every write of a run goes
+    into one changeset, published once at the end of the run (one publish, so one
+    ``changeset.published`` webhook; all or nothing).
     """
 
     owned_fields: ClassVar[tuple[str, ...] | None] = None
@@ -412,18 +419,26 @@ class BaseGateway(ABC):
            a. No document yet → create.
            b. A person's draft is on it, or a person unpublished it → leave it
               alone and report it in ``SyncResult.deferred``.
-           c. A leftover draft of the gateway's own → finish it (re-PATCH, publish).
+           c. A leftover draft of the gateway's own → finish it (re-PATCH).
            d. Owned fields changed → update those fields only.
            e. Nothing changed → skip, writing nothing.
 
-           On an auto-publish gateway each document is published as soon as its
-           write succeeds. A gateway that does not publish groups its writes in
-           one review changeset.
-        4. Advance the cursor to the run's *start* time, once the run did not
-           raise: whatever was deferred or failed, so one stuck document never
-           makes every later run re-read everything. Only for a gateway that called
-           :meth:`resolve_window`, and never for a ``custom`` backfill. A run that
-           raises leaves the cursor alone.
+           Every write goes into a changeset opened lazily on the first write, so
+           a quiet run opens none. What is headed for publication goes into one
+           new changeset for the run. What is held for review (everything on a
+           gateway with ``auto_publish = False``, or an item with
+           ``published=False``) goes into a separate open review changeset for the
+           run, and is never published here.
+        4. Publish the run's changeset once, if it has one: a single publish, so a
+           single ``changeset.published`` webhook, and all or nothing. If that
+           raises, the run raises.
+        5. Advance the cursor to the run's *start* time, only after step 4
+           succeeded: whatever was deferred or failed on, so one stuck document
+           never makes every later run re-read everything, but a failed publish
+           leaves the cursor where it was, so the next run covers the same items
+           and finishes them. Only for a gateway that called
+           :meth:`resolve_window`, and never for a ``custom`` backfill.
+        6. Delete any empty open changesets earlier failed runs left behind.
 
         Deferred and failed items are reported, not remembered. An incremental
         run meets them again only if the source changes; to catch them up run
@@ -436,14 +451,23 @@ class BaseGateway(ABC):
         self.range = range or SyncRange(self.default_range)
         self._window = None
         store = self._job_store
+        sync_title = f"{self.service_name} sync"
+        review_title = f"{self.service_name} review"
 
-        # A gateway that does not publish groups its writes in one review changeset,
-        # created lazily on the first write so an all-skip run leaves none behind.
-        async def get_run_changeset() -> str:
-            if result.changeset_id is None:
-                title = f"{self.service_name} sync — {datetime.now(UTC).strftime('%b %-d')}"
-                result.changeset_id = await self._client.create_changeset(title)
-            return result.changeset_id
+        publish_cs: str | None = None
+
+        async def get_publish_changeset() -> str:
+            nonlocal publish_cs
+            if publish_cs is None:
+                title = f"{sync_title} — {datetime.now(UTC).strftime('%b %-d')}"
+                publish_cs = await self._client.create_changeset(title)
+            return publish_cs
+
+        async def get_review_changeset() -> str:
+            if result.review_changeset_id is None:
+                title = f"{review_title} — {datetime.now(UTC).strftime('%b %-d')}"
+                result.review_changeset_id = await self._client.create_changeset(title)
+            return result.review_changeset_id
 
         seen: set[str] = set()
         with tracer.start_as_current_span("gateways.sync") as span:
@@ -461,7 +485,9 @@ class BaseGateway(ABC):
                             item=item,
                             block_type=self.block_type,
                             auto_publish=publish,
-                            changeset_provider=None if publish else get_run_changeset,
+                            changeset_provider=(
+                                get_publish_changeset if publish else get_review_changeset
+                            ),
                             owned_fields=self.owned_fields,
                         )
                     except Exception as exc:  # noqa: BLE001
@@ -476,6 +502,11 @@ class BaseGateway(ABC):
                     else:
                         result.skipped += 1
 
+                if publish_cs is not None:
+                    await self._client.publish_changeset(publish_cs)
+                    await self._delete_empty_leftovers(sync_title, keep=publish_cs)
+                result.changeset_id = publish_cs or result.review_changeset_id
+
                 result.finish()
                 result.window = self._window
                 span.set_attribute("item_count", result.total)
@@ -488,3 +519,22 @@ class BaseGateway(ABC):
                 raise
 
         return result
+
+    async def _delete_empty_leftovers(self, title_prefix: str, *, keep: str) -> None:
+        """
+        Delete open, empty changesets named for this gateway's runs.
+
+        A run that failed to publish leaves its changeset open. The next run writes
+        the same documents into a new one, and publishing it removes them from the
+        old, which is then empty. Housekeeping only: a failure here never fails a run.
+        """
+        try:
+            for cs in await self._client.list_open_changesets():
+                if (
+                    cs["id"] != keep
+                    and str(cs.get("title", "")).startswith(title_prefix)
+                    and not cs.get("documents")
+                ):
+                    await self._client.delete_changeset(cs["id"])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("starlette_cms_gateways.sync.cleanup_failed", error=str(exc))

@@ -110,13 +110,9 @@ async def test_upsert_creates_new_document():
         mock.get("/api/documents").mock(
             return_value=httpx.Response(200, json=_list_resp([]))
         )
-        # create
+        # create (the caller publishes the run's changeset; the client never publishes a doc)
         mock.post("/api/documents").mock(
             return_value=httpx.Response(201, json=created_doc)
-        )
-        # publish
-        mock.post("/api/documents/new001/publish").mock(
-            return_value=httpx.Response(200, json={**created_doc, "published": True})
         )
 
         client = _make_client()
@@ -304,34 +300,38 @@ async def test_upsert_create_default_is_draft():
 
 
 @pytest.mark.anyio
-async def test_upsert_create_explicit_auto_publish_true():
-    """Explicit auto_publish=True should call publish endpoint."""
+async def test_upsert_create_goes_into_the_changeset_and_is_not_published_here():
+    """The client writes into the changeset it is given and never publishes a doc itself."""
     item = GatewayItem(
         import_ref="svc:type:PUB2",
         slug="pub-doc-2",
         body={"title": "Publish me"},
     )
     created_doc = _doc(doc_id="pub02", import_ref="svc:type:PUB2")
+    seen_headers: dict[str, str] = {}
 
-    publish_called = False
+    async def provider() -> str:
+        return "cs-run"
 
     with respx.mock(base_url=BASE, assert_all_mocked=False, assert_all_called=False) as mock:
         mock.get("/api/documents").mock(
             return_value=httpx.Response(200, json=_list_resp([]))
         )
-        mock.post("/api/documents").mock(
-            return_value=httpx.Response(201, json=created_doc)
+
+        def _record_create(request):
+            seen_headers.update(request.headers)
+            return httpx.Response(201, json=created_doc)
+
+        mock.post("/api/documents").mock(side_effect=_record_create)
+        publish = mock.post("/api/documents/pub02/publish").mock(
+            return_value=httpx.Response(200, json=created_doc)
         )
 
-        def _record_publish(request):
-            nonlocal publish_called
-            publish_called = True
-            return httpx.Response(200, json={**created_doc, "published": True})
-
-        mock.post("/api/documents/pub02/publish").mock(side_effect=_record_publish)
-
         client = _make_client()
-        action = await client.upsert(item=item, block_type="my_block", auto_publish=True)
+        action = await client.upsert(
+            item=item, block_type="my_block", auto_publish=True, changeset_provider=provider
+        )
 
     assert action == "created"
-    assert publish_called, "publish SHOULD be called with explicit auto_publish=True"
+    assert seen_headers.get("x-active-changeset-id") == "cs-run"
+    assert not publish.called, "publishing is the run's changeset's job"
