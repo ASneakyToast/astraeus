@@ -2,7 +2,7 @@
 Sync state against a real in-process CMS: the cursor, the retry list, drafts, and
 publishing one document at a time.
 
-What these pin (ADR 018):
+What these pin (ADR 023):
 
 * the cursor lives in the CMS's database and is one value, seen identically by the
   admin API, a worker over the gateway API (MCP, CLI) and a restarted CMS;
@@ -37,8 +37,6 @@ from starlette_cms_gateways.client import CMSClient
 from starlette_cms_gateways.drafts import draft_verdict
 from starlette_cms_gateways.runner import run_recorded
 from starlette_cms_gateways.state import RemoteSyncState, RetryEntry
-
-pytestmark = pytest.mark.asyncio
 
 API_KEY = "k"
 
@@ -608,3 +606,29 @@ async def test_sync_range_still_overrides_the_default(stack):
     await gw.sync()
     r = await gw.sync(SyncRange("all_time"))
     assert r.window.mode == "all_time" and not r.window.fell_back
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "sqlite:///relative/content.db",
+        "sqlite:////app/joellithgow/cms/data/content.db",
+        "sqlite:///./cms/data/content.db",
+        "sqlite:////tmp/x.db",
+    ],
+)
+def test_state_file_is_the_very_file_the_cms_opens(url):
+    """GatewayAdmin's default must be the CMS's file, however the URL is spelled."""
+    from starlette_cms.db import CMSDatabase
+    from starlette_cms_gateways.admin.app import sqlite_path
+
+    assert sqlite_path(url) == CMSDatabase._build_engine(url).path
+
+
+@pytest.mark.parametrize(
+    "url", ["postgres://u:p@h/db", "sqlite:///:memory:", "sqlite://:memory:"]
+)
+def test_no_state_file_when_the_cms_is_not_on_a_sqlite_file(url):
+    from starlette_cms_gateways.admin.app import sqlite_path
+
+    assert sqlite_path(url) is None

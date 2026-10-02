@@ -1,7 +1,9 @@
 # starlette-cms-gateways — Agent Instructions
 
 Read `../../CLAUDE.md` (the root Astraeus instructions) before working in this package.
-Then read `../../docs/decisions/015-starlette-cms-gateways.md` — it defines this package's scope and constraints.
+Then read `../../docs/decisions/015-starlette-cms-gateways.md` — it defines this package's scope and constraints —
+and `../../docs/decisions/023-gateway-state-and-publishing.md`, which supersedes ADR 015's cursor, state and
+incremental-sync sections (so where they disagree, ADR 023 wins).
 
 ---
 
@@ -25,9 +27,12 @@ purposes only — they are not installed as part of the package.
 ```
 src/starlette_cms_gateways/
 ├── __init__.py      # public API: BaseGateway, GatewayItem, SyncRange, SyncResult, SyncWindow
-├── base.py          # BaseGateway ABC + sync loop, SyncRange/SyncWindow, field ownership
-├── client.py        # CMSClient — upsert (create/update/skip/defer), find_by_import_ref
-├── jobstore.py      # JobStore — sync job history + per-gateway sync cursor (SQLite)
+├── base.py          # BaseGateway ABC + sync loop, SyncRange/SyncWindow, field ownership, refetch hook
+├── client.py        # CMSClient — upsert (create/update/skip/defer), find_by_import_ref, gateway API calls
+├── drafts.py        # draft_verdict — is a pending draft the gateway's own or a person's?
+├── state.py         # SyncState protocol, RetryEntry, RemoteSyncState (state over the CMS gateway API)
+├── jobstore.py      # JobStore — cursor, retry list and job history in the CMS's SQLite file
+├── runner.py        # run_recorded — run a gateway and keep job history true, from any entry point
 ├── cli.py           # gateways CLI group (sync [--range/--from/--to], list)
 └── mcp/
     └── server.py    # build_gateway_mcp_server() factory [requires mcp extra]
@@ -50,18 +55,28 @@ thread or scheduler inside the CMS or this package. See ADR 005 and ADR 015.
 **`auto_publish` is a class-level flag, not a runtime parameter.** Set it at the class level when defining
 a `BaseGateway` subclass. Do not pass it to `sync()`.
 
-**Cursor management is opt-in, and the gateway decides how to use it.** The framework does not inject a
-`since` parameter into `fetch()` (ADR 015). It passes the *request* as `self.range` (`since_last_sync`,
-`all_time` or `custom`). A gateway that wants a datetime cursor calls `await self.resolve_window()`; only then
-does the framework advance the cursor, after a clean run, in `JobStore`. Gateways with another cursor shape
-(a page token, an event id) ignore all of this and keep their own.
+**Sync state lives in the CMS, and workers reach it through the CMS.** The cursor, the retry list and the job
+history are tables in the CMS's own database (`GatewayAdmin` defaults to that file). Only the CMS process opens
+it; the CLI and MCP sidecars use `RemoteSyncState` over `/api/gateways/{name}/cursor|retry|runs`. Never give a
+worker its own state file: that is two cursors, lost on restart. Run every sync through `run_recorded` so job
+history covers all entry points.
+
+**The cursor is opt-in per gateway, and it never freezes.** The framework does not inject a `since` into
+`fetch()` (ADR 015). It passes the *request* as `self.range`; a gateway that wants a datetime cursor calls
+`await self.resolve_window()`. After any run that did not raise the cursor becomes the run's *start* time (never
+after `custom`). Items a run deferred or failed on go on the retry list, not into the cursor; a gateway can
+implement `refetch(import_refs)` to rebuild them next run. Never use `get_last_synced()` as a cursor: it is when a
+run *finished*.
 
 **Declare `owned_fields`.** Only owned (machine-sourced) fields are hashed and written on update; everything
 else is written once at creation and left to whoever edits it. Never write a field a person might edit in the
-editor into an update. A re-sync that finds nothing new must make zero writes.
+editor into an update. A re-sync that finds nothing new must make zero writes. A gateway with no `owned_fields`
+cannot tell its own pending draft from a person's, so it defers on any draft.
 
-**An update on an `auto_publish` gateway is published, in the run's changeset.** A document with a pending
-human draft is deferred, never patched or published over.
+**Each document is published as soon as it is written** (`auto_publish`), one at a time: no end-of-run changeset
+publish. The PATCH sends `X-Skip-Changeset` so the CMS does not open a date-titled changeset per document. A
+person's draft (or a document a person unpublished) is deferred, never patched or published over; the gateway's
+*own* leftover draft is finished.
 
 **Gateway implementations go in consumer repos, not here.** If you are adding a new gateway for a
 specific service, it belongs in the consuming application's codebase and entry points, not in this package.
@@ -71,7 +86,8 @@ The `examples/` directory is documentation only.
 
 ## Key ADRs and decisions
 
-- **ADR 015** (`docs/decisions/015-starlette-cms-gateways.md`) — this package's architecture, including EPIC-002 amendments
+- **ADR 015** (`docs/decisions/015-starlette-cms-gateways.md`) — this package's architecture, including EPIC-002 amendments. Its cursor / incremental-sync sections are superseded by ADR 023
+- **ADR 023** (`docs/decisions/023-gateway-state-and-publishing.md`) — sync state in the CMS, the never-freezing cursor and retry list, draft ownership, per-document publishing
 - **ADR 005** — gateway workers are external HTTP clients of the CMS (never embedded)
 
 ---
@@ -92,7 +108,10 @@ uv run pyright packages/starlette-cms-gateways/
 uv run ruff check packages/starlette-cms-gateways/
 ```
 
-Tests use `respx` to mock the CMS HTTP API — never spin up a real CMS process in unit tests. The sync
-behaviour that depends on the CMS's real draft/changeset semantics (`test_sync_ownership.py`,
-`test_sync_e2e.py`) runs a CMS in-process over `ASGITransport`, not as a process.
-Integration tests (if any) live in `tests/integration/` and require `CMS_URL` and `CMS_API_KEY` env vars.
+**Testing.** The root rule wins: anything that touches draft, publish, changeset or sync-state behaviour runs
+against a real CMS in-process (`ASGITransport`, a temp SQLite file; never a separate process), because a mock
+can only repeat what you told it the CMS does. That is `test_sync_state.py`, `test_sync_ownership.py`,
+`test_sync_e2e.py` and `test_gateway_admin.py`. `respx` is for the request shape of `CMSClient` alone
+(`test_cms_client.py`) and for faking the *external* service a gateway pulls from. Include a restart case when you
+touch state: build a second CMS on the same file. Integration tests (if any) live in `tests/integration/` and
+require `CMS_URL` and `CMS_API_KEY` env vars.
