@@ -7,17 +7,214 @@ No business logic lives here — only tool definitions and httpx calls.
 
 from __future__ import annotations
 
-from typing import Any
+import difflib
+import json
+from typing import Annotated, Any
 
 import httpx
+from pydantic import BaseModel, Field, model_validator
 
 try:
     from mcp.server.fastmcp import FastMCP
+    from mcp.types import ToolAnnotations
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
-        "The MCP server requires the 'mcp' extra. "
-        "Install with: pip install starlette-cms[mcp]"
+        "The MCP server requires the 'mcp' extra. Install with: pip install starlette-cms[mcp]"
     ) from exc
+
+
+DEFAULT_LIST_LIMIT = 10
+MAX_LIST_LIMIT = 50
+
+# Hard cap on the size of any single tool response, in characters.  A weaker
+# model that gets a megabyte back burns its context window and gives up.
+MAX_RESPONSE_CHARS = 20_000
+DEFAULT_GET_MAX_CHARS = 20_000
+MAX_GET_MAX_CHARS = 200_000
+
+EXCERPT_CHARS = 200
+
+# Body keys checked, in order, to derive a title / excerpt for list summaries.
+TITLE_KEYS = ("title", "name", "headline", "heading")
+EXCERPT_KEYS = ("excerpt", "summary", "description", "subtitle", "dek")
+
+STATUS_DRAFT = "draft"
+STATUS_PUBLISHED = "published"
+
+READ_ONLY = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+CREATE = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+UPDATE = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+DELETE = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+# Publishing and unpublishing fire the document.published / document.unpublished
+# webhook, which triggers a Netlify rebuild of the public site.
+PUBLISH = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=True,
+)
+
+LIMIT_DESCRIPTION = (
+    f"Max documents to return, 1-{MAX_LIST_LIMIT} (default {DEFAULT_LIST_LIMIT}). "
+    "Use offset to page through more."
+)
+
+
+class DocumentSummary(BaseModel):
+    """Body-free view of a document, used by list_documents."""
+
+    created_at: str | None = None
+    doc_type: str
+    excerpt: str | None = None
+    has_draft: bool = False
+    id: str
+    published: bool = False
+    published_at: str | None = None
+    slug: str = ""
+    status: str
+    title: str | None = None
+    updated_at: str | None = None
+
+
+class DocumentListResponse(BaseModel):
+    """Shape returned by list_documents."""
+
+    documents: list[dict[str, Any]]
+    filters_applied: dict[str, Any]
+    has_more: bool
+    hint: str | None = None
+    limit: int
+    next_offset: int | None
+    notice: str | None = None
+    offset: int
+    returned: int
+    total: int
+    truncated: bool = False
+
+
+def _first_text(body: Any, keys: tuple[str, ...]) -> str | None:
+    """Return the first non-empty string value among ``keys`` in a body dict."""
+    if not isinstance(body, dict):
+        return None
+    for key in keys:
+        value = body.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def summarize_document(doc: dict[str, Any]) -> DocumentSummary:
+    """Reduce a full API document to a small, body-free summary."""
+    body = doc.get("body")
+    excerpt = _first_text(body, EXCERPT_KEYS)
+    if excerpt is not None and len(excerpt) > EXCERPT_CHARS:
+        excerpt = excerpt[:EXCERPT_CHARS].rstrip() + "..."
+
+    published = bool(doc.get("published"))
+    return DocumentSummary(
+        created_at=doc.get("created_at"),
+        doc_type=doc.get("doc_type", ""),
+        excerpt=excerpt,
+        has_draft=bool(doc.get("has_draft")),
+        id=doc.get("id", ""),
+        published=published,
+        published_at=doc.get("published_at"),
+        slug=doc.get("slug") or "",
+        status=STATUS_PUBLISHED if published else STATUS_DRAFT,
+        title=_first_text(body, TITLE_KEYS),
+        updated_at=doc.get("updated_at"),
+    )
+
+
+def _error(message: str, hint: str | None = None, **extra: Any) -> dict[str, Any]:
+    """Build an error payload: what went wrong, plus what to try next."""
+    payload: dict[str, Any] = {"error": message}
+    if hint:
+        payload["hint"] = hint
+    payload.update(extra)
+    return payload
+
+
+def _unknown_parameter_message(tool_name: str, unknown: list[str], valid: list[str]) -> str:
+    """Explain unknown tool arguments, suggesting the closest valid name."""
+    parts: list[str] = []
+    for name in unknown:
+        close = difflib.get_close_matches(name, valid, n=1, cutoff=0.5)
+        suggestion = f" Did you mean `{close[0]}`?" if close else ""
+        parts.append(f"Unknown parameter `{name}` for {tool_name}.{suggestion}")
+    valid_list = ", ".join(f"`{v}`" for v in valid) or "(none)"
+    return " ".join(parts) + f" Valid parameters: {valid_list}."
+
+
+def _reject_unknown_arguments(mcp: FastMCP) -> None:
+    """
+    Make every registered tool fail loudly on unknown arguments.
+
+    FastMCP validates arguments with a pydantic model whose default is to
+    silently ignore extra keys, so a misnamed parameter (``document_type``
+    instead of ``doc_type``) used to be dropped and the call ran unfiltered.
+    Each tool's argument model is replaced by a subclass whose ``before``
+    validator raises a message naming the closest valid parameter.  FastMCP
+    reports it to the caller as a tool error.
+    """
+    for tool in mcp._tool_manager.list_tools():
+        arg_model = tool.fn_metadata.arg_model
+        valid = sorted(arg_model.model_fields)
+        tool_name = tool.name
+
+        def _check(cls: Any, data: Any, _tool: str = tool_name, _valid: list[str] = valid) -> Any:
+            if isinstance(data, dict):
+                unknown = sorted(set(data) - set(_valid))
+                if unknown:
+                    raise ValueError(_unknown_parameter_message(_tool, unknown, _valid))
+            return data
+
+        tool.fn_metadata.arg_model = type(
+            arg_model.__name__,
+            (arg_model,),
+            {"check_unknown_arguments": model_validator(mode="before")(classmethod(_check))},
+        )
+        tool.parameters["additionalProperties"] = False
+
+
+def _cap_json(value: dict[str, Any], max_chars: int) -> tuple[str, bool]:
+    """Serialise ``value`` and cut it to ``max_chars``; return (text, was_cut)."""
+    text = json.dumps(value, default=str)
+    if len(text) <= max_chars:
+        return text, False
+    return text[:max_chars], True
+
+
+def _fit_documents(docs: list[dict[str, Any]], max_chars: int) -> list[dict[str, Any]]:
+    """Return the longest leading run of ``docs`` that serialises within ``max_chars``."""
+    fitted: list[dict[str, Any]] = []
+    used = 0
+    for doc in docs:
+        used += len(json.dumps(doc, default=str))
+        if used > max_chars:
+            break
+        fitted.append(doc)
+    return fitted
 
 
 def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
@@ -59,10 +256,20 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
     mcp = FastMCP(
         name="starlette-cms",
         instructions=(
-            "Tools for managing content in a starlette-cms instance. "
-            "Use list_block_types to discover what document types are available, "
-            "get_block_schema to understand a type's fields, then create/update/delete "
-            "documents as needed. Publish a document to make it publicly visible."
+            "Tools for managing content in a starlette-cms instance.\n"
+            "Workflow:\n"
+            "1. list_block_types to see the available document types, then "
+            "get_block_schema(block_type) to see a type's fields.\n"
+            "2. list_documents(doc_type=..., limit=5) to find documents. It returns "
+            "short summaries (id, title, slug, status, dates, excerpt) WITHOUT bodies. "
+            "Keep limit small and page with offset / next_offset.\n"
+            "3. get_document(doc_id) to read one document's full body.\n"
+            "4. create_document / update_document write DRAFTS only and do not change "
+            "the public site. Check the result, then publish_document to go live.\n"
+            "5. publish_document and unpublish_document change the public site and "
+            "trigger a site rebuild; only call them when asked to publish.\n"
+            "Parameter names are exact: an unknown parameter is rejected with a "
+            "suggestion, not ignored."
         ),
     )
 
@@ -70,13 +277,14 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
     # Schema tools (read-only, no auth required for most deployments)
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     async def list_block_types() -> list[str]:
         """
-        Return the names of all block types registered in this CMS.
+        Return the names of all block types (document types) in this CMS.
 
-        Use this first to discover what document types are available, then call
-        get_block_schema(block_type) to see the fields for a specific type.
+        Call this first when you do not know which types exist. Cheap: returns a
+        short list of names. Then call get_block_schema(block_type) for a type's
+        fields, or list_documents(doc_type=...) to see its documents.
         """
         client = _get_client()
         r = await client.get("/api/schema", headers=_read_headers())
@@ -86,18 +294,26 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
         definitions: dict[str, Any] = data.get("$defs", data.get("definitions", {}))
         return list(definitions.keys())
 
-    @mcp.tool()
-    async def get_block_schema(block_type: str) -> dict[str, Any]:
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_block_schema(
+        block_type: Annotated[
+            str, Field(description='Block type name from list_block_types, e.g. "blog_post".')
+        ],
+    ) -> dict[str, Any]:
         """
-        Return the JSON Schema for a specific block type, including field labels,
-        required/optional status, and any constraints.
+        Return the JSON Schema for one block type: field names, types, which
+        fields are required, and constraints.
 
-        :param block_type: The block type name (from list_block_types).
+        Use this before create_document or update_document so the body matches the
+        schema. Do not use it to find documents; use list_documents for that.
         """
         client = _get_client()
         r = await client.get(f"/api/schema/{block_type}", headers=_read_headers())
         if r.status_code == 404:
-            return {"error": f"Block type {block_type!r} not found"}
+            return _error(
+                f"Block type {block_type!r} not found",
+                hint="Call list_block_types to see the valid names.",
+            )
         r.raise_for_status()
         return r.json()
 
@@ -105,27 +321,59 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
     # Document read tools
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     async def list_documents(
-        doc_type: str | None = None,
-        published: bool | None = None,
-        limit: int = 20,
-        offset: int = 0,
+        doc_type: Annotated[
+            str | None,
+            Field(
+                description=(
+                    'Only documents of this block type, e.g. "blog_post". The parameter is '
+                    "named `doc_type`. Omit for all types (call list_block_types for names)."
+                )
+            ),
+        ] = None,
+        published: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "true = only published documents, false = only unpublished drafts, omit = both."
+                )
+            ),
+        ] = None,
+        limit: Annotated[
+            int, Field(ge=1, le=MAX_LIST_LIMIT, description=LIMIT_DESCRIPTION)
+        ] = DEFAULT_LIST_LIMIT,
+        offset: Annotated[
+            int,
+            Field(
+                ge=0,
+                description="Documents to skip. Use `next_offset` from the previous page.",
+            ),
+        ] = 0,
+        include_body: Annotated[
+            bool,
+            Field(
+                description=(
+                    "false (default) returns short summaries. true returns each full "
+                    "document including its body, which can be very large; prefer "
+                    "get_document for one document."
+                )
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """
-        List documents, optionally filtered by type and publish status.
+        List documents, newest first, as short summaries WITHOUT bodies.
 
-        Returns a dict with keys:
-        - ``documents``: list of document objects
-        - ``total``: total count matching the query (before limit/offset)
-        - ``filters_applied``: echo of any filters that were applied
+        Use this to find documents by type or status. To read a document's content,
+        take its `id` from here and call get_document. Do not set include_body just
+        to read one document.
 
-        :param doc_type: Filter to one block type, e.g. ``"blog_post"``.
-            Omit to return documents of all types.
-        :param published: ``True`` for only published documents, ``False`` for
-            only drafts, ``None`` (default) for all.
-        :param limit: Max number of documents to return (default 20).
-        :param offset: Number of documents to skip for pagination (default 0).
+        Each summary has: id, doc_type, slug, title, status ("draft" or
+        "published"), has_draft, created_at, updated_at, published_at, excerpt.
+        The response also has `total` (all matches), `limit`, `offset`, `returned`,
+        `has_more` and `next_offset` (pass it as `offset` to get the next page).
+        If a size cap cut the response short, `truncated` is true and `notice` says
+        how to get the rest.
         """
         client = _get_client()
         params: dict[str, Any] = {"limit": limit, "offset": offset}
@@ -135,46 +383,136 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
             params["published"] = str(published).lower()
         r = await client.get("/api/documents", params=params, headers=_read_headers())
         r.raise_for_status()
-        return r.json()
+        data = r.json()
 
-    @mcp.tool()
-    async def get_document(doc_id: str) -> dict[str, Any]:
+        docs: list[dict[str, Any]] = data.get("documents", [])
+        total: int = data.get("total", len(docs))
+        truncated = False
+        notice: str | None = None
+
+        summaries = [summarize_document(d).model_dump() for d in docs]
+        shaped = summaries
+
+        if include_body:
+            fitted = _fit_documents(docs, MAX_RESPONSE_CHARS)
+            if len(fitted) == len(docs):
+                shaped = docs
+            else:
+                truncated = True
+                if fitted:
+                    shaped = fitted
+                    notice = (
+                        f"Response capped at {MAX_RESPONSE_CHARS} characters: returned "
+                        f"{len(fitted)} of {len(docs)} documents with bodies. Use next_offset "
+                        "for the rest, or lower limit."
+                    )
+                else:
+                    notice = (
+                        f"The first document alone exceeds {MAX_RESPONSE_CHARS} characters, "
+                        "so bodies were omitted and summaries returned. Call "
+                        "get_document(doc_id, max_chars=...) to read one document."
+                    )
+
+        returned = len(shaped)
+        has_more = offset + returned < total
+        hint = None
+        if total == 0 and doc_type is not None:
+            hint = (
+                f"No documents of type {doc_type!r}. Check the name with list_block_types; "
+                "it must match exactly."
+            )
+
+        return DocumentListResponse(
+            documents=shaped,
+            filters_applied=data.get("filters_applied", {}),
+            has_more=has_more,
+            hint=hint,
+            limit=limit,
+            next_offset=offset + returned if has_more else None,
+            notice=notice,
+            offset=offset,
+            returned=returned,
+            total=total,
+            truncated=truncated,
+        ).model_dump(exclude_none=False)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_document(
+        doc_id: Annotated[
+            str,
+            Field(description="Document id (nanoid) from list_documents."),
+        ],
+        max_chars: Annotated[
+            int,
+            Field(
+                ge=1_000,
+                le=MAX_GET_MAX_CHARS,
+                description=(
+                    f"Cap on the response size in characters (default {DEFAULT_GET_MAX_CHARS}, "
+                    f"max {MAX_GET_MAX_CHARS}). Raise it only if the response was truncated."
+                ),
+            ),
+        ] = DEFAULT_GET_MAX_CHARS,
+    ) -> dict[str, Any]:
         """
-        Return a single document by its nanoid.
+        Return ONE document with its full body.
 
-        :param doc_id: The document's nanoid (e.g. ``"V1StGXR8_Z5jdHi6B-myT"``).
-            You can obtain IDs from list_documents.
+        Use this to read or check a single document after finding its id with
+        list_documents. Bodies (rich text especially) can be large; if the
+        response exceeds `max_chars` it comes back as
+        {"truncated": true, "notice": ..., "content": <first max_chars characters of the JSON>}
+        and `notice` says how to get more.
         """
         client = _get_client()
         r = await client.get(f"/api/documents/{doc_id}", headers=_read_headers())
         if r.status_code == 404:
-            return {"error": f"Document {doc_id!r} not found"}
+            return _error(
+                f"Document {doc_id!r} not found",
+                hint="Use an `id` from list_documents; ids are case-sensitive nanoids, not slugs.",
+            )
         r.raise_for_status()
-        return r.json()
+        doc = r.json()
+
+        text, was_cut = _cap_json(doc, max_chars)
+        if not was_cut:
+            return doc
+        return {
+            "content": text,
+            "doc_id": doc_id,
+            "notice": (
+                f"Document JSON is {len(json.dumps(doc, default=str))} characters; showing the "
+                f"first {max_chars}. Call get_document again with a larger max_chars "
+                f"(up to {MAX_GET_MAX_CHARS}) to read more."
+            ),
+            "truncated": True,
+        }
 
     # ------------------------------------------------------------------
     # Document write tools
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(annotations=CREATE)
     async def create_document(
-        doc_type: str,
-        body: dict[str, Any],
-        slug: str = "",
-        meta: dict[str, Any] | None = None,
+        doc_type: Annotated[
+            str, Field(description='Block type name from list_block_types, e.g. "blog_post".')
+        ],
+        body: Annotated[
+            dict[str, Any],
+            Field(description="Document body. Must match the block schema from get_block_schema."),
+        ],
+        slug: Annotated[str, Field(description='Optional URL slug, e.g. "my-first-post".')] = "",
+        meta: Annotated[
+            dict[str, Any] | None,
+            Field(description="Optional metadata (arbitrary key/value pairs)."),
+        ] = None,
     ) -> dict[str, Any]:
         """
-        Create a new document.  The document is created in draft state; call
-        publish_document to make it publicly visible.
+        Create a new document as a DRAFT. It is not public until you call
+        publish_document.
 
-        For append_only block types, the document is automatically published
-        immediately — no second call is needed.
-
-        :param doc_type: Block type name (from list_block_types).
-        :param body: Document body.  Must match the block's schema
-            (use get_block_schema to see required fields).
-        :param slug: Optional URL slug for this document.
-        :param meta: Optional metadata dict (arbitrary key/value pairs).
+        Call get_block_schema(doc_type) first so the body is valid. Not idempotent:
+        calling twice creates two documents, so check list_documents before retrying.
+        For append_only block types the document is published immediately.
         """
         client = _get_client()
         payload: dict[str, Any] = {
@@ -186,28 +524,35 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
             payload["meta"] = meta
         r = await client.post("/api/documents", json=payload)
         if r.status_code == 422:
-            return {"error": "Validation failed", "detail": r.json()}
+            return _error(
+                "Validation failed",
+                hint=(
+                    "Fix the fields listed in `detail`; get_block_schema(doc_type) shows the "
+                    "required fields and types, and list_block_types the valid doc_type names."
+                ),
+                detail=r.json(),
+            )
         r.raise_for_status()
         return r.json()
 
-    @mcp.tool()
+    @mcp.tool(annotations=UPDATE)
     async def update_document(
-        doc_id: str,
-        body: dict[str, Any] | None = None,
-        slug: str | None = None,
-        meta: dict[str, Any] | None = None,
+        doc_id: Annotated[str, Field(description="The document id (nanoid) from list_documents.")],
+        body: Annotated[
+            dict[str, Any] | None,
+            Field(description="Partial body: only the fields to change; they are merged in."),
+        ] = None,
+        slug: Annotated[str | None, Field(description="New slug, if changing it.")] = None,
+        meta: Annotated[
+            dict[str, Any] | None,
+            Field(description="Partial metadata to merge into existing meta."),
+        ] = None,
     ) -> dict[str, Any]:
         """
-        Partially update an existing document (PATCH semantics — only the fields
-        you provide are changed; omitted fields are left as-is).
+        Partially update a document (PATCH: only the fields you provide change).
 
-        Returns 405 for append_only block types (those documents cannot be modified
-        after creation).
-
-        :param doc_id: The document's nanoid.
-        :param body: Partial body dict to merge into the existing body.
-        :param slug: New slug value, if changing.
-        :param meta: Partial meta dict to merge into the existing meta.
+        Does not publish. Call get_document first if you need the current values.
+        Not allowed for append_only block types.
         """
         client = _get_client()
         payload: dict[str, Any] = {}
@@ -219,64 +564,96 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
             payload["meta"] = meta
         r = await client.patch(f"/api/documents/{doc_id}", json=payload)
         if r.status_code == 404:
-            return {"error": f"Document {doc_id!r} not found"}
+            return _error(
+                f"Document {doc_id!r} not found",
+                hint="Use an `id` from list_documents.",
+            )
         if r.status_code == 405:
-            return {"error": r.json().get("error", "Method not allowed")}
+            return _error(
+                r.json().get("error", "Method not allowed"),
+                hint="append_only documents cannot be modified; create a new document instead.",
+            )
         if r.status_code == 422:
-            return {"error": "Validation failed", "detail": r.json()}
+            return _error(
+                "Validation failed",
+                hint="Fix the fields listed in `detail`; get_block_schema shows the valid shape.",
+                detail=r.json(),
+            )
         r.raise_for_status()
         return r.json()
 
-    @mcp.tool()
-    async def delete_document(doc_id: str) -> dict[str, Any]:
+    @mcp.tool(annotations=DELETE)
+    async def delete_document(
+        doc_id: Annotated[str, Field(description="The document id (nanoid) from list_documents.")],
+    ) -> dict[str, Any]:
         """
-        Delete a document permanently.
+        Permanently delete a document. This cannot be undone.
 
-        Returns 409 if other documents reference this one with on_delete="block".
-        Returns 405 for append_only block types.
-
-        :param doc_id: The document's nanoid.
+        To take a live document offline but keep it, use unpublish_document instead.
+        Fails if other documents reference this one, and for append_only types.
         """
         client = _get_client()
         r = await client.delete(f"/api/documents/{doc_id}")
         if r.status_code == 404:
-            return {"error": f"Document {doc_id!r} not found"}
+            return _error(
+                f"Document {doc_id!r} not found",
+                hint="Use an `id` from list_documents; it may already be deleted.",
+            )
         if r.status_code == 405:
-            return {"error": r.json().get("error", "Method not allowed")}
+            return _error(
+                r.json().get("error", "Method not allowed"),
+                hint="append_only documents cannot be deleted.",
+            )
         if r.status_code == 409:
-            return {"error": r.json().get("error", "Conflict — referenced document")}
+            return _error(
+                r.json().get("error", "Conflict — referenced document"),
+                hint="Remove or change the referencing documents first, then retry.",
+            )
         r.raise_for_status()
         return {"deleted": True, "doc_id": doc_id}
 
-    @mcp.tool()
-    async def publish_document(doc_id: str) -> dict[str, Any]:
+    @mcp.tool(annotations=PUBLISH)
+    async def publish_document(
+        doc_id: Annotated[str, Field(description="The document id (nanoid) from list_documents.")],
+    ) -> dict[str, Any]:
         """
-        Publish a document, making it publicly visible.
+        Publish a document: it becomes publicly visible and the site is rebuilt
+        (this fires the publish webhook that triggers a Netlify rebuild).
 
-        For singleton block types, publishing a new version automatically archives
-        the previously active version — only one version is "active" at a time.
-
-        :param doc_id: The document's nanoid.
+        Only call this when asked to publish; use create_document / update_document
+        for drafts. Safe to repeat. For singleton block types, publishing archives
+        the previously active version.
         """
         client = _get_client()
         r = await client.post(f"/api/documents/{doc_id}/publish")
         if r.status_code == 404:
-            return {"error": f"Document {doc_id!r} not found"}
+            return _error(
+                f"Document {doc_id!r} not found",
+                hint="Use an `id` from list_documents.",
+            )
         r.raise_for_status()
         return r.json()
 
-    @mcp.tool()
-    async def unpublish_document(doc_id: str) -> dict[str, Any]:
+    @mcp.tool(annotations=PUBLISH)
+    async def unpublish_document(
+        doc_id: Annotated[str, Field(description="The document id (nanoid) from list_documents.")],
+    ) -> dict[str, Any]:
         """
-        Unpublish a document, reverting it to draft state.
+        Unpublish a document: it reverts to a draft, disappears from the public
+        site, and the site is rebuilt (fires the same webhook as publishing).
 
-        :param doc_id: The document's nanoid.
+        The content is kept; use delete_document only to remove it permanently.
         """
         client = _get_client()
         r = await client.post(f"/api/documents/{doc_id}/unpublish")
         if r.status_code == 404:
-            return {"error": f"Document {doc_id!r} not found"}
+            return _error(
+                f"Document {doc_id!r} not found",
+                hint="Use an `id` from list_documents.",
+            )
         r.raise_for_status()
         return r.json()
+
+    _reject_unknown_arguments(mcp)
 
     return mcp
