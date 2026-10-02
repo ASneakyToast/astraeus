@@ -387,5 +387,6 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         d.pop("updated", None)
         d.pop("skipped", None)
         d.pop("errors", None)
-    d.pop("error", None)  # only include if non-empty
+    if not d.get("error"):
+        d.pop("error", None)  # only include if non-empty
     return d

@@ -168,3 +168,18 @@ async def test_cursor_is_independent_of_job_history():
         assert await store.get_cursor("gw") is None
     finally:
         os.unlink(path)
+
+
+async def test_failed_job_keeps_its_error_text_and_ok_job_has_none():
+    """The job list is where a failed CLI or MCP run is read, so the message must survive."""
+    path, store = _tmp_store()
+    try:
+        await store.create("run-ok", "my-gateway")
+        await store.finish("run-ok", status="done", created=1)
+        await store.create("run-bad", "my-gateway")
+        await store.finish("run-bad", status="error", error="iNaturalist said 500")
+
+        assert (await store.get("run-bad"))["error"] == "iNaturalist said 500"
+        assert "error" not in await store.get("run-ok")
+    finally:
+        os.unlink(path)
