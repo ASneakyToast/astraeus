@@ -475,7 +475,7 @@ async def test_gateway_that_never_resolves_a_window_gets_no_cursor(env, tmp_path
 
 
 async def test_cursor_advances_after_a_run_that_deferred_or_errored(env, tmp_path):
-    """Deferred and failed items go on the retry list; they never hold the cursor back."""
+    """Deferred and failed items are reported; they never hold the cursor back."""
     client, _, _ = env
     SOURCE["a"] = {"items": [1]}
     store = JobStore(tmp_path / "jobs.db")
@@ -490,16 +490,10 @@ async def test_cursor_advances_after_a_run_that_deferred_or_errored(env, tmp_pat
 
     assert r.deferred == ["owned:a"]
     assert await store.get_cursor("owned_service") == r.started_at > before
-    assert [(e.import_ref, e.reason) for e in await store.get_retry("owned_service")] == [
-        ("owned:a", "deferred")
-    ]
 
-    # A body the CMS rejects is an item error, not a crash, and goes on the list too.
+    # A body the CMS rejects is an item error, not a crash, and the cursor moves too.
     SOURCE["a"]["items"] = "not-a-list"
     await client.discard_draft(doc["id"])
     r = await gw.sync()
     assert r.has_errors
     assert await store.get_cursor("owned_service") == r.started_at
-    assert [(e.import_ref, e.reason) for e in await store.get_retry("owned_service")] == [
-        ("owned:a", "error")
-    ]

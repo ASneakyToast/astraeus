@@ -1,13 +1,14 @@
 """
-Sync state against a real in-process CMS: the cursor, the retry list, drafts, and
-publishing one document at a time.
+Sync state against a real in-process CMS: the cursor, drafts, and publishing one
+document at a time.
 
 What these pin (ADR 023):
 
 * the cursor lives in the CMS's database and is one value, seen identically by the
   admin API, a worker over the gateway API (MCP, CLI) and a restarted CMS;
 * a run that did not raise moves the cursor to its start, whatever it deferred or
-  failed on; those documents go on the retry list and are tried again next run;
+  failed on. Those documents are reported, not remembered: an incremental run meets
+  them again only if the source changes, and an ``all_time`` run catches them up;
 * a gateway's own leftover draft (a publish that failed, a revision awaiting review)
   is finished or updated; a person's draft is never touched;
 * each document is published as soon as it is written, and no changeset is left open.
@@ -36,14 +37,13 @@ from starlette_cms_gateways.cli import run_sync_via_cms
 from starlette_cms_gateways.client import CMSClient
 from starlette_cms_gateways.drafts import draft_verdict
 from starlette_cms_gateways.runner import run_recorded
-from starlette_cms_gateways.state import RemoteSyncState, RetryEntry
+from starlette_cms_gateways.state import RemoteSyncState
 
 API_KEY = "k"
 
 # What the fake source holds, and what "changed at the source" since the last run.
 SOURCE: dict[str, list[int]] = {}
 CHANGED: list[set[str] | None] = [None]  # None: everything is yielded
-REFETCHED: list[list[str]] = []
 
 
 def _item(key: str) -> GatewayItem:
@@ -57,7 +57,7 @@ def _item(key: str) -> GatewayItem:
 
 
 class StateGateway(BaseGateway):
-    """Incremental: fetch yields only what changed; refetch rebuilds named refs."""
+    """Incremental: ``fetch`` yields only what changed at the source, if CHANGED says so."""
 
     service_name = "state_service"
     block_type = "owned_doc"
@@ -68,20 +68,6 @@ class StateGateway(BaseGateway):
         await self.resolve_window()
         for key in SOURCE if CHANGED[0] is None else sorted(CHANGED[0]):
             yield _item(key)
-
-    async def refetch(self, import_refs):  # type: ignore[no-untyped-def]
-        REFETCHED.append(list(import_refs))
-        for ref in import_refs:
-            key = ref.removeprefix("owned:")
-            if key in SOURCE:
-                yield _item(key)
-
-
-class NoHookGateway(StateGateway):
-    """Same, without the optional hook: it can only report its retry list."""
-
-    service_name = "nohook_service"
-    refetch = BaseGateway.refetch
 
 
 class ReviewGateway(StateGateway):
@@ -98,7 +84,6 @@ class UndeclaredGateway(StateGateway):
 
 GATEWAYS = {
     "state-gw": StateGateway,
-    "nohook-gw": NoHookGateway,
     "review-gw": ReviewGateway,
     "undeclared-gw": UndeclaredGateway,
 }
@@ -186,7 +171,6 @@ async def running(db_path: Path):
 def _reset():
     SOURCE.clear()
     CHANGED[0] = None
-    REFETCHED.clear()
     with patch("starlette_cms_gateways.admin.api.discover_gateways", return_value=GATEWAYS):
         yield
 
@@ -263,27 +247,12 @@ async def test_cursor_is_one_value_across_admin_api_worker_and_restart(tmp_path)
         )
 
 
-async def test_retry_list_survives_a_restart(tmp_path):
-    db = tmp_path / "content.db"
-    SOURCE["a"] = [1]
-    async with running(db) as s:
-        await s.admin.jobs.set_retry(
-            "state-gw", [RetryEntry("owned:a", "deferred", "", "2026-10-01T00:00:00+00:00")]
-        )
-    async with running(db) as s2:
-        entries = await RemoteSyncState(s2.client).get_retry("state-gw")
-        assert [(e.import_ref, e.reason, e.since) for e in entries] == [
-            ("owned:a", "deferred", "2026-10-01T00:00:00+00:00")
-        ]
-
-
 async def test_state_routes_need_auth_and_a_known_gateway(stack):
     s = stack
     anon = httpx.AsyncClient(transport=s.transport, base_url="http://testserver")
     for method, path in [
         ("GET", "/api/gateways/state-gw/cursor"),
         ("PUT", "/api/gateways/state-gw/cursor"),
-        ("GET", "/api/gateways/state-gw/retry"),
         ("POST", "/api/gateways/state-gw/runs"),
     ]:
         resp = await anon.request(method, path, json={})
@@ -294,10 +263,6 @@ async def test_state_routes_need_auth_and_a_known_gateway(stack):
     assert (await s.http.get("/api/gateways/nope/cursor", headers=auth)).status_code == 404
     bad = await s.http.put(
         "/api/gateways/state-gw/cursor", json={"cursor": "yesterday"}, headers=auth
-    )
-    assert bad.status_code == 422
-    bad = await s.http.put(
-        "/api/gateways/state-gw/retry", json={"entries": [{"nope": 1}]}, headers=auth
     )
     assert bad.status_code == 422
 
@@ -312,7 +277,13 @@ async def test_cursor_advances_after_a_run_that_deferred_or_errored(stack):
     second = await gw.sync()
     assert second.deferred == ["owned:a"]
     assert await s.admin.jobs.get_cursor("state-gw") == second.started_at > first.started_at
-    assert [e.import_ref for e in await s.admin.jobs.get_retry("state-gw")] == ["owned:a"]
+
+    # An error is the same: reported, and the cursor still moves.
+    SOURCE["a"] = "not-a-list"
+    await s.client.discard_draft((await s.doc("a"))["id"])
+    third = await gw.sync()
+    assert third.has_errors
+    assert await s.admin.jobs.get_cursor("state-gw") == third.started_at
 
 
 # ---------------------------------------------------------------------------
@@ -332,21 +303,16 @@ async def test_failed_publish_after_update_is_finished_next_run(stack):
     assert broken.has_errors and broken.updated == 0
     stuck = await s.doc("a")
     assert stuck["has_draft"] is True and stuck["body"]["items"] == [1], "PATCHed, not live"
-    assert [(e.import_ref, e.reason) for e in await s.admin.jobs.get_retry("state-gw")] == [
-        ("owned:a", "error")
-    ]
 
-    # Nothing changed at the source; the hash already matches the draft's. It must
-    # still be re-PATCHed and published: not skipped, and not deferred as 'a draft'.
-    CHANGED[0] = set()
-    fixed = await gw.sync()
+    # Nothing changed at the source; the hash already matches the draft's. When a run
+    # next meets the document it must still be re-PATCHed and published: not skipped,
+    # and not deferred as 'a draft'.
+    fixed = await gw.sync(SyncRange("all_time"))
 
     assert (fixed.updated, fixed.skipped, fixed.deferred, fixed.errors) == (1, 0, [], [])
-    assert fixed.recovered == ["owned:a"]
     done = await s.doc("a")
     assert done["has_draft"] is False and done["published"] is True
     assert done["body"]["items"] == [1, 2]
-    assert await s.admin.jobs.get_retry("state-gw") == []
 
 
 async def test_failed_publish_after_create_is_published_next_run(stack):
@@ -358,8 +324,7 @@ async def test_failed_publish_after_create_is_published_next_run(stack):
     assert first.has_errors
     assert (await s.doc("a"))["published"] is False
 
-    CHANGED[0] = set()
-    second = await gw.sync()
+    second = await gw.sync(SyncRange("all_time"))
 
     assert (second.updated, second.skipped, second.deferred) == (1, 0, [])
     assert (await s.doc("a"))["published"] is True
@@ -423,11 +388,11 @@ async def test_gateway_without_owned_fields_defers_on_any_draft(stack):
 
 
 # ---------------------------------------------------------------------------
-# A person's draft: deferred, listed, retried once they publish
+# A person's draft: left alone and reported; an all_time run catches it up
 # ---------------------------------------------------------------------------
 
 
-async def test_human_draft_is_deferred_listed_and_retried_after_they_publish(stack):
+async def test_human_draft_is_left_alone_reported_and_caught_up_by_an_all_time_run(stack):
     s = stack
     SOURCE["a"] = [1]
     gw = s.gateway("state-gw")
@@ -438,24 +403,24 @@ async def test_human_draft_is_deferred_listed_and_retried_after_they_publish(sta
     CHANGED[0] = {"a"}
     r = await gw.sync()
     assert r.deferred == ["owned:a"]
-    assert [(e.import_ref, e.reason) for e in r.retry] == [("owned:a", "deferred")]
-    since = r.retry[0].since
+    assert await s.admin.jobs.get_cursor("state-gw") == r.started_at, "it never holds the cursor"
     assert (await s.doc("a"))["body"]["items"] == [1], "live content untouched"
 
-    # Still not published: still deferred, and it keeps the time it first went on the list.
+    # The person publishes. Nothing at the source changed since, so an incremental run
+    # does not meet the document again: this is the cost of not remembering it.
+    await s.human_publish("a")
     CHANGED[0] = set()
     r = await gw.sync()
-    assert REFETCHED[-1] == ["owned:a"], "asked the gateway to re-fetch it"
-    assert r.deferred == ["owned:a"] and r.retry[0].since == since
+    assert (r.updated, r.deferred) == (0, [])
+    assert (await s.doc("a"))["body"]["items"] == [1]
 
-    await s.human_publish("a")
-    r = await gw.sync()
-
+    # An all_time run (the backfill) fetches everything, catches it up and keeps the
+    # person's edit.
+    CHANGED[0] = None
+    r = await gw.sync(SyncRange("all_time"))
     assert (r.updated, r.deferred, r.errors) == (1, [], [])
-    assert r.recovered == ["owned:a"] and r.retry == []
     doc = await s.doc("a")
     assert doc["body"]["items"] == [1, 2] and doc["body"]["notes"] == "half-written"
-    assert await s.admin.jobs.get_retry("state-gw") == []
 
 
 async def test_a_person_draft_with_nothing_new_at_the_source_is_not_a_deferral(stack):
@@ -468,7 +433,6 @@ async def test_a_person_draft_with_nothing_new_at_the_source_is_not_a_deferral(s
     r = await gw.sync()  # source unchanged: nothing for the gateway to write or wait for
 
     assert (r.skipped, r.deferred) == (1, [])
-    assert await s.admin.jobs.get_retry("state-gw") == []
 
 
 async def test_a_staged_unpublish_is_not_the_gateways_draft(stack):
@@ -486,60 +450,6 @@ async def test_a_staged_unpublish_is_not_the_gateways_draft(stack):
     SOURCE["a"] = [1, 2]
     r = await gw.sync()
     assert r.deferred == ["owned:a"]
-
-
-async def test_gateway_without_a_refetch_hook_only_reports(stack):
-    s = stack
-    SOURCE["a"] = [1]
-    gw = s.gateway("nohook-gw")
-    await gw.sync()
-    await s.human_edit("a", notes="wip")
-    SOURCE["a"] = [1, 2]
-    CHANGED[0] = {"a"}
-    await gw.sync()
-
-    CHANGED[0] = set()
-    r = await gw.sync()
-
-    assert REFETCHED == [], "no hook, nothing to call"
-    assert [e.import_ref for e in r.retry] == ["owned:a"], "it stays on the list"
-    assert r.dropped == [] and r.deferred == []
-
-
-async def test_a_ref_the_source_no_longer_has_is_dropped_from_the_retry_list(stack):
-    s = stack
-    SOURCE["a"] = [1]
-    gw = s.gateway("state-gw")
-    await gw.sync()
-    await s.human_edit("a", notes="wip")
-    SOURCE["a"] = [1, 2]
-    CHANGED[0] = {"a"}
-    await gw.sync()
-
-    del SOURCE["a"]  # gone upstream
-    CHANGED[0] = set()
-    r = await gw.sync()
-
-    assert r.dropped == ["owned:a"] and r.retry == []
-    assert await s.admin.jobs.get_retry("state-gw") == []
-
-
-async def test_retry_refs_are_processed_once_even_if_fetch_yields_them_too(stack):
-    s = stack
-    SOURCE["a"] = [1]
-    gw = s.gateway("state-gw")
-    await gw.sync()
-    await s.human_edit("a", notes="wip")
-    SOURCE["a"] = [1, 2]
-    await gw.sync()
-
-    await s.human_publish("a")
-    s.transport.calls.clear()
-    SOURCE["a"] = [1, 2, 3]
-    r = await gw.sync()  # CHANGED is None: fetch yields 'a' as well as refetch
-
-    assert r.updated == 1
-    assert sum(1 for m, p in s.transport.writes() if m == "PATCH") == 1
 
 
 # ---------------------------------------------------------------------------

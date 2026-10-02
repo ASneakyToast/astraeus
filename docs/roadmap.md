@@ -288,8 +288,8 @@ Together these establish Astraeus as a **governed data platform** — not just a
 
 - [x] `owned_fields` + owned-only hashing; no-op re-syncs
 - [x] `SyncRange` (`since_last_sync` / `all_time` / `custom`) through admin API, CLI and MCP
-- [x] Cursor, retry list and job history in the CMS database; `/api/gateways/{name}/cursor|retry|runs`; `RemoteSyncState`
-- [x] Cursor never freezes; optional `refetch(import_refs)` hook; deferred and failed items retried next run
+- [x] Cursor and job history in the CMS database; `/api/gateways/{name}/cursor|runs`; `RemoteSyncState`
+- [x] Cursor never freezes; deferred and failed items are reported in the result (caught up by `all_time`)
 - [x] `draft_verdict`: the gateway's own draft is finished, a person's is deferred; review gateways take repeated updates
 - [x] Per-document publish; `X-Skip-Changeset` on PATCH so no changeset is opened per document
 

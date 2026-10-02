@@ -38,7 +38,6 @@ Then sync::
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime
 
 from starlette_cms_gateways import BaseGateway, GatewayItem
 
@@ -51,12 +50,14 @@ class SpotifyLikedSongsGateway(BaseGateway):
     Documents are held as drafts by default; set ``auto_publish = True`` to
     publish immediately on creation.
 
-    Incremental sync: ``fetch`` calls :meth:`resolve_window`, which reads the sync
-    cursor the framework keeps in the CMS (the start of the last run that did not
-    raise, pulled back by ``cursor_overlap``), and stops paging at tracks liked
-    before it.  With no cursor the window is ``all_time`` and every track is
-    fetched.  Never derive a cursor from ``get_last_synced()``: that is when a
-    run *finished*.
+    **No cursor, on purpose.**  This example fetches every liked track on every
+    run and leans on the framework instead: each track is its own document keyed
+    by ``import_ref``, and a track already synced has the same content hash, so
+    re-running writes nothing.  That is the simplest correct gateway, and it is
+    right while the source is small and cheap to page through.  When it stops
+    being (see the iNaturalist example), call :meth:`resolve_window` for the
+    framework's cursor.  Do not build a cursor from ``get_last_synced()``: that is
+    when a run *finished*, kept for the admin page's "Last synced" label.
     """
 
     service_name = "spotify_liked_songs"
@@ -85,17 +86,12 @@ class SpotifyLikedSongsGateway(BaseGateway):
         """
         Yield liked tracks from Spotify, newest first.
 
-        Stops paginating when it encounters a track added before the last
-        successful sync (incremental sync).  If no prior sync is recorded,
-        all tracks are fetched.
+        Pages through the whole library; see the class docstring for why that is fine.
 
         Note: Spotipy's API is synchronous — we call it in a thread-pool via
         ``asyncio.to_thread`` to avoid blocking the event loop.
         """
         import asyncio
-
-        # The framework's cursor for this run, or None for a full fetch.
-        since = (await self.resolve_window()).changed_since
 
         offset = 0
         limit = 50  # Spotify's max per request
@@ -115,17 +111,6 @@ class SpotifyLikedSongsGateway(BaseGateway):
             for item in items:
                 track = item.get("track") or {}
                 added_at_str = item.get("added_at", "")
-
-                # Incremental sync: Spotify returns tracks newest-first.
-                # Once we hit a track added before the last sync, we're done.
-                if since is not None and added_at_str:
-                    # Defensive: Python 3.12 fromisoformat handles 'Z', but
-                    # keep the replace() for environments that don't.
-                    added_at = datetime.fromisoformat(
-                        added_at_str.replace("Z", "+00:00")
-                    )
-                    if added_at <= since:
-                        return
 
                 track_id = track.get("id", "")
                 if not track_id:

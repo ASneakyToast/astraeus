@@ -5,7 +5,7 @@ Extends starlette-cms at init time by registering the gateway API routes on the 
 via :meth:`~starlette_cms.app.CMS.register_extension_route`, then serves a
 shell page from its own sub-application.
 
-Sync state (job records, the cursor, the retry list) is stored in the CMS's own
+Sync state (job records and the cursor) is stored in the CMS's own
 SQLite file by default: the one file that is persistent and backed up. The tables
 sit beside the CMS's and never appear in the block registry or editor UI.
 
@@ -33,7 +33,6 @@ API:     GET  /cms/api/gateways
          POST /cms/api/gateways/{name}/sync
          GET  /cms/api/gateways/{name}/sync/{run_id}
          GET/PUT /cms/api/gateways/{name}/cursor     (sync state for outside workers)
-         GET/PUT /cms/api/gateways/{name}/retry
          POST    /cms/api/gateways/{name}/runs
          PATCH   /cms/api/gateways/{name}/runs/{run_id}
 """
@@ -84,8 +83,8 @@ class GatewayAdmin:
         ``/shell`` HTML page.  API routes always use the CMS auth model
         (``Authorization: Bearer <api_key>``).  Defaults to ``None`` — set
         this when the admin is exposed on a public server.
-    :param jobs_db_path: SQLite file for sync state (job records, the cursor, the
-        retry list).  Defaults to **the CMS's own database file**, so the state is
+    :param jobs_db_path: SQLite file for sync state (job records and the cursor).
+        Defaults to **the CMS's own database file**, so the state is
         as persistent and as backed up as the content (a Litestream replica of the
         CMS database carries it too).  When the CMS is not on a SQLite file
         (Postgres, in-memory) the default falls back to ``gateway_jobs.db`` in the
@@ -124,8 +123,8 @@ class GatewayAdmin:
                 jobs_db_path = sqlite_path(cms.database_url)
                 if jobs_db_path is None:
                     warnings.warn(
-                        f"The CMS is not on a SQLite file, so gateway state (cursor, retry "
-                        f"list, job history) goes to {FALLBACK_JOBS_DB!r} in the working "
+                        f"The CMS is not on a SQLite file, so gateway state (cursor and "
+                        f"job history) goes to {FALLBACK_JOBS_DB!r} in the working "
                         "directory. Pass jobs_db_path= pointing at storage that outlives "
                         "restarts.",
                         stacklevel=2,

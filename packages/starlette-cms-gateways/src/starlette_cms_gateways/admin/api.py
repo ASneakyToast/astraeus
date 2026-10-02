@@ -10,7 +10,6 @@ Routes added to the CMS:
 State, for workers outside the CMS process (CLI, MCP sidecars) — see
 :class:`~starlette_cms_gateways.state.RemoteSyncState`:
   GET/PUT /api/gateways/{name}/cursor       — the sync cursor
-  GET/PUT /api/gateways/{name}/retry        — the retry list
   POST    /api/gateways/{name}/runs         — open a job record
   PATCH   /api/gateways/{name}/runs/{id}    — close it
 
@@ -18,7 +17,7 @@ All routes except the job poll require the CMS's write auth (API key or session)
 
 Design notes:
 
-- Sync state (job records, the cursor, the retry list) lives in the CMS's own
+- Sync state (job records and the cursor) lives in the CMS's own
   SQLite file by default (``GatewayAdmin(jobs_db_path=...)`` overrides) — the one
   file that is persistent and backed up.  The tables sit beside the CMS's and stay
   out of the block registry and the editor UI.  Only this process opens the file;
@@ -47,7 +46,6 @@ from starlette_cms_gateways.base import SyncRange
 from starlette_cms_gateways.client import CMSClient
 from starlette_cms_gateways.discovery import discover_gateways
 from starlette_cms_gateways.runner import run_recorded
-from starlette_cms_gateways.state import RetryEntry
 
 if TYPE_CHECKING:
     from starlette_cms.app import CMS
@@ -124,7 +122,6 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
                     "immutable": getattr(cls, "immutable", False),
                     "last_synced": last_synced_dt.isoformat() if last_synced_dt else None,
                     "cursor": cursor_dt.isoformat() if cursor_dt else None,
-                    "retry_count": len(await jobs.get_retry(name)),
                     "default_range": getattr(cls, "default_range", "since_last_sync"),
                 }
             )
@@ -158,7 +155,6 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
                 "immutable": getattr(cls, "immutable", False),
                 "default_range": getattr(cls, "default_range", "since_last_sync"),
                 "cursor": (c.isoformat() if (c := await jobs.get_cursor(name)) else None),
-                "retry": [e.to_dict() for e in await jobs.get_retry(name)],
                 "recent_jobs": recent,
             }
         )
@@ -260,7 +256,7 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
         return JSONResponse(job)
 
     # ------------------------------------------------------------------
-    # Sync state: cursor, retry list, job records (for workers outside the CMS)
+    # Sync state: cursor and job records (for workers outside the CMS)
     # ------------------------------------------------------------------
 
     async def _state_request(request: Request) -> tuple[str, dict, JSONResponse | None]:
@@ -303,21 +299,6 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
             await jobs.set_cursor(name, cursor)
         current = await jobs.get_cursor(name)
         return JSONResponse({"gateway": name, "cursor": current.isoformat() if current else None})
-
-    async def retry_endpoint(request: Request) -> JSONResponse:
-        """``GET`` the retry list; ``PUT {"entries": [...]}`` replaces it."""
-        name, body, err = await _state_request(request)
-        if err is not None:
-            return err
-        if request.method == "PUT":
-            try:
-                entries = [RetryEntry.from_dict(e) for e in body.get("entries", [])]
-            except (KeyError, TypeError, ValueError, AttributeError) as exc:
-                return JSONResponse({"error": f"Invalid retry entries: {exc}"}, status_code=422)
-            await jobs.set_retry(name, entries)
-        return JSONResponse(
-            {"gateway": name, "entries": [e.to_dict() for e in await jobs.get_retry(name)]}
-        )
 
     async def create_run(request: Request) -> JSONResponse:
         """Open a job record for a run a worker is about to make."""
@@ -380,12 +361,6 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
             endpoint=cursor_endpoint,
             methods=["GET", "PUT"],
             name="gateway_cursor",
-        ),
-        Route(
-            "/api/gateways/{name}/retry",
-            endpoint=retry_endpoint,
-            methods=["GET", "PUT"],
-            name="gateway_retry",
         ),
         Route(
             "/api/gateways/{name}/runs",

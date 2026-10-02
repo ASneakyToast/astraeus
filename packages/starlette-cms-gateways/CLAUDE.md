@@ -27,11 +27,11 @@ purposes only — they are not installed as part of the package.
 ```
 src/starlette_cms_gateways/
 ├── __init__.py      # public API: BaseGateway, GatewayItem, SyncRange, SyncResult, SyncWindow
-├── base.py          # BaseGateway ABC + sync loop, SyncRange/SyncWindow, field ownership, refetch hook
+├── base.py          # BaseGateway ABC + sync loop, SyncRange/SyncWindow, field ownership
 ├── client.py        # CMSClient — upsert (create/update/skip/defer), find_by_import_ref, gateway API calls
 ├── drafts.py        # draft_verdict — is a pending draft the gateway's own or a person's?
-├── state.py         # SyncState protocol, RetryEntry, RemoteSyncState (state over the CMS gateway API)
-├── jobstore.py      # JobStore — cursor, retry list and job history in the CMS's SQLite file
+├── state.py         # SyncState protocol, RemoteSyncState (state over the CMS gateway API)
+├── jobstore.py      # JobStore — cursor and job history in the CMS's SQLite file
 ├── runner.py        # run_recorded — run a gateway and keep job history true, from any entry point
 ├── cli.py           # gateways CLI group (sync [--range/--from/--to], list)
 └── mcp/
@@ -55,18 +55,19 @@ thread or scheduler inside the CMS or this package. See ADR 005 and ADR 015.
 **`auto_publish` is a class-level flag, not a runtime parameter.** Set it at the class level when defining
 a `BaseGateway` subclass. Do not pass it to `sync()`.
 
-**Sync state lives in the CMS, and workers reach it through the CMS.** The cursor, the retry list and the job
+**Sync state lives in the CMS, and workers reach it through the CMS.** The cursor and the job
 history are tables in the CMS's own database (`GatewayAdmin` defaults to that file). Only the CMS process opens
-it; the CLI and MCP sidecars use `RemoteSyncState` over `/api/gateways/{name}/cursor|retry|runs`. Never give a
+it; the CLI and MCP sidecars use `RemoteSyncState` over `/api/gateways/{name}/cursor|runs`. Never give a
 worker its own state file: that is two cursors, lost on restart. Run every sync through `run_recorded` so job
 history covers all entry points.
 
 **The cursor is opt-in per gateway, and it never freezes.** The framework does not inject a `since` into
 `fetch()` (ADR 015). It passes the *request* as `self.range`; a gateway that wants a datetime cursor calls
 `await self.resolve_window()`. After any run that did not raise the cursor becomes the run's *start* time (never
-after `custom`). Items a run deferred or failed on go on the retry list, not into the cursor; a gateway can
-implement `refetch(import_refs)` to rebuild them next run. Never use `get_last_synced()` as a cursor: it is when a
-run *finished*.
+after `custom`), whatever the run deferred or failed on. Those are reported in `SyncResult`, not remembered: an
+incremental run meets them again only if the source changes; `all_time` (or `custom`) catches them up. A gateway
+that doesn't need a cursor skips all this and fetches everything (the Spotify example). Never use
+`get_last_synced()` as a cursor: it is when a run *finished*, and exists for the admin page's label.
 
 **Declare `owned_fields`.** Only owned (machine-sourced) fields are hashed and written on update; everything
 else is written once at creation and left to whoever edits it. Never write a field a person might edit in the
@@ -87,7 +88,7 @@ The `examples/` directory is documentation only.
 ## Key ADRs and decisions
 
 - **ADR 015** (`docs/decisions/015-starlette-cms-gateways.md`) — this package's architecture, including EPIC-002 amendments. Its cursor / incremental-sync sections are superseded by ADR 023
-- **ADR 023** (`docs/decisions/023-gateway-state-and-publishing.md`) — sync state in the CMS, the never-freezing cursor and retry list, draft ownership, per-document publishing
+- **ADR 023** (`docs/decisions/023-gateway-state-and-publishing.md`) — sync state in the CMS, the never-freezing cursor, draft ownership, per-document publishing
 - **ADR 005** — gateway workers are external HTTP clients of the CMS (never embedded)
 
 ---

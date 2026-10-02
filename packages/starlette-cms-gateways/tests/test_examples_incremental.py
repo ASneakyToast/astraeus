@@ -5,10 +5,8 @@ Uses ``respx`` to mock the iNaturalist HTTP API — no network calls are made.
 The ``conftest.py`` in this directory adds ``examples/`` to ``sys.path``
 so the example gateways can be imported directly.
 
-Spotify incremental test:
-# TODO: test incremental sync for spotify — requires mocking spotipy at
-# sys.modules level (it's synchronous and imported in __init__), which is
-# more involved than the httpx-based iNaturalist mock.
+The Spotify example deliberately has no cursor (it fetches everything and relies
+on content-hash skips), so its test pins that: a stored cursor changes nothing.
 """
 
 from __future__ import annotations
@@ -155,5 +153,46 @@ async def test_no_d1_when_only_error_jobs():
 
         params = dict(route.calls[0].request.url.params)
         assert "updated_since" not in params, f"no cursor was stored, got: {params}"
+    finally:
+        os.unlink(db_path)
+
+
+async def test_spotify_example_has_no_cursor_and_reads_every_page_whatever_is_stored():
+    """The no-cursor example: a stored cursor is ignored, and every page is read."""
+    from spotify_liked_songs.gateway import SpotifyLikedSongsGateway
+    from starlette_cms_gateways.client import CMSClient
+    from starlette_cms_gateways.jobstore import JobStore
+
+    def track(i: str, added: str) -> dict:
+        return {"added_at": added, "track": {"id": i, "name": f"T{i}", "artists": [{"name": "A"}]}}
+
+    pages = [
+        {"items": [track("1", "2026-09-02T00:00:00Z")], "next": "more"},
+        {"items": [track("2", "2020-01-01T00:00:00Z")], "next": None},  # years before the cursor
+    ]
+
+    class FakeSp:
+        def __init__(self) -> None:
+            self.offsets: list[int] = []
+
+        def current_user_saved_tracks(self, limit: int, offset: int) -> dict:
+            self.offsets.append(offset)
+            return pages[len(self.offsets) - 1]
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        store = JobStore(db_path)
+        await store.set_cursor("spotify_liked_songs", datetime(2026, 9, 10, tzinfo=UTC))
+        stub = {"spotipy": MagicMock(), "spotipy.oauth2": MagicMock()}  # not installed here
+        with patch.dict("sys.modules", stub):
+            gw = SpotifyLikedSongsGateway(cms_client=MagicMock(spec=CMSClient), job_store=store)
+        gw._sp = FakeSp()
+
+        items = [i async for i in gw.fetch()]
+
+        assert [i.import_ref for i in items] == ["spotify:liked:1", "spotify:liked:2"]
+        assert gw._sp.offsets == [0, 50]
+        assert gw._window is None, "never asked for a window, so no cursor is kept"
     finally:
         os.unlink(db_path)

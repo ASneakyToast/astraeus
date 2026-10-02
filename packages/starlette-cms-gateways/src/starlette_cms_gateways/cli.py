@@ -126,7 +126,7 @@ async def run_sync_via_cms(
     gateway_cls: Any, gateway_name: str, client: Any, sync_range: Any
 ) -> Any:
     """
-    Run one gateway as an outside worker: its cursor, retry list and job history
+    Run one gateway as an outside worker: its cursor and job history
     are read and written through the CMS gateway API, so they are the same ones
     the admin page and the MCP tools see.
     """
@@ -218,7 +218,7 @@ def sync(
     Run a sync for the named gateway.
 
     GATEWAY_NAME must be a registered entry point under
-    starlette_cms_gateways.gateways. The sync cursor, the retry list and the job
+    starlette_cms_gateways.gateways. The sync cursor and the job
     history are kept by the CMS itself (through its gateway API), so this run,
     the admin page and an MCP tool all see the same ones.
     """
@@ -276,15 +276,11 @@ def sync(
             )
         )
         if result.deferred:
-            click.echo("Deferred (a person has a draft on these; retried next run):")
+            click.echo("Left alone (a person has a draft on these):")
             for ref in result.deferred:
                 click.echo(f"  {ref}")
-        if result.recovered:
-            click.echo(f"Recovered from the retry list: {len(result.recovered)}")
-        if result.dropped:
-            click.echo(f"Dropped from the retry list (gone at the source): {len(result.dropped)}")
         if result.errors:
-            click.echo("Errors (retried next run):")
+            click.echo("Errors:")
             for ref, msg in result.errors:
                 click.echo(f"  {ref}: {msg}")
 

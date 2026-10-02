@@ -2,8 +2,8 @@
 SQLite store for what a gateway remembers between runs.
 
 Uses stdlib ``sqlite3`` via ``asyncio.to_thread`` — no extra dependencies.
-Three tables: ``gateway_sync_jobs`` (run history), ``gateway_cursors`` (the
-sync cursor) and ``gateway_retry`` (documents the next run should try again).
+Two tables: ``gateway_sync_jobs`` (run history) and ``gateway_cursors`` (the
+sync cursor).
 
 In a deployment the file is the CMS's own database (``GatewayAdmin`` defaults
 to it): that is the one file that is persistent and backed up, so the cursor
@@ -26,8 +26,6 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
-from starlette_cms_gateways.state import RetryEntry
 
 BUSY_TIMEOUT_MS = 10_000
 
@@ -60,22 +58,10 @@ CREATE TABLE IF NOT EXISTS gateway_cursors (
 """
 
 
-_CREATE_RETRY = """
-CREATE TABLE IF NOT EXISTS gateway_retry (
-    gateway_name TEXT NOT NULL,
-    import_ref   TEXT NOT NULL,
-    reason       TEXT NOT NULL,
-    detail       TEXT NOT NULL DEFAULT '',
-    since        TEXT NOT NULL,
-    PRIMARY KEY (gateway_name, import_ref)
-)
-"""
-
-
 class JobStore:
     """
-    Async wrapper around a SQLite database for sync state: job records, the
-    sync cursor and the retry list. Implements
+    Async wrapper around a SQLite database for sync state: job records and the
+    sync cursor. Implements
     :class:`~starlette_cms_gateways.state.SyncState`.
 
     :param path: Path to the SQLite database file.  Created on first use.
@@ -115,7 +101,6 @@ class JobStore:
         with self._connect() as conn:
             conn.execute(_CREATE_TABLE)
             conn.execute(_CREATE_CURSORS)
-            conn.execute(_CREATE_RETRY)
             have = {r["name"] for r in conn.execute("PRAGMA table_info(gateway_sync_jobs)")}
             for column, ddl in _JOB_COLUMNS.items():
                 if column not in have:
@@ -269,6 +254,11 @@ class JobStore:
         """
         Return the ``finished_at`` datetime of the most recent ``status='done'``
         job for *key* (gateway name or service name), or ``None``.
+
+        For **display** ("Last synced" in the admin UI). It is not a cursor: it is
+        when a run *finished*, and a run is ``done`` even when items failed. Use
+        :meth:`get_cursor`, through ``BaseGateway.resolve_window()``, to decide what
+        to fetch.
         """
         await self.init()
         return await asyncio.to_thread(self._get_last_synced_sync, key)
@@ -276,9 +266,9 @@ class JobStore:
     # ------------------------------------------------------------------
     # Sync cursor
     #
-    # The cursor is the start time of the last *clean* run, kept apart from
-    # the job history on purpose: a job can finish with status 'done' and
-    # still have failed items, and ``finished_at`` is when the run ended, not
+    # The cursor is the start time of the last run that did not raise, kept
+    # apart from the job history on purpose: a job can finish with status 'done'
+    # and still have failed items, and ``finished_at`` is when the run ended, not
     # the moment up to which the source had been read. A lost cursor is safe —
     # the next run just covers everything.
     # ------------------------------------------------------------------
@@ -311,42 +301,6 @@ class JobStore:
         """Store *cursor* as the point up to which *key* has been synced."""
         await self.init()
         await asyncio.to_thread(self._set_cursor_sync, key, cursor)
-
-    # ------------------------------------------------------------------
-    # Retry list
-    #
-    # Documents a run could not finish (a person's draft in the way, a failed
-    # write). They sit here instead of holding the cursor back; the next run
-    # asks the gateway to re-fetch them. Replaced wholesale after each run.
-    # ------------------------------------------------------------------
-
-    def _get_retry_sync(self, key: str) -> list[RetryEntry]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT import_ref, reason, detail, since FROM gateway_retry "
-                "WHERE gateway_name = ? ORDER BY since, import_ref",
-                (key,),
-            ).fetchall()
-        return [RetryEntry.from_dict(dict(r)) for r in rows]
-
-    async def get_retry(self, key: str) -> list[RetryEntry]:
-        """Return the retry list for *key* (oldest first)."""
-        await self.init()
-        return await asyncio.to_thread(self._get_retry_sync, key)
-
-    def _set_retry_sync(self, key: str, entries: list[RetryEntry]) -> None:
-        with self._connect() as conn:
-            conn.execute("DELETE FROM gateway_retry WHERE gateway_name = ?", (key,))
-            conn.executemany(
-                "INSERT INTO gateway_retry (gateway_name, import_ref, reason, detail, since) "
-                "VALUES (?, ?, ?, ?, ?)",
-                [(key, e.import_ref, e.reason, e.detail, e.since) for e in entries],
-            )
-
-    async def set_retry(self, key: str, entries: list[RetryEntry]) -> None:
-        """Replace the retry list for *key* with *entries*."""
-        await self.init()
-        await asyncio.to_thread(self._set_retry_sync, key, entries)
 
 
 # ------------------------------------------------------------------
