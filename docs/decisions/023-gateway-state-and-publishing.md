@@ -121,6 +121,10 @@ introduced with the first rework. Deletions are never made by a sync.
   versions (they ship in one image in joellithgow).
 - The default state file assumes the CMS is on SQLite. Elsewhere the integrator must pass `jobs_db_path`.
 - `X-Skip-Changeset` is now part of the CMS's public write API.
+- Per-document publishing means one `document.published` webhook per document, where a run changeset sent one
+  `changeset.published`. A consumer with a build-hook webhook (joellithgow.com) gets up to N builds for a sync that
+  changes N documents, and the CMS does not coalesce webhook deliveries. A quiet sync changes nothing and fires
+  nothing. If that proves costly the fix belongs in the CMS (a per-webhook debounce), not in gateways.
 - An item left alone or failed in one run is not retried by later incremental runs unless its source changes; someone has to run `all_time`.
 
 **Testing.** Anything touching draft, publish, changeset or state semantics is tested against the real
