@@ -14,7 +14,7 @@ dev-dependencies = [
     # The workspace dev environment never installed it, so those tests have
     # never run here — they errored on import and were counted as expected
     # failures for months.
-    "mcp>=1.0",
+    "mcp>=1.0,<2",
 ]
 
 [tool.ruff]

@@ -31,7 +31,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = [
-    "mcp>=1.0",
+    "mcp>=1.0,<2",
 ]
 postgres = ["asyncpg>=0.29"]
 dev = ["starlette-cms[mcp,postgres]", "uvicorn>=0.30"]
