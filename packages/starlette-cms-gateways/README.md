@@ -93,8 +93,9 @@ The framework handles everything except the external API call:
   way) or failed on are *reported* in the result, not remembered: an incremental run meets them again only if
   the source changes, so catch them up with an `all_time` or `custom` run. `get_last_synced()` is for the
   admin page's "Last synced" label only, never a cursor. See ADR 023.
-- **Each document is published as soon as it is written** (`auto_publish = True`), so one failure strands
-  one document, not a run, and no changeset is left open.
+- **A run is one changeset, published once** (`auto_publish = True`): one publish, so one `changeset.published`
+  webhook (one site build), all or nothing. If the publish fails the run raises and the cursor stays, so the
+  next run finishes the documents. A gateway with `auto_publish = False` leaves the changeset open for review.
 
 ## CLI
 

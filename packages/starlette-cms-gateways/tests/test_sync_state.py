@@ -11,7 +11,8 @@ What these pin (ADR 023):
   them again only if the source changes, and an ``all_time`` run catches them up;
 * a gateway's own leftover draft (a publish that failed, a revision awaiting review)
   is finished or updated; a person's draft is never touched;
-* each document is published as soon as it is written, and no changeset is left open.
+* a run is one changeset, published once at the end: one publish, all or nothing, and
+  no changeset left open; a failed publish leaves the cursor so the next run finishes.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from starlette_cms.fields import JSONField, NumberField
 from starlette_cms_gateways.admin import GatewayAdmin
 from starlette_cms_gateways.base import BaseGateway, GatewayItem, SyncRange
 from starlette_cms_gateways.cli import run_sync_via_cms
-from starlette_cms_gateways.client import CMSClient
+from starlette_cms_gateways.client import CMSClient, CMSError
 from starlette_cms_gateways.drafts import draft_verdict
 from starlette_cms_gateways.runner import run_recorded
 from starlette_cms_gateways.state import RemoteSyncState
@@ -291,43 +292,88 @@ async def test_cursor_advances_after_a_run_that_deferred_or_errored(stack):
 # ---------------------------------------------------------------------------
 
 
-async def test_failed_publish_after_update_is_finished_next_run(stack):
+async def test_failed_publish_leaves_the_cursor_and_the_next_run_finishes_the_docs(stack):
     s = stack
     SOURCE["a"] = [1]
     gw = s.gateway("state-gw")
-    await gw.sync()
+    first = await gw.sync()
+    assert await s.admin.jobs.get_cursor("state-gw") == first.started_at
 
     SOURCE["a"] = [1, 2]
     s.transport.fail_publishes = 1
-    broken = await gw.sync()
-    assert broken.has_errors and broken.updated == 0
-    stuck = await s.doc("a")
-    assert stuck["has_draft"] is True and stuck["body"]["items"] == [1], "PATCHed, not live"
+    with pytest.raises(CMSError):
+        await gw.sync()
 
-    # Nothing changed at the source; the hash already matches the draft's. When a run
-    # next meets the document it must still be re-PATCHed and published: not skipped,
-    # and not deferred as 'a draft'.
-    fixed = await gw.sync(SyncRange("all_time"))
+    # All or nothing: PATCHed into the run's changeset, not live, and the cursor stayed
+    # where it was, so the next run covers the same items.
+    assert await s.admin.jobs.get_cursor("state-gw") == first.started_at
+    stuck = await s.doc("a")
+    assert stuck["has_draft"] is True and stuck["body"]["items"] == [1]
+    assert len(await s.open_changesets()) == 1
+
+    # Nothing changed at the source; the hash already matches the draft's. The next run
+    # must still re-PATCH it into a new changeset and publish: not skipped, and not
+    # deferred as 'a draft'. The empty changeset the failed run left is cleaned up.
+    fixed = await gw.sync()
 
     assert (fixed.updated, fixed.skipped, fixed.deferred, fixed.errors) == (1, 0, [], [])
     done = await s.doc("a")
     assert done["has_draft"] is False and done["published"] is True
     assert done["body"]["items"] == [1, 2]
+    assert await s.open_changesets() == []
+    assert await s.admin.jobs.get_cursor("state-gw") == fixed.started_at
 
 
-async def test_failed_publish_after_create_is_published_next_run(stack):
+async def test_failed_publish_after_create_is_published_by_the_next_run(stack):
     s = stack
     SOURCE["a"] = [1]
     s.transport.fail_publishes = 1
     gw = s.gateway("state-gw")
-    first = await gw.sync()
-    assert first.has_errors
-    assert (await s.doc("a"))["published"] is False
+    with pytest.raises(CMSError):
+        await gw.sync()
+    assert (await s.doc("a"))["published"] is False, "created, never published"
 
-    second = await gw.sync(SyncRange("all_time"))
+    second = await gw.sync()
 
     assert (second.updated, second.skipped, second.deferred) == (1, 0, [])
     assert (await s.doc("a"))["published"] is True
+    assert await s.open_changesets() == []
+
+
+async def test_an_item_whose_write_fails_is_left_out_and_the_rest_publish_together(stack):
+    s = stack
+    SOURCE.update({"a": [1], "b": [1], "c": [1]})
+    gw = s.gateway("state-gw")
+    await gw.sync()
+    SOURCE["a"], SOURCE["b"], SOURCE["c"] = [1, 2], "not-a-list", [1, 2]  # the CMS rejects b
+
+    r = await gw.sync()
+
+    assert (r.updated, len(r.errors)) == (2, 1) and r.errors[0][0] == "owned:b"
+    assert (await s.doc("a"))["body"]["items"] == [1, 2]
+    assert (await s.doc("c"))["body"]["items"] == [1, 2]
+    assert (await s.doc("b"))["body"]["items"] == [1]
+    assert await s.open_changesets() == []
+
+
+async def test_only_this_gateways_empty_leftovers_are_cleaned_up(stack):
+    s = stack
+    SOURCE["a"] = [1]
+    http = s.http
+    auth = {"Authorization": f"Bearer {API_KEY}"}
+
+    async def mk(title: str) -> None:
+        resp = await http.post("/api/changesets", json={"title": title}, headers=auth)
+        assert resp.status_code == 201
+
+    await mk("state_service sync — Sep 1")  # this gateway's, empty: debris
+    await mk("owned_service sync — Sep 1")  # another gateway's
+    await mk("My own plan")  # a person's
+
+    await s.gateway("state-gw").sync()
+
+    titles = sorted(c["title"] for c in await s.open_changesets())
+    assert titles == ["My own plan", "owned_service sync — Sep 1"]
 
 
 # ---------------------------------------------------------------------------
@@ -381,7 +427,8 @@ async def test_gateway_without_owned_fields_defers_on_any_draft(stack):
     await gw.sync()
     SOURCE["a"] = [1, 2]
     s.transport.fail_publishes = 1
-    await gw.sync()  # leaves its own draft behind
+    with pytest.raises(CMSError):
+        await gw.sync()  # leaves its own draft behind
     SOURCE["a"] = [1, 2, 3]
     r = await gw.sync()
     assert r.deferred == ["owned:a"], "without owned_fields it cannot tell whose draft that is"
@@ -450,38 +497,6 @@ async def test_a_staged_unpublish_is_not_the_gateways_draft(stack):
     SOURCE["a"] = [1, 2]
     r = await gw.sync()
     assert r.deferred == ["owned:a"]
-
-
-# ---------------------------------------------------------------------------
-# Publishing one at a time
-# ---------------------------------------------------------------------------
-
-
-async def test_updates_leave_no_open_changesets(stack):
-    s = stack
-    SOURCE.update({"a": [1], "b": [1], "c": [1]})
-    gw = s.gateway("state-gw")
-    await gw.sync()
-    for k in SOURCE:
-        SOURCE[k] = [1, 2]
-    r = await gw.sync()
-    assert r.updated == 3 and r.changeset_id is None
-    assert await s.open_changesets() == []
-
-
-async def test_one_failed_publish_strands_one_document_not_the_run(stack):
-    s = stack
-    SOURCE.update({"a": [1], "b": [1], "c": [1]})
-    gw = s.gateway("state-gw")
-    await gw.sync()
-    for k in SOURCE:
-        SOURCE[k] = [1, 2]
-    s.transport.fail_publishes = 1  # whichever document publishes first
-    r = await gw.sync()
-
-    assert (r.updated, len(r.errors)) == (2, 1)
-    live = [k for k in SOURCE if (await s.doc(k))["body"]["items"] == [1, 2]]
-    assert len(live) == 2
 
 
 # ---------------------------------------------------------------------------

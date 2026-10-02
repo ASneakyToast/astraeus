@@ -74,10 +74,12 @@ else is written once at creation and left to whoever edits it. Never write a fie
 editor into an update. A re-sync that finds nothing new must make zero writes. A gateway with no `owned_fields`
 cannot tell its own pending draft from a person's, so it defers on any draft.
 
-**Each document is published as soon as it is written** (`auto_publish`), one at a time: no end-of-run changeset
-publish. The PATCH sends `X-Skip-Changeset` so the CMS does not open a date-titled changeset per document. A
-person's draft (or a document a person unpublished) is deferred, never patched or published over; the gateway's
-*own* leftover draft is finished.
+**A run is one changeset, published once** (`auto_publish`). Every write goes into the run's changeset (opened
+lazily, so a quiet run opens none) and the gateway publishes it once at the end: one `changeset.published`
+webhook, all or nothing. Never publish documents one by one: that is one webhook, so one site build, per document.
+The cursor advances only after the publish succeeds, so a failed publish raises and the next run finishes the
+documents. A person's draft (or a document a person unpublished) is deferred, never patched or published over;
+the gateway's *own* leftover draft is finished.
 
 **Gateway implementations go in consumer repos, not here.** If you are adding a new gateway for a
 specific service, it belongs in the consuming application's codebase and entry points, not in this package.
@@ -88,7 +90,7 @@ The `examples/` directory is documentation only.
 ## Key ADRs and decisions
 
 - **ADR 015** (`docs/decisions/015-starlette-cms-gateways.md`) — this package's architecture, including EPIC-002 amendments. Its cursor / incremental-sync sections are superseded by ADR 023
-- **ADR 023** (`docs/decisions/023-gateway-state-and-publishing.md`) — sync state in the CMS, the never-freezing cursor, draft ownership, per-document publishing
+- **ADR 023** (`docs/decisions/023-gateway-state-and-publishing.md`) — sync state in the CMS, the never-freezing cursor, draft ownership, one changeset per run
 - **ADR 005** — gateway workers are external HTTP clients of the CMS (never embedded)
 
 ---

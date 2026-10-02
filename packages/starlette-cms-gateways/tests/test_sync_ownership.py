@@ -221,33 +221,43 @@ async def test_hand_edit_survives_a_sync_with_nothing_new(env):
     assert transport.writes() == []
 
 
-async def test_publishing_one_at_a_time_leaves_no_open_changesets(env):
-    """Each document is published as soon as it is written, and no changeset is opened.
-
-    The CMS links every PATCH into a date-titled changeset unless told not to; with
-    one publish per document that would leave one open changeset per updated doc.
-    """
+async def test_a_run_is_one_changeset_published_once(env):
+    """Every write of a run goes into one changeset, published once: one publish, so one
+    ``changeset.published`` webhook, and nothing is left open."""
     client, http, transport = env
     SOURCE.update({"a": {"items": [1]}, "b": {"items": [1]}})
     gw = OwnedGateway(cms_client=client)
     created = await gw.sync()
-    assert created.changeset_id is None
+    assert created.changeset_id is not None and created.created == 2
+    assert (await _doc(client, "a"))["published"] and (await _doc(client, "b"))["published"]
 
     SOURCE["a"]["items"] = [1, 2]
     SOURCE["b"]["items"] = [1, 2]
     transport.calls.clear()
     updated = await gw.sync()
-    assert updated.updated == 2 and updated.changeset_id is None
+    assert updated.updated == 2 and updated.changeset_id not in (None, created.changeset_id)
 
-    # Each PATCH is followed by that document's own publish; no batch publish.
-    paths = [p for m, p in transport.writes()]
-    assert not any(p.startswith("/api/changesets") for p in paths)
-    assert sum(1 for p in paths if p.endswith("/publish")) == 2
+    publishes = [p for m, p in transport.writes() if p.endswith("/publish")]
+    assert publishes == [f"/api/changesets/{updated.changeset_id}/publish"], (
+        "one publish for the whole run, and none for a document"
+    )
     resp = await http.get("/api/changesets", params={"status": "open"})
     assert resp.json()["changesets"] == [], "must not leave open changesets"
     for k in ("a", "b"):
         assert (await _doc(client, k))["body"]["items"] == [1, 2]
         assert (await _doc(client, k))["has_draft"] is False
+
+
+async def test_a_quiet_run_opens_no_changeset_and_publishes_nothing(env):
+    client, _, transport = env
+    SOURCE["a"] = {"items": [1]}
+    gw = OwnedGateway(cms_client=client)
+    await gw.sync()
+    transport.calls.clear()
+
+    quiet = await gw.sync()
+
+    assert quiet.changeset_id is None and transport.writes() == []
 
 
 async def test_review_gateway_still_leaves_drafts_for_review(env):
@@ -291,10 +301,13 @@ async def test_item_can_opt_out_of_an_auto_publishing_gateway(env):
 
     SOURCE["live"]["items"] = [1, 9]
     SOURCE["held"]["items"] = [2, 9]
-    await gw.sync()
+    r = await gw.sync()
     assert (await _doc(client, "live"))["body"]["items"] == [1, 9]
     held = await _doc(client, "held")
-    assert held["published"] is False, "the opted-out item must not ride the batch publish"
+    assert held["published"] is False, "the opted-out item must not ride the run's publish"
+    assert held["has_draft"] is True and r.review_changeset_id not in (None, r.changeset_id), (
+        "it waits in its own review changeset"
+    )
 
 
 async def test_item_can_opt_in_on_a_review_gateway(env):
@@ -440,7 +453,7 @@ async def test_custom_range_does_not_move_the_cursor(env, tmp_path):
     assert await store.get_cursor("owned_service") is None
 
 
-async def test_failed_run_does_not_advance_the_cursor(env, tmp_path):
+async def test_failed_run_does_not_advance_the_cursor_and_publishes_nothing(env, tmp_path):
     client, _, _ = env
     SOURCE["a"] = {"items": [1]}
     store = JobStore(tmp_path / "jobs.db")
@@ -454,9 +467,16 @@ async def test_failed_run_does_not_advance_the_cursor(env, tmp_path):
         await gw.sync()
 
     assert await store.get_cursor("owned_service") == good
-    # The item fetched before the failure was still written and published.
-    assert (await _doc(client, "a"))["body"]["items"] == [1, 2]
-    assert (await _doc(client, "a"))["has_draft"] is False
+    # All or nothing: what the run wrote before it failed is a draft, not live.
+    doc = await _doc(client, "a")
+    assert doc["body"]["items"] == [1] and doc["has_draft"] is True
+
+    # The next run, with the source back, finishes it.
+    FETCH_BOOM[0] = False
+    r = await gw.sync()
+    assert (r.updated, r.deferred) == (1, [])
+    doc = await _doc(client, "a")
+    assert doc["body"]["items"] == [1, 2] and doc["has_draft"] is False
 
 
 async def test_gateway_that_never_resolves_a_window_gets_no_cursor(env, tmp_path):

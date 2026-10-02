@@ -184,29 +184,22 @@ class CMSClient:
         body: dict[str, Any],
         meta: dict[str, Any] | None = None,
         changeset_id: str | None = None,
-        link_changeset: bool = True,
     ) -> dict[str, Any]:
         """
         Update an existing document via ``PATCH /api/documents/{id}``.
 
-        The CMS links every PATCH into an open changeset, creating a date-titled
-        one when none is given. Pass ``link_changeset=False`` when the caller
-        publishes the document itself straight away: it sends ``X-Skip-Changeset``
-        so no changeset is opened that nothing would ever publish or close.
-        ``changeset_id``, when given, always wins.
+        The CMS links every PATCH into an open changeset, creating a date-titled one
+        when none is given. A gateway always passes the run's *changeset_id*.
         """
         http = self._get_http()
         payload: dict[str, Any] = {"body": body}
         if meta:
             payload["meta"] = meta
 
-        headers = self._changeset_headers(changeset_id)
-        if changeset_id is None and not link_changeset:
-            headers["X-Skip-Changeset"] = "1"
         resp = await http.patch(
             f"{self.base_url}/api/documents/{doc_id}",
             json=payload,
-            headers=headers,
+            headers=self._changeset_headers(changeset_id),
         )
         if resp.status_code != 200:
             raise CMSError(resp.status_code, resp.text)
@@ -233,6 +226,37 @@ class CMSClient:
         if resp.status_code != 200:
             raise CMSError(resp.status_code, resp.text)
         return resp.json()
+
+    async def add_to_changeset(self, changeset_id: str, doc_id: str) -> None:
+        """Link *doc_id* into an open changeset. Already being in it is fine."""
+        http = self._get_http()
+        resp = await http.post(
+            f"{self.base_url}/api/changesets/{changeset_id}/documents/{doc_id}",
+            headers=self._auth_headers(),
+        )
+        if resp.status_code not in (200, 201, 409):
+            raise CMSError(resp.status_code, resp.text)
+
+    async def list_open_changesets(self) -> list[dict[str, Any]]:
+        """Open changesets, each with its ``documents``."""
+        http = self._get_http()
+        resp = await http.get(
+            f"{self.base_url}/api/changesets",
+            params={"status": "open", "include_documents": "true"},
+            headers=self._auth_headers(),
+        )
+        if resp.status_code != 200:
+            raise CMSError(resp.status_code, resp.text)
+        return resp.json().get("changesets", [])
+
+    async def delete_changeset(self, changeset_id: str) -> None:
+        """Delete a changeset (never its documents) via ``DELETE /api/changesets/{id}``."""
+        http = self._get_http()
+        resp = await http.delete(
+            f"{self.base_url}/api/changesets/{changeset_id}", headers=self._auth_headers()
+        )
+        if resp.status_code != 200:
+            raise CMSError(resp.status_code, resp.text)
 
     async def discard_draft(self, doc_id: str) -> dict[str, Any]:
         """Throw away a document's pending draft via ``POST /api/documents/{id}/discard-draft``."""
@@ -306,11 +330,16 @@ class CMSClient:
         Create, update, skip or defer a document based on ``import_ref``
         deduplication.
 
+        Every write goes into the changeset *changeset_provider* names. The caller
+        owns what happens to that changeset: :meth:`BaseGateway.sync` publishes it
+        once at the end of the run (so a run is one publish, one webhook, all or
+        nothing) or leaves it open for review. *auto_publish* here only says which
+        of those the document is headed for.
+
         Decision logic:
 
         1. Look up an existing document by ``(block_type, import_ref)``.
-        2. None found → create with the *whole* body, and publish it if
-           *auto_publish*.  Return ``"created"``.
+        2. None found → create with the *whole* body.  ``"created"``.
         3. Found with a pending **draft**.  Checked *before* the hash, because a
            matching hash can hide a draft whose publish failed.
 
@@ -318,18 +347,19 @@ class CMSClient:
              unpublished the document) → write nothing.  ``"deferred"`` if the
              source changed, ``"skipped"`` if it did not (nothing to wait for).
            * The gateway's own draft → fall through to step 5 and finish it: a
-             PATCH whose publish failed is re-PATCHed and published.  On a
-             review gateway (*auto_publish* False) a draft that is already
-             current is ``"skipped"``; a stale one is re-PATCHed, which is what
-             lets a never-published draft take a second and third update.
+             draft whose run did not publish is re-PATCHed into this run's
+             changeset.  When *auto_publish* is False (a review gateway) a draft
+             that is already current is ``"skipped"``; a stale one is re-PATCHed,
+             which is what lets a never-published draft take a second and third
+             update.
         4. Found, no draft, and the hash of the *owned* fields matches → write
            nothing.  ``"skipped"``.  The exception: an auto-publish gateway whose
-           document was created but never published (the publish failed) →
-           publish it.  ``"updated"``.  A document a person unpublished stays
-           unpublished; if the source changed meanwhile → ``"deferred"``.
-        5. Otherwise PATCH **only the owned fields**, so anything a person added
-           or edited elsewhere survives, then publish **that document** right
-           away if *auto_publish*.  ``"updated"``.
+           document was created but never published (its run did not finish) →
+           link it into this run's changeset.  ``"updated"``.  A document a person
+           unpublished stays unpublished; if the source changed meanwhile →
+           ``"deferred"``.
+        5. Otherwise PATCH **only the owned fields** into the run's changeset, so
+           anything a person added or edited elsewhere survives.  ``"updated"``.
 
         ``owned_fields=None`` treats the whole body as owned, and then any draft
         is a person's (nothing can be told apart).  The hash is kept in
@@ -337,11 +367,8 @@ class CMSClient:
         gateway *sent*, never of what the CMS stored back (the CMS validates and
         rewrites bodies).
 
-        ``changeset_provider`` is an optional async callable resolved only when
-        this call actually writes. It returns the id of the changeset to group
-        the write into: the review batch of a gateway that does not publish.
-        Without one the PATCH opts out of the CMS's auto-changeset
-        (``X-Skip-Changeset``), since publishing here leaves nothing to batch.
+        ``changeset_provider`` is an async callable resolved only when this call
+        actually writes, so an all-skip run opens no changeset.
         """
         with tracer.start_as_current_span("gateways.client.upsert") as span:
             span.set_attribute("doc_type", block_type)
@@ -350,21 +377,21 @@ class CMSClient:
                 existing = await self.find_by_import_ref(block_type, item.import_ref)
                 new_hash = item.content_hash(owned_fields)
 
+                async def changeset() -> str | None:
+                    return await changeset_provider() if changeset_provider is not None else None
+
                 if existing is None:
                     meta: dict[str, Any] = {"content_hash": new_hash}
                     if item.title:
                         meta["title"] = item.title
-                    cs_id = await changeset_provider() if changeset_provider is not None else None
-                    doc = await self.create_document(
+                    await self.create_document(
                         doc_type=block_type,
                         slug=item.slug,
                         body=item.body,
                         import_ref=item.import_ref,
                         meta=meta,
-                        changeset_id=cs_id,
+                        changeset_id=await changeset(),
                     )
-                    if auto_publish:
-                        await self.publish_document(doc["id"])
                     span.set_attribute("action", "created")
                     return "created"
 
@@ -407,8 +434,10 @@ class CMSClient:
                         return "skipped"  # review gateway: the draft already says this
                 elif same:
                     if auto_publish and not ever_published:
-                        # Created, but the publish never happened. Nothing to write.
-                        await self.publish_document(existing["id"])
+                        # Created by a run that never published it. Nothing to write:
+                        # just put it in this run's changeset.
+                        if (cs_id := await changeset()) is not None:
+                            await self.add_to_changeset(cs_id, existing["id"])
                         span.set_attribute("action", "updated")
                         return "updated"
                     span.set_attribute("action", "skipped")
@@ -416,16 +445,12 @@ class CMSClient:
                 elif unpublished_by_person:
                     return deferred("unpublished by a person")
 
-                cs_id = await changeset_provider() if changeset_provider is not None else None
                 await self.update_document(
                     existing["id"],
                     body=item.owned_body(owned_fields),
                     meta={**existing_meta, "content_hash": new_hash},
-                    changeset_id=cs_id,
-                    link_changeset=False,
+                    changeset_id=await changeset(),
                 )
-                if auto_publish:
-                    await self.publish_document(existing["id"])
                 span.set_attribute("action", "updated")
                 return "updated"
             except Exception as exc:

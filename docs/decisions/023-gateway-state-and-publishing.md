@@ -24,9 +24,10 @@ for real showed that ADR 015's treatment of incremental sync, state and publishi
 4. **A stuck document froze the cursor.** The first rework only advanced the cursor after a *clean* run
    (nothing deferred, nothing failed). One post with a person's draft on it meant no run ever advanced, and
    every `since_last_sync` re-read everything.
-5. **Publishing a run as one changeset strands a run.** An update was published by publishing the run's
-   changeset at the end. A failure part-way left documents PATCHed and unpublished, and the next run
-   deferred them as if a person had drafted them.
+5. **A failed run left drafts the next run took for a person's.** The first rework published the run's
+   changeset in a `finally`, behind flags that made some items skip it. When a publish failed, the documents it
+   left PATCHed and unpublished were then deferred forever as if a person had drafted them. The fault was
+   the draft classification, not the batching (decision 3).
 
 ## What this supersedes
 
@@ -87,22 +88,39 @@ unpublish, or a document a person unpublished, is a person's: left alone and rep
 whose draft it is and defers on any. This is what lets a review gateway (`auto_publish = False`) take a
 second and third update to a never-published draft, and what finishes a document whose publish failed.
 
-### 4. Each document is published as soon as it is written
+### 4. A run is one changeset, published once
 
-On an `auto_publish` gateway, the document is published right after its create or update succeeds. There is
-no end-of-run changeset publish: a failure strands one document, and the next run finishes it. A gateway that
-does not publish groups its writes in one lazily created review changeset, as before.
+Every write of a run goes into a changeset opened lazily on the first write, so a quiet run opens none. What is
+headed for publication (everything on an `auto_publish` gateway, bar an item with `published=False`) goes into one
+new changeset for the run, which the gateway publishes **once, at the end**: one publish, so one
+`changeset.published` webhook (one site build for a sync of any size), and all or nothing, so the site never
+shows half a sync. What is held for review (everything on a gateway with `auto_publish = False`, or an item with
+`published=False`) goes into a separate open review changeset and is never published by the gateway.
 
-**Core change (starlette-cms).** The `PATCH /api/documents/{id}` handler links the document into an open
-changeset and creates a date-titled one ("Oct 2", "Oct 2 (2)", …) when there is none. Publishing one document
-at a time therefore left one open changeset per updated document in the editor (reproduced in
-`test_changesets.py` before the fix). The smallest fix is an opt-out: `PATCH` honours
-`X-Skip-Changeset: 1`, and `CMSClient.update_document(link_changeset=False)` sends it. An explicit
-`X-Active-Changeset-Id` still wins.
+A failure is loud and recoverable:
 
-Rejected: unlinking a document from its open changesets when it is published through the single-document
-endpoint. It would match what changeset publish already does, but it changes the editor's behaviour for
-every caller and still leaves each auto-created changeset behind, empty.
+- If the publish raises, the run raises: the job is recorded as an error, and **the cursor is not advanced**.
+  The next run covers the same items, finds the documents' leftover drafts (the gateway's own, decision 3),
+  re-writes them into a new changeset and publishes that, which also removes them from the old changeset. The
+  empty changesets a failed run leaves behind (named for this gateway's runs, empty, open) are deleted at the
+  end of a successful publish, and only those.
+- A document that cannot be written (the CMS validates every write) is an item error: it is left out of the
+  changeset and the rest publish.
+- A document created by a run that never published it is linked into the next run's changeset.
+
+The cursor therefore moves only after the publish succeeds, whatever was deferred or failed on.
+
+Rejected: **publishing each document right after its write.** Built, then reverted. It fixes nothing the
+changeset does not, and it costs: one `document.published` webhook per document (a build-hook consumer gets up to N
+builds for a sync of N documents, and the CMS does not coalesce deliveries); a half-published run when something
+fails part-way; and a core change, because the `PATCH` handler links every edit into an open changeset and creates a
+date-titled one when there is none, which per-document publishing left behind once per document. A run
+changeset never meets that, since every PATCH names the changeset. Also rejected: a debounce on the webhook, which
+treats a symptom of that choice.
+
+Known trade-off: a changeset publishes everything in it, so a person who edits a document the run has already
+written, in the seconds before the run's publish, would have that edit published too. The window is the length of
+one run.
 
 ### 5. Ranges (unchanged)
 
@@ -114,17 +132,16 @@ introduced with the first rework. Deletions are never made by a sync.
 **Positive**
 - One cursor, durable, and the same for the admin page, the CLI and MCP tools.
 - A stuck document no longer slows every run; it is listed in the result, and caught up by the next `all_time`.
-- A failed publish or a failed write strands one document, which the next run to meet it finishes.
+- A sync is one publish and one site build, however many documents it changes, and it is all or nothing.
+- A failed publish is loud (the run raises, the job is an error) and self-healing (the cursor stays, the next run
+  finishes the documents and cleans up).
 
 **Negative / trade-offs**
 - Workers need the CMS API to run at all (no offline CLI run), and CMS and sidecar must be on compatible
   versions (they ship in one image in joellithgow).
 - The default state file assumes the CMS is on SQLite. Elsewhere the integrator must pass `jobs_db_path`.
-- `X-Skip-Changeset` is now part of the CMS's public write API.
-- Per-document publishing means one `document.published` webhook per document, where a run changeset sent one
-  `changeset.published`. A consumer with a build-hook webhook (joellithgow.com) gets up to N builds for a sync that
-  changes N documents, and the CMS does not coalesce webhook deliveries. A quiet sync changes nothing and fires
-  nothing. If that proves costly the fix belongs in the CMS (a per-webhook debounce), not in gateways.
+- Documents are not live until the end of the run, and a failed publish leaves them unpublished until the next
+  run succeeds.
 - An item left alone or failed in one run is not retried by later incremental runs unless its source changes; someone has to run `all_time`.
 
 **Testing.** Anything touching draft, publish, changeset or state semantics is tested against the real

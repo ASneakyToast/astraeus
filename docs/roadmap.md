@@ -291,7 +291,7 @@ Together these establish Astraeus as a **governed data platform** — not just a
 - [x] Cursor and job history in the CMS database; `/api/gateways/{name}/cursor|runs`; `RemoteSyncState`
 - [x] Cursor never freezes; deferred and failed items are reported in the result (caught up by `all_time`)
 - [x] `draft_verdict`: the gateway's own draft is finished, a person's is deferred; review gateways take repeated updates
-- [x] Per-document publish; `X-Skip-Changeset` on PATCH so no changeset is opened per document
+- [x] A run is one changeset, published once at the end; the cursor moves only after it publishes
 
 ---
 
