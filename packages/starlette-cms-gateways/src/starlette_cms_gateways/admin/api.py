@@ -34,6 +34,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from starlette_cms_gateways.base import SyncRange
 from starlette_cms_gateways.client import CMSClient
 from starlette_cms_gateways.discovery import discover_gateways
 
@@ -102,6 +103,7 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
         for name, cls in sorted(gateways.items()):
             # PERF: consider bulk GROUP BY query if N grows large
             last_synced_dt = await jobs.get_last_synced(name)
+            cursor_dt = await jobs.get_cursor(name)
             items.append(
                 {
                     "name": name,
@@ -110,6 +112,8 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
                     "auto_publish": getattr(cls, "auto_publish", False),
                     "immutable": getattr(cls, "immutable", False),
                     "last_synced": last_synced_dt.isoformat() if last_synced_dt else None,
+                    "cursor": cursor_dt.isoformat() if cursor_dt else None,
+                    "default_range": getattr(cls, "default_range", "since_last_sync"),
                 }
             )
         return JSONResponse({"gateways": items, "total": len(items)})
@@ -140,6 +144,8 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
                 "block_type": getattr(cls, "block_type", None),
                 "auto_publish": getattr(cls, "auto_publish", False),
                 "immutable": getattr(cls, "immutable", False),
+                "default_range": getattr(cls, "default_range", "since_last_sync"),
+                "cursor": (c.isoformat() if (c := await jobs.get_cursor(name)) else None),
                 "recent_jobs": recent,
             }
         )
@@ -167,6 +173,19 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
                 status_code=404,
             )
 
+        # Optional JSON body: {"range": "since_last_sync" | "all_time" | "custom",
+        #                      "from": "YYYY-MM-DD", "to": "YYYY-MM-DD"}
+        try:
+            payload = await request.json() if await request.body() else {}
+            sync_range = SyncRange.parse(
+                payload.get("range"),
+                payload.get("from"),
+                payload.get("to"),
+                default=getattr(cls, "default_range", "since_last_sync"),
+            )
+        except (ValueError, TypeError, AttributeError) as exc:
+            return JSONResponse({"error": f"Invalid sync range: {exc}"}, status_code=422)
+
         run_id = str(uuid.uuid4())
         await jobs.create(run_id, name)
 
@@ -180,7 +199,7 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
             client = _build_cms_client(cms)
             try:
                 gateway = cls(cms_client=client, job_store=jobs, job_store_key=name)
-                result = await gateway.sync()
+                result = await gateway.sync(sync_range)
                 await jobs.finish(
                     run_id,
                     status="done",

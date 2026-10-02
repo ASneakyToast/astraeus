@@ -34,6 +34,14 @@ CREATE TABLE IF NOT EXISTS gateway_sync_jobs (
 )
 """
 
+_CREATE_CURSORS = """
+CREATE TABLE IF NOT EXISTS gateway_cursors (
+    gateway_name TEXT PRIMARY KEY,
+    cursor       TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+)
+"""
+
 
 class JobStore:
     """
@@ -58,6 +66,7 @@ class JobStore:
     def _ensure_table(self) -> None:
         with self._connect() as conn:
             conn.execute(_CREATE_TABLE)
+            conn.execute(_CREATE_CURSORS)
             conn.commit()
 
     async def init(self) -> None:
@@ -202,6 +211,46 @@ class JobStore:
         """
         await self.init()
         return await asyncio.to_thread(self._get_last_synced_sync, key)
+
+    # ------------------------------------------------------------------
+    # Sync cursor
+    #
+    # The cursor is the start time of the last *clean* run, kept apart from
+    # the job history on purpose: a job can finish with status 'done' and
+    # still have failed items, and ``finished_at`` is when the run ended, not
+    # the moment up to which the source had been read. A lost cursor is safe —
+    # the next run just covers everything.
+    # ------------------------------------------------------------------
+
+    def _get_cursor_sync(self, key: str) -> datetime | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT cursor FROM gateway_cursors WHERE gateway_name = ?", (key,)
+            ).fetchone()
+        return datetime.fromisoformat(row["cursor"]) if row else None
+
+    async def get_cursor(self, key: str) -> datetime | None:
+        """Return the stored sync cursor for *key*, or ``None`` if there is none."""
+        await self.init()
+        return await asyncio.to_thread(self._get_cursor_sync, key)
+
+    def _set_cursor_sync(self, key: str, cursor: datetime) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO gateway_cursors (gateway_name, cursor, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(gateway_name) DO UPDATE
+                    SET cursor = excluded.cursor, updated_at = excluded.updated_at
+                """,
+                (key, cursor.isoformat(), datetime.now(UTC).isoformat()),
+            )
+            conn.commit()
+
+    async def set_cursor(self, key: str, cursor: datetime) -> None:
+        """Store *cursor* as the point up to which *key* has been synced."""
+        await self.init()
+        await asyncio.to_thread(self._set_cursor_sync, key, cursor)
 
 
 # ------------------------------------------------------------------

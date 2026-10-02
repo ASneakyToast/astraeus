@@ -27,7 +27,7 @@ Usage::
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any, Literal
 
 import httpx
@@ -211,6 +211,28 @@ class CMSClient:
             raise CMSError(resp.status_code, resp.text)
         return resp.json()
 
+    async def publish_changeset(self, changeset_id: str) -> dict[str, Any]:
+        """Publish a changeset via ``POST /api/changesets/{id}/publish``."""
+        http = self._get_http()
+        resp = await http.post(
+            f"{self.base_url}/api/changesets/{changeset_id}/publish",
+            headers=self._auth_headers(),
+        )
+        if resp.status_code != 200:
+            raise CMSError(resp.status_code, resp.text)
+        return resp.json()
+
+    async def discard_draft(self, doc_id: str) -> dict[str, Any]:
+        """Throw away a document's pending draft via ``POST /api/documents/{id}/discard-draft``."""
+        http = self._get_http()
+        resp = await http.post(
+            f"{self.base_url}/api/documents/{doc_id}/discard-draft",
+            headers=self._auth_headers(),
+        )
+        if resp.status_code != 200:
+            raise CMSError(resp.status_code, resp.text)
+        return resp.json()
+
     async def upsert(
         self,
         *,
@@ -218,37 +240,49 @@ class CMSClient:
         block_type: str,
         auto_publish: bool = False,
         changeset_provider: Callable[[], Awaitable[str]] | None = None,
-    ) -> Literal["created", "updated", "skipped"]:
+        owned_fields: Iterable[str] | None = None,
+        publish_with_changeset: bool = False,
+    ) -> Literal["created", "updated", "skipped", "deferred"]:
         """
-        Create, update, or skip a document based on ``import_ref`` deduplication.
+        Create, update, skip or defer a document based on ``import_ref``
+        deduplication.
 
         Decision logic:
 
         1. Look up an existing document by ``(block_type, import_ref)``.
-        2. If none found → create and optionally publish.  Return ``"created"``.
-        3. If found and body hash unchanged → do nothing.  Return ``"skipped"``.
-        4. If found and body hash changed → update body.  Return ``"updated"``.
+        2. None found → create with the *whole* body.  Return ``"created"``.
+        3. Found and the hash of the *owned* fields matches the stored one →
+           write nothing.  Return ``"skipped"``.
+        4. Found, hash differs, but a human holds a pending draft on it or
+           deliberately unpublished it → write nothing.  Return ``"deferred"``.
+           Patching would merge into their draft, and publishing would push their
+           work-in-progress live.
+        5. Found, hash differs → PATCH **only the owned fields**, so anything a
+           human added or edited elsewhere survives, then publish if asked.
+           Return ``"updated"``.
 
-        The content hash is stored in the document's ``meta.content_hash`` field
-        so it survives across process restarts without re-fetching the full body.
-
-        By default (``auto_publish=False``), created/updated documents remain as
-        drafts.  Pass ``auto_publish=True`` to publish immediately.
+        ``owned_fields=None`` treats the whole body as owned.  The hash is kept
+        in ``meta.content_hash`` so it survives restarts.  It is a hash of what
+        the gateway *sent*, never of what the CMS stored back (the CMS validates
+        and rewrites bodies).
 
         ``changeset_provider`` is an optional async callable resolved only when
-        this call actually writes (create or update, never skip). It returns the
-        id of the changeset to group the write into — the caller uses it to lazily
-        open one changeset per sync run without creating one for an all-skip run.
+        this call actually writes. It returns the id of the changeset to group
+        the write into — the caller uses it to lazily open one changeset per
+        sync run without creating one for an all-skip run.
+
+        ``publish_with_changeset`` says the caller will publish that changeset
+        itself, so the document is not also published here.
         """
         with tracer.start_as_current_span("gateways.client.upsert") as span:
             span.set_attribute("doc_type", block_type)
             span.set_attribute("import_ref", item.import_ref)
             try:
                 existing = await self.find_by_import_ref(block_type, item.import_ref)
+                new_hash = item.content_hash(owned_fields)
 
                 if existing is None:
-                    # Create new document
-                    meta: dict[str, Any] = {"content_hash": item.content_hash()}
+                    meta: dict[str, Any] = {"content_hash": new_hash}
                     if item.title:
                         meta["title"] = item.title
                     cs_id = await changeset_provider() if changeset_provider is not None else None
@@ -260,12 +294,11 @@ class CMSClient:
                         meta=meta,
                         changeset_id=cs_id,
                     )
-                    if auto_publish:
+                    if auto_publish and not publish_with_changeset:
                         await self.publish_document(doc["id"])
                     span.set_attribute("action", "created")
                     return "created"
 
-                # Compare content hash to decide whether to update
                 existing_meta = existing.get("meta") or {}
                 if isinstance(existing_meta, str):
                     import json as _json
@@ -279,23 +312,30 @@ class CMSClient:
                         )
                         existing_meta = {}
 
-                stored_hash = existing_meta.get("content_hash", "")
-                if stored_hash == item.content_hash():
+                published = bool(existing.get("published"))
+                never_published = not published and not existing.get("published_at")
+
+                if existing_meta.get("content_hash", "") == new_hash:
                     span.set_attribute("action", "skipped")
                     return "skipped"
 
-                # Update body and refresh content hash
-                new_meta = {**existing_meta, "content_hash": item.content_hash()}
-                if item.title:
-                    new_meta["title"] = item.title
+                if existing.get("has_draft") or (not published and not never_published):
+                    logger.info(
+                        "starlette_cms_gateways.client.deferred",
+                        import_ref=item.import_ref,
+                        pending_draft=bool(existing.get("has_draft")),
+                    )
+                    span.set_attribute("action", "deferred")
+                    return "deferred"
+
                 cs_id = await changeset_provider() if changeset_provider is not None else None
                 await self.update_document(
                     existing["id"],
-                    body=item.body,
-                    meta=new_meta,
+                    body=item.owned_body(owned_fields),
+                    meta={**existing_meta, "content_hash": new_hash},
                     changeset_id=cs_id,
                 )
-                if auto_publish and not existing.get("published"):
+                if auto_publish and not publish_with_changeset:
                     await self.publish_document(existing["id"])
                 span.set_attribute("action", "updated")
                 return "updated"

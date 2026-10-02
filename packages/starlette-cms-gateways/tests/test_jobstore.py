@@ -134,3 +134,37 @@ async def test_get_last_synced_scoped_to_key():
         assert result_a is not None
     finally:
         os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Sync cursor
+# ---------------------------------------------------------------------------
+
+
+async def test_cursor_none_until_set_then_roundtrips_and_overwrites():
+    path, store = _tmp_store()
+    try:
+        assert await store.get_cursor("gw") is None
+
+        first = datetime(2026, 9, 6, 15, 39, tzinfo=UTC)
+        await store.set_cursor("gw", first)
+        assert await store.get_cursor("gw") == first
+
+        later = datetime(2026, 9, 21, 8, 0, tzinfo=UTC)
+        await store.set_cursor("gw", later)
+        assert await store.get_cursor("gw") == later
+        assert await store.get_cursor("other") is None
+    finally:
+        os.unlink(path)
+
+
+async def test_cursor_is_independent_of_job_history():
+    """A finished job must not stand in for the cursor: 'done' can still carry item errors."""
+    path, store = _tmp_store()
+    try:
+        await store.create("run-1", "gw")
+        await store.finish("run-1", status="done", errors=[["x", "boom"]])
+        assert await store.get_last_synced("gw") is not None
+        assert await store.get_cursor("gw") is None
+    finally:
+        os.unlink(path)

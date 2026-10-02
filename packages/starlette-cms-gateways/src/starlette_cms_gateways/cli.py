@@ -181,10 +181,29 @@ def list_gateways() -> None:
 @click.argument("gateway_name")
 @_cms_url_option
 @_api_key_option
+@click.option(
+    "--range",
+    "range_mode",
+    type=click.Choice(["since_last_sync", "all_time", "custom"]),
+    default=None,
+    help="What to cover. Default: the gateway's own default (usually since_last_sync).",
+)
+@click.option("--from", "range_from", default=None, help="Custom range start, YYYY-MM-DD.")
+@click.option("--to", "range_to", default=None, help="Custom range end, YYYY-MM-DD.")
+@click.option(
+    "--jobs-db",
+    envvar="GATEWAY_JOBS_DB",
+    default=None,
+    help="SQLite file holding the sync cursor. Without one, since_last_sync syncs all time.",
+)
 def sync(
     gateway_name: str,
     cms_url: str,
     api_key: str | None,
+    range_mode: str | None,
+    range_from: str | None,
+    range_to: str | None,
+    jobs_db: str | None,
 ) -> None:
     """
     Run a sync for the named gateway.
@@ -203,14 +222,30 @@ def sync(
 
     gateway_cls = gateways[gateway_name]
 
+    from starlette_cms_gateways.base import SyncRange
+
+    try:
+        sync_range = SyncRange.parse(
+            range_mode,
+            range_from,
+            range_to,
+            default=getattr(gateway_cls, "default_range", "since_last_sync"),
+        )
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
+
     async def _run() -> None:
         from starlette_cms_gateways.client import CMSClient, CMSError
+        from starlette_cms_gateways.jobstore import JobStore
 
         client = CMSClient(base_url=cms_url, api_key=api_key)
         try:
-            gateway = gateway_cls(cms_client=client)
-            click.echo(f"Syncing {click.style(gateway_name, fg='cyan')}…")
-            result = await gateway.sync()
+            job_store = JobStore(jobs_db) if jobs_db else None
+            gateway = gateway_cls(
+                cms_client=client, job_store=job_store, job_store_key=gateway_name
+            )
+            click.echo(f"Syncing {click.style(gateway_name, fg='cyan')} ({sync_range.mode})…")
+            result = await gateway.sync(sync_range)
         except CMSError as exc:
             raise click.ClickException(str(exc)) from exc
         finally:
@@ -230,7 +265,7 @@ def sync(
             click.style(
                 f"✓ Done — created={result.created}  "
                 f"updated={result.updated}  skipped={result.skipped}  "
-                f"errors={len(result.errors)}",
+                f"deferred={len(result.deferred)}  errors={len(result.errors)}",
                 fg=status_fg,
             )
         )
