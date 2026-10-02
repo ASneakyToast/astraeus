@@ -89,7 +89,7 @@ The framework handles everything except the external API call:
   inject a `since` into `fetch()`: a gateway that wants a datetime cursor calls `await
   self.resolve_window()`. After any run that did not raise, the cursor moves to the run's start; items a run
   deferred (a person's draft is in the way) or failed on go on a retry list instead of holding it back, and
-  an optional `refetch(import_refs)` hook lets the next run rebuild them. See ADR 018.
+  an optional `refetch(import_refs)` hook lets the next run rebuild them. See ADR 023.
 - **Each document is published as soon as it is written** (`auto_publish = True`), so one failure strands
   one document, not a run, and no changeset is left open.
 

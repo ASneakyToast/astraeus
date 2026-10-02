@@ -20,7 +20,7 @@ from typing import Any, Literal
 DraftVerdict = Literal["none", "gateway-only", "human-edits"]
 
 
-def _norm(value: Any) -> Any:
+def norm(value: Any) -> Any:
     """Round-trip through JSON so 2 and 2.0, and tuples and lists, compare as stored."""
     return json.loads(json.dumps(value, sort_keys=True))
 
@@ -48,7 +48,7 @@ def draft_verdict(
         return "none", []
     skip = set(ignore)
     keys = (set(live) | set(draft)) - skip
-    differing = sorted(k for k in keys if _norm(live.get(k)) != _norm(draft.get(k)))
+    differing = sorted(k for k in keys if norm(live.get(k)) != norm(draft.get(k)))
     if owned_fields is None:
         return "human-edits", differing
     owned = set(owned_fields)

@@ -2,7 +2,7 @@
 
 Phases are ordered by dependency. A future agent should always start at the earliest incomplete phase.
 
-**Current status:** Phases 0–14 complete (including EPIC-001 VPP MVP primitives, mediakit core+admin+MCP+CLI, starlette-editor Phases 1–3 + Phase 14 polish, ADR 017 observability). starlette-cms-gateways package scaffolded (Phase GW-1 complete). starlette-editor is fully polished and PyPI-ready.
+**Current status:** Phases 0–14 complete (including EPIC-001 VPP MVP primitives, mediakit core+admin+MCP+CLI, starlette-editor Phases 1–3 + Phase 14 polish, ADR 017 observability). starlette-cms-gateways in use by joellithgow.com (Phases GW-0 to GW-4). starlette-editor is fully polished and PyPI-ready.
 
 **Use cases:** See `docs/use-cases/` for worked examples of Astraeus applied to real projects. These inform roadmap priorities and surface new primitives.
 
@@ -279,6 +279,19 @@ Together these establish Astraeus as a **governed data platform** — not just a
 - [x] `gateways` CLI — `list`, `status`, `sync`, `register-blocks` commands
 - [x] MCP server factory `build_gateway_mcp_server()` (`[mcp]` extra)
 - [x] ADR 015 written
+
+---
+
+## starlette-cms-gateways Phase GW-4 — Ownership, state and publishing ✅ ([ADR 023](decisions/023-gateway-state-and-publishing.md))
+
+**Goal:** Re-syncs that write nothing, updates that go live, and sync state that survives restarts.
+
+- [x] `owned_fields` + owned-only hashing; no-op re-syncs
+- [x] `SyncRange` (`since_last_sync` / `all_time` / `custom`) through admin API, CLI and MCP
+- [x] Cursor, retry list and job history in the CMS database; `/api/gateways/{name}/cursor|retry|runs`; `RemoteSyncState`
+- [x] Cursor never freezes; optional `refetch(import_refs)` hook; deferred and failed items retried next run
+- [x] `draft_verdict`: the gateway's own draft is finished, a person's is deferred; review gateways take repeated updates
+- [x] Per-document publish; `X-Skip-Changeset` on PATCH so no changeset is opened per document
 
 ---
 
