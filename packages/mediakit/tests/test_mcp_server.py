@@ -70,7 +70,7 @@ async def test_list_assets_returns_page():
     with patch("httpx.AsyncClient.get", mock_get):
         result = await _call_tool(mcp, "list_assets")
 
-    assert result == payload
+    assert result["assets"] == payload["assets"]
     assert mock_get.called
 
 
@@ -83,7 +83,7 @@ async def test_list_assets_pagination():
     with patch("httpx.AsyncClient.get", mock_get):
         result = await _call_tool(mcp, "list_assets", limit=10, offset=20)
 
-    assert result == payload
+    assert result["assets"] == []
     params = mock_get.call_args.kwargs.get("params", {})
     assert params.get("limit") == 10
     assert params.get("offset") == 20
@@ -292,3 +292,88 @@ async def test_all_tools_registered():
         "get_iiif_url",
     }
     assert expected <= tool_names, f"Missing tools: {expected - tool_names}"
+
+
+# ---------------------------------------------------------------------------
+# Pagination metadata, argument validation, annotations
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_list_assets_default_limit_and_metadata_when_page_full():
+    mcp = _build_server()
+    assets = [{"key": f"k{i}"} for i in range(10)]
+    payload = {"assets": assets, "limit": 10, "offset": 0}
+    mock_get = AsyncMock(return_value=_mock_response(200, payload))
+
+    with patch("httpx.AsyncClient.get", mock_get):
+        result = await _call_tool(mcp, "list_assets")
+
+    assert mock_get.call_args.kwargs["params"]["limit"] == 10
+    assert result["returned"] == 10
+    assert result["has_more"] is True
+    assert result["next_offset"] == 10
+
+
+@pytest.mark.anyio
+async def test_list_assets_metadata_on_last_page():
+    mcp = _build_server()
+    payload = {"assets": [{"key": "a"}], "limit": 10, "offset": 20}
+    mock_get = AsyncMock(return_value=_mock_response(200, payload))
+
+    with patch("httpx.AsyncClient.get", mock_get):
+        result = await _call_tool(mcp, "list_assets", offset=20)
+
+    assert result["returned"] == 1
+    assert result["has_more"] is False
+    assert result["next_offset"] is None
+
+
+@pytest.mark.anyio
+async def test_unknown_parameter_is_rejected_with_suggestion():
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    mcp = _build_server()
+    mock_get = AsyncMock()
+
+    with patch("httpx.AsyncClient.get", mock_get):
+        with pytest.raises(ToolError) as exc_info:
+            await mcp.call_tool("search_assets", {"tag": "nature"})
+
+    message = str(exc_info.value)
+    assert "Unknown parameter `tag`" in message
+    assert "Did you mean `tags`?" in message
+    mock_get.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_limit_above_maximum_is_rejected():
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    with pytest.raises(ToolError) as exc_info:
+        await _build_server().call_tool("list_assets", {"limit": 500})
+
+    assert "50" in str(exc_info.value)
+
+
+@pytest.mark.anyio
+async def test_get_asset_not_found_has_hint():
+    with patch(
+        "httpx.AsyncClient.get",
+        new_callable=AsyncMock,
+        return_value=_mock_response(404, {"error": "not found"}),
+    ):
+        result = await _call_tool(_build_server(), "get_asset", key="nope")
+
+    assert "list_assets" in result["hint"]
+
+
+@pytest.mark.anyio
+async def test_tool_annotations_distinguish_read_write_destructive():
+    tools = {t.name: t for t in await _build_server().list_tools()}
+
+    assert tools["list_assets"].annotations.readOnlyHint is True
+    assert tools["get_iiif_url"].annotations.readOnlyHint is True
+    assert tools["update_asset"].annotations.readOnlyHint is False
+    assert tools["delete_asset"].annotations.destructiveHint is True
+    assert all(t.inputSchema["additionalProperties"] is False for t in tools.values())
