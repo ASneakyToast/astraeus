@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -69,7 +70,7 @@ def _make_gateway(job_store=None):
 @respx.mock
 async def test_full_fetch_when_no_job_store():
     """
-    When no job_store is provided, no d1 param is sent — full fetch.
+    When no job_store is provided, no cursor param is sent — full fetch.
     """
     route = respx.get("https://api.inaturalist.org/v1/observations").mock(
         side_effect=[
@@ -84,15 +85,14 @@ async def test_full_fetch_when_no_job_store():
     assert len(items) == 1
     assert items[0].import_ref == "inaturalist:observation:12345"
 
-    # Verify no d1 param was sent
     for call in route.calls:
-        assert "d1" not in dict(call.request.url.params)
+        assert "updated_since" not in dict(call.request.url.params)
 
 
 @respx.mock
 async def test_incremental_fetch_sends_d1_param():
     """
-    When job_store has a successful done job, d1 is sent to the API.
+    When the job store holds a cursor, it is sent to the API as updated_since.
     """
 
     # Create a real (temp-file) job store with a completed job
@@ -103,8 +103,8 @@ async def test_incremental_fetch_sends_d1_param():
 
     try:
         store = JobStore(db_path)
-        await store.create("run-1", "inaturalist_outings")
-        await store.finish("run-1", status="done", created=10)
+        cursor = datetime(2026, 9, 10, 12, tzinfo=UTC)
+        await store.set_cursor("inaturalist_outings", cursor)
 
         route = respx.get("https://api.inaturalist.org/v1/observations").mock(
             side_effect=[
@@ -118,16 +118,10 @@ async def test_incremental_fetch_sends_d1_param():
 
         assert len(items) == 1
 
-        # Verify d1 param was sent
-        first_call = route.calls[0]
-        params = dict(first_call.request.url.params)
-        assert "d1" in params, f"Expected d1 param, got: {params}"
-        # d1 should be a date string (YYYY-MM-DD)
-        d1_val = params["d1"]
-        # Should parse as a valid date
-        from datetime import date
-
-        date.fromisoformat(d1_val)  # raises ValueError on invalid format
+        params = dict(route.calls[0].request.url.params)
+        assert "updated_since" in params, f"Expected updated_since, got: {params}"
+        # The cursor, pulled back by the gateway's overlap.
+        assert datetime.fromisoformat(params["updated_since"]) == cursor - gw.cursor_overlap
     finally:
         os.unlink(db_path)
 
@@ -135,7 +129,7 @@ async def test_incremental_fetch_sends_d1_param():
 @respx.mock
 async def test_no_d1_when_only_error_jobs():
     """
-    When job_store exists but only has error jobs, no d1 is sent.
+    A failed run stores no cursor, so a store holding only error jobs sends nothing.
     """
     from starlette_cms_gateways.jobstore import JobStore
 
@@ -159,9 +153,7 @@ async def test_no_d1_when_only_error_jobs():
 
         assert len(items) == 1
 
-        # No d1 param since no successful prior sync
-        first_call = route.calls[0]
-        params = dict(first_call.request.url.params)
-        assert "d1" not in params, f"d1 should not be present, got: {params}"
+        params = dict(route.calls[0].request.url.params)
+        assert "updated_since" not in params, f"no cursor was stored, got: {params}"
     finally:
         os.unlink(db_path)

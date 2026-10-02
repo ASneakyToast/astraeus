@@ -554,3 +554,70 @@ async def test_scheduler_ignores_non_due_changesets(cs_cms: CMS, cs_client: http
     # Changeset remains scheduled
     cs_resp2 = await cs_client.get(f"/api/changesets/{cs_id}")
     assert cs_resp2.json()["status"] == "scheduled"
+
+
+# ---------------------------------------------------------------------------
+# Writers that publish each document themselves (gateways) must not leave
+# open changesets behind
+# ---------------------------------------------------------------------------
+
+
+async def _created_published(client: httpx.AsyncClient, slug: str) -> str:
+    resp = await client.post(
+        "/api/documents", json={"doc_type": "article", "slug": slug, "body": {"title": slug}}
+    )
+    assert resp.status_code == 201
+    doc_id = resp.json()["id"]
+    assert (await client.post(f"/api/documents/{doc_id}/publish")).status_code == 200
+    return doc_id
+
+
+async def _open_changesets(client: httpx.AsyncClient) -> list[dict]:
+    resp = await client.get("/api/changesets", params={"status": "open"})
+    assert resp.status_code == 200
+    return resp.json()["changesets"]
+
+
+async def test_patch_auto_links_a_changeset_by_default(cs_client: httpx.AsyncClient) -> None:
+    """The editor relies on this: an edit with no active changeset opens a date-titled one."""
+    doc_id = await _created_published(cs_client, "a")
+    resp = await cs_client.patch(f"/api/documents/{doc_id}", json={"body": {"title": "a2"}})
+    assert resp.status_code == 200
+    assert "x-changeset-id" in resp.headers
+    assert len(await _open_changesets(cs_client)) == 1
+
+
+async def test_patch_with_skip_header_leaves_no_changeset(cs_client: httpx.AsyncClient) -> None:
+    """A writer that publishes each document straight away opts out of the auto-changeset.
+
+    Without the opt-out, publishing one document at a time leaves one open
+    date-titled changeset per document ("Oct 2", "Oct 2 (2)", ...) in the editor.
+    """
+    ids = [await _created_published(cs_client, s) for s in ("a", "b", "c")]
+    for doc_id in ids:
+        resp = await cs_client.patch(
+            f"/api/documents/{doc_id}",
+            json={"body": {"title": "edited"}},
+            headers={"X-Skip-Changeset": "1"},
+        )
+        assert resp.status_code == 200
+        assert "x-changeset-id" not in resp.headers
+        assert (await cs_client.post(f"/api/documents/{doc_id}/publish")).status_code == 200
+
+    assert await _open_changesets(cs_client) == []
+    assert (await cs_client.get(f"/api/documents/{ids[0]}")).json()["body"]["title"] == "edited"
+
+
+async def test_skip_header_does_not_override_an_explicit_changeset(
+    cs_client: httpx.AsyncClient,
+) -> None:
+    doc_id = await _created_published(cs_client, "a")
+    cs = (await cs_client.post("/api/changesets", json={"title": "Batch"})).json()["id"]
+    resp = await cs_client.patch(
+        f"/api/documents/{doc_id}",
+        json={"body": {"title": "x"}},
+        headers={"X-Skip-Changeset": "1", "X-Active-Changeset-Id": cs},
+    )
+    assert resp.status_code == 200
+    docs = (await cs_client.get(f"/api/changesets/{cs}")).json()["documents"]
+    assert [d["id"] for d in docs] == [doc_id]

@@ -757,9 +757,19 @@ def make_document_routes(cms: CMS) -> list[Route]:
 
         # Auto-link to a changeset so this edit is grouped for publishing. Shared
         # with the collab (rich-text) write path via link_document_to_changeset.
+        #
+        # A writer that publishes each document itself (a gateway) sends
+        # ``X-Skip-Changeset`` so the edit doesn't open a date-titled changeset
+        # that nothing would ever publish or close. An explicit
+        # ``X-Active-Changeset-Id`` still wins: the caller asked for that grouping.
         response_headers: dict[str, str] = {}
         active_cs_id = request.headers.get("x-active-changeset-id")
-        created = await link_document_to_changeset(doc_id, doc_type, active_cs_id)
+        skip_changeset = request.headers.get("x-skip-changeset", "").lower() in ("1", "true", "yes")
+        created = (
+            None
+            if skip_changeset and not active_cs_id
+            else await link_document_to_changeset(doc_id, doc_type, active_cs_id)
+        )
         if created is not None:
             new_cs_id, auto_title = created
             response_headers["X-Changeset-Id"] = new_cs_id

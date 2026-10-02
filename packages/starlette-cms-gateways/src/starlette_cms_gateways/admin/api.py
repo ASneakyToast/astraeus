@@ -7,14 +7,22 @@ Routes added to the CMS:
   POST /api/gateways/{name}/sync            — kick off an async sync job
   GET  /api/gateways/{name}/sync/{run_id}   — poll job status / result
 
-All mutating routes require ``Authorization: Bearer <api_key>``.
+State, for workers outside the CMS process (CLI, MCP sidecars) — see
+:class:`~starlette_cms_gateways.state.RemoteSyncState`:
+  GET/PUT /api/gateways/{name}/cursor       — the sync cursor
+  GET/PUT /api/gateways/{name}/retry        — the retry list
+  POST    /api/gateways/{name}/runs         — open a job record
+  PATCH   /api/gateways/{name}/runs/{id}    — close it
+
+All routes except the job poll require the CMS's write auth (API key or session).
 
 Design notes:
 
-- Sync job records are stored in a dedicated SQLite database (``gateway_jobs.db``
-  by default, configurable via ``GatewayAdmin(jobs_db_path=...)``) — separate
-  from the CMS content database.  This keeps operational state out of the block
-  registry and the editor UI.
+- Sync state (job records, the cursor, the retry list) lives in the CMS's own
+  SQLite file by default (``GatewayAdmin(jobs_db_path=...)`` overrides) — the one
+  file that is persistent and backed up.  The tables sit beside the CMS's and stay
+  out of the block registry and the editor UI.  Only this process opens the file;
+  other workers use the routes above, so there is one cursor, not one per process.
 - Sync tasks run as ``asyncio.Task`` objects (fire-and-forget on POST).
 - The CMSClient used inside each sync task routes through the CMS ASGI app
   in-process via ``httpx.ASGITransport`` — no host URL or open port is needed.
@@ -25,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import httpx
@@ -37,6 +46,8 @@ from starlette.routing import Route
 from starlette_cms_gateways.base import SyncRange
 from starlette_cms_gateways.client import CMSClient
 from starlette_cms_gateways.discovery import discover_gateways
+from starlette_cms_gateways.runner import run_recorded
+from starlette_cms_gateways.state import RetryEntry
 
 if TYPE_CHECKING:
     from starlette_cms.app import CMS
@@ -113,6 +124,7 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
                     "immutable": getattr(cls, "immutable", False),
                     "last_synced": last_synced_dt.isoformat() if last_synced_dt else None,
                     "cursor": cursor_dt.isoformat() if cursor_dt else None,
+                    "retry_count": len(await jobs.get_retry(name)),
                     "default_range": getattr(cls, "default_range", "since_last_sync"),
                 }
             )
@@ -146,6 +158,7 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
                 "immutable": getattr(cls, "immutable", False),
                 "default_range": getattr(cls, "default_range", "since_last_sync"),
                 "cursor": (c.isoformat() if (c := await jobs.get_cursor(name)) else None),
+                "retry": [e.to_dict() for e in await jobs.get_retry(name)],
                 "recent_jobs": recent,
             }
         )
@@ -199,15 +212,7 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
             client = _build_cms_client(cms)
             try:
                 gateway = cls(cms_client=client, job_store=jobs, job_store_key=name)
-                result = await gateway.sync(sync_range)
-                await jobs.finish(
-                    run_id,
-                    status="done",
-                    created=result.created,
-                    updated=result.updated,
-                    skipped=result.skipped,
-                    errors=result.errors,
-                )
+                result = await run_recorded(gateway, jobs, name, sync_range, run_id=run_id)
                 logger.info(
                     "starlette_cms_gateways.admin.sync_done",
                     gateway=name,
@@ -215,18 +220,16 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
                     created=result.created,
                     updated=result.updated,
                     skipped=result.skipped,
+                    deferred=len(result.deferred),
                     errors=len(result.errors),
                 )
             except Exception as exc:  # noqa: BLE001
-                await jobs.finish(
-                    run_id,
-                    status="error",
-                    error=str(exc),
-                )
+                # run_recorded has already marked the job as an error.
                 logger.error(
                     "starlette_cms_gateways.admin.sync_error",
                     gateway=name,
                     run_id=run_id,
+                    error=str(exc),
                     exc_info=exc,
                 )
             finally:
@@ -257,6 +260,103 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
         return JSONResponse(job)
 
     # ------------------------------------------------------------------
+    # Sync state: cursor, retry list, job records (for workers outside the CMS)
+    # ------------------------------------------------------------------
+
+    async def _state_request(request: Request) -> tuple[str, dict, JSONResponse | None]:
+        """Auth, the gateway name, and the JSON body (``{}`` when there is none)."""
+        if (err := await _check_auth(request)) is not None:
+            return "", {}, err
+        name = request.path_params["name"]
+        gateways = discover_gateways()
+        if name not in gateways:
+            return (
+                name,
+                {},
+                JSONResponse(
+                    {"error": f"Gateway {name!r} not found.", "available": sorted(gateways)},
+                    status_code=404,
+                ),
+            )
+        if request.method in ("PUT", "POST", "PATCH"):
+            try:
+                body = await request.json() if await request.body() else {}
+            except ValueError:
+                return name, {}, JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+            if not isinstance(body, dict):
+                return name, {}, JSONResponse({"error": "Body must be an object"}, status_code=400)
+            return name, body, None
+        return name, {}, None
+
+    async def cursor_endpoint(request: Request) -> JSONResponse:
+        """``GET`` the gateway's sync cursor; ``PUT {"cursor": ISO8601}`` to set it."""
+        name, body, err = await _state_request(request)
+        if err is not None:
+            return err
+        if request.method == "PUT":
+            try:
+                cursor = datetime.fromisoformat(str(body["cursor"]))
+            except (KeyError, ValueError):
+                return JSONResponse(
+                    {"error": "Body must be {\"cursor\": <ISO 8601 datetime>}"}, status_code=422
+                )
+            await jobs.set_cursor(name, cursor)
+        current = await jobs.get_cursor(name)
+        return JSONResponse({"gateway": name, "cursor": current.isoformat() if current else None})
+
+    async def retry_endpoint(request: Request) -> JSONResponse:
+        """``GET`` the retry list; ``PUT {"entries": [...]}`` replaces it."""
+        name, body, err = await _state_request(request)
+        if err is not None:
+            return err
+        if request.method == "PUT":
+            try:
+                entries = [RetryEntry.from_dict(e) for e in body.get("entries", [])]
+            except (KeyError, TypeError, ValueError, AttributeError) as exc:
+                return JSONResponse({"error": f"Invalid retry entries: {exc}"}, status_code=422)
+            await jobs.set_retry(name, entries)
+        return JSONResponse(
+            {"gateway": name, "entries": [e.to_dict() for e in await jobs.get_retry(name)]}
+        )
+
+    async def create_run(request: Request) -> JSONResponse:
+        """Open a job record for a run a worker is about to make."""
+        name, body, err = await _state_request(request)
+        if err is not None:
+            return err
+        run_id = str(body.get("run_id") or uuid.uuid4())
+        await jobs.create(run_id, name)
+        return JSONResponse({"run_id": run_id, "gateway_name": name, "status": "running"}, 201)
+
+    async def finish_run(request: Request) -> JSONResponse:
+        """Close a job record: ``{"status": "done"|"error", "created": n, ...}``."""
+        name, body, err = await _state_request(request)
+        if err is not None:
+            return err
+        run_id = request.path_params["run_id"]
+        job = await jobs.get(run_id)
+        if job is None or job.get("gateway_name") != name:
+            return JSONResponse({"error": f"Job {run_id!r} not found."}, status_code=404)
+        status = body.get("status")
+        if status not in ("done", "error"):
+            return JSONResponse({"error": "status must be 'done' or 'error'"}, status_code=422)
+        try:
+            await jobs.finish(
+                run_id,
+                status=status,
+                created=int(body.get("created", 0)),
+                updated=int(body.get("updated", 0)),
+                skipped=int(body.get("skipped", 0)),
+                errors=body.get("errors") or [],
+                error=str(body.get("error", "")),
+                deferred=body.get("deferred") or [],
+                range=body.get("range") or None,
+            )
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": f"Invalid job result: {exc}"}, status_code=422)
+        return JSONResponse(await jobs.get(run_id))
+
+    # ------------------------------------------------------------------
     # Route list
     # ------------------------------------------------------------------
 
@@ -274,5 +374,29 @@ def make_gateway_api_routes(admin: GatewayAdmin) -> list[Route]:
             endpoint=get_sync_job,
             methods=["GET"],
             name="gateway_sync_job",
+        ),
+        Route(
+            "/api/gateways/{name}/cursor",
+            endpoint=cursor_endpoint,
+            methods=["GET", "PUT"],
+            name="gateway_cursor",
+        ),
+        Route(
+            "/api/gateways/{name}/retry",
+            endpoint=retry_endpoint,
+            methods=["GET", "PUT"],
+            name="gateway_retry",
+        ),
+        Route(
+            "/api/gateways/{name}/runs",
+            endpoint=create_run,
+            methods=["POST"],
+            name="gateway_run_create",
+        ),
+        Route(
+            "/api/gateways/{name}/runs/{run_id}",
+            endpoint=finish_run,
+            methods=["PATCH"],
+            name="gateway_run_finish",
         ),
     ]

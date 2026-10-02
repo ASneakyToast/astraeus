@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
-from datetime import datetime
 
 import httpx
 from starlette_cms_gateways import BaseGateway, GatewayItem
@@ -48,12 +47,12 @@ class INaturalistGateway(BaseGateway):
     Each observation becomes one document of block type
     ``inaturalist_observation``.
 
-    Incremental sync: if a :class:`~starlette_cms_gateways.jobstore.JobStore`
-    is provided (automatically wired when running via ``GatewayAdmin``), the
-    gateway reads the timestamp of the most recent successful sync and passes
-    it to the iNaturalist API as the ``d1`` date filter.  This limits the
-    fetch to only observations updated on or after that date.  Using ``.date()``
-    is intentionally conservative to avoid gaps at day boundaries.
+    Incremental sync: ``fetch`` calls :meth:`resolve_window`, which reads the
+    sync cursor the framework keeps in the CMS (the start of the last run that
+    did not raise, pulled back by ``cursor_overlap``). The gateway passes it to
+    the iNaturalist API as ``updated_since``. With no cursor the window is
+    ``all_time`` and nothing is passed. The gateway never computes a cursor
+    itself, and never uses ``get_last_synced()``, which is when a run *finished*.
 
     Configuration via environment variables:
     - ``INATURALIST_USERNAME`` — the iNaturalist account to pull observations for
@@ -79,15 +78,10 @@ class INaturalistGateway(BaseGateway):
         Uses the public iNaturalist v1 API.  No authentication required for
         public observations.
 
-        When a job store is available, passes ``d1`` (start date) to the API
-        to fetch only observations since the last successful sync.  ``d1`` is
-        a date (not datetime); using ``.date()`` is intentionally conservative
-        to avoid gaps at day boundaries.
+        When the window is incremental, passes ``updated_since`` to the API to
+        fetch only observations changed since the cursor.
         """
-        # Determine the cursor for incremental sync.
-        since: datetime | None = None
-        if self._job_store is not None:
-            since = await self._job_store.get_last_synced(self._job_store_key)
+        window = await self.resolve_window()
 
         params: dict[str, object] = {
             "user_login": self._username,
@@ -96,10 +90,8 @@ class INaturalistGateway(BaseGateway):
             "per_page": 200,
         }
 
-        if since is not None:
-            # d1 is a date, not datetime; using .date() is intentionally conservative
-            # to include observations from the same day as the last sync.
-            params["d1"] = since.date().isoformat()  # YYYY-MM-DD
+        if window.changed_since is not None:
+            params["updated_since"] = window.changed_since.isoformat()
 
         page = 1
 

@@ -1,13 +1,19 @@
 """
-Lightweight SQLite job store for gateway sync runs.
+SQLite store for what a gateway remembers between runs.
 
 Uses stdlib ``sqlite3`` via ``asyncio.to_thread`` — no extra dependencies.
-The database is a single file (default: ``gateway_jobs.db`` in the current
-working directory) containing one table: ``gateway_sync_jobs``.
+Three tables: ``gateway_sync_jobs`` (run history), ``gateway_cursors`` (the
+sync cursor) and ``gateway_retry`` (documents the next run should try again).
 
-This is intentionally separate from the CMS document store.  Sync job records
-are operational infrastructure — not content — and do not belong in the block
-registry or the editor UI.
+In a deployment the file is the CMS's own database (``GatewayAdmin`` defaults
+to it): that is the one file that is persistent and backed up, so the cursor
+survives restarts and exists exactly once. The tables sit beside the CMS's and
+never appear in the block registry or the editor UI. Only the CMS process opens
+the file; workers elsewhere go through the gateway API
+(:class:`~starlette_cms_gateways.state.RemoteSyncState`).
+
+Every connection sets WAL and a busy timeout, so a write here and a write by
+the CMS wait for each other instead of failing with "database is locked".
 """
 
 from __future__ import annotations
@@ -15,9 +21,15 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from starlette_cms_gateways.state import RetryEntry
+
+BUSY_TIMEOUT_MS = 10_000
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS gateway_sync_jobs (
@@ -30,9 +42,14 @@ CREATE TABLE IF NOT EXISTS gateway_sync_jobs (
     updated      INTEGER DEFAULT 0,
     skipped      INTEGER DEFAULT 0,
     errors       TEXT DEFAULT '[]',
-    error        TEXT DEFAULT ''
+    error        TEXT DEFAULT '',
+    deferred     TEXT DEFAULT '[]',
+    range        TEXT DEFAULT ''
 )
 """
+
+# Columns added after the first release; added to a file that predates them.
+_JOB_COLUMNS = {"deferred": "TEXT DEFAULT '[]'", "range": "TEXT DEFAULT ''"}
 
 _CREATE_CURSORS = """
 CREATE TABLE IF NOT EXISTS gateway_cursors (
@@ -43,9 +60,23 @@ CREATE TABLE IF NOT EXISTS gateway_cursors (
 """
 
 
+_CREATE_RETRY = """
+CREATE TABLE IF NOT EXISTS gateway_retry (
+    gateway_name TEXT NOT NULL,
+    import_ref   TEXT NOT NULL,
+    reason       TEXT NOT NULL,
+    detail       TEXT NOT NULL DEFAULT '',
+    since        TEXT NOT NULL,
+    PRIMARY KEY (gateway_name, import_ref)
+)
+"""
+
+
 class JobStore:
     """
-    Async wrapper around a SQLite database for sync job records.
+    Async wrapper around a SQLite database for sync state: job records, the
+    sync cursor and the retry list. Implements
+    :class:`~starlette_cms_gateways.state.SyncState`.
 
     :param path: Path to the SQLite database file.  Created on first use.
     """
@@ -58,16 +89,37 @@ class JobStore:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, check_same_thread=False)
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """A short-lived connection: committed and *closed* on exit.
+
+        (``with sqlite3.connect()`` alone commits but leaves the connection open.)
+        """
+        conn = sqlite3.connect(self.path, timeout=BUSY_TIMEOUT_MS / 1000, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")  # persistent; the CMS sets it too
+            except sqlite3.OperationalError:
+                pass  # in-memory or read-only: carry on
+            yield conn
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _ensure_table(self) -> None:
         with self._connect() as conn:
             conn.execute(_CREATE_TABLE)
             conn.execute(_CREATE_CURSORS)
-            conn.commit()
+            conn.execute(_CREATE_RETRY)
+            have = {r["name"] for r in conn.execute("PRAGMA table_info(gateway_sync_jobs)")}
+            for column, ddl in _JOB_COLUMNS.items():
+                if column not in have:
+                    conn.execute(f"ALTER TABLE gateway_sync_jobs ADD COLUMN {column} {ddl}")
 
     async def init(self) -> None:
         """Create the table if it doesn't exist yet. Safe to call multiple times."""
@@ -89,7 +141,6 @@ class JobStore:
                 """,
                 (run_id, gateway_name, datetime.now(UTC).isoformat()),
             )
-            conn.commit()
 
     async def create(self, run_id: str, gateway_name: str) -> None:
         """Insert a new job record with status='running'."""
@@ -106,6 +157,8 @@ class JobStore:
         skipped: int = 0,
         errors: list | None = None,
         error: str = "",
+        deferred: list | None = None,
+        range: dict | None = None,  # noqa: A002
     ) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -117,7 +170,9 @@ class JobStore:
                     updated     = ?,
                     skipped     = ?,
                     errors      = ?,
-                    error       = ?
+                    error       = ?,
+                    deferred    = ?,
+                    range       = ?
                 WHERE run_id = ?
                 """,
                 (
@@ -128,10 +183,11 @@ class JobStore:
                     skipped,
                     json.dumps(errors or []),
                     error,
+                    json.dumps(deferred or []),
+                    json.dumps(range) if range else "",
                     run_id,
                 ),
             )
-            conn.commit()
 
     async def finish(
         self,
@@ -143,8 +199,11 @@ class JobStore:
         skipped: int = 0,
         errors: list | None = None,
         error: str = "",
+        deferred: list | None = None,
+        range: dict | None = None,  # noqa: A002
     ) -> None:
         """Update a job record with its final status and result counts."""
+        await self.init()
         await asyncio.to_thread(
             self._finish,
             run_id,
@@ -154,6 +213,8 @@ class JobStore:
             skipped=skipped,
             errors=errors,
             error=error,
+            deferred=deferred,
+            range=range,
         )
 
     # ------------------------------------------------------------------
@@ -245,12 +306,47 @@ class JobStore:
                 """,
                 (key, cursor.isoformat(), datetime.now(UTC).isoformat()),
             )
-            conn.commit()
 
     async def set_cursor(self, key: str, cursor: datetime) -> None:
         """Store *cursor* as the point up to which *key* has been synced."""
         await self.init()
         await asyncio.to_thread(self._set_cursor_sync, key, cursor)
+
+    # ------------------------------------------------------------------
+    # Retry list
+    #
+    # Documents a run could not finish (a person's draft in the way, a failed
+    # write). They sit here instead of holding the cursor back; the next run
+    # asks the gateway to re-fetch them. Replaced wholesale after each run.
+    # ------------------------------------------------------------------
+
+    def _get_retry_sync(self, key: str) -> list[RetryEntry]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT import_ref, reason, detail, since FROM gateway_retry "
+                "WHERE gateway_name = ? ORDER BY since, import_ref",
+                (key,),
+            ).fetchall()
+        return [RetryEntry.from_dict(dict(r)) for r in rows]
+
+    async def get_retry(self, key: str) -> list[RetryEntry]:
+        """Return the retry list for *key* (oldest first)."""
+        await self.init()
+        return await asyncio.to_thread(self._get_retry_sync, key)
+
+    def _set_retry_sync(self, key: str, entries: list[RetryEntry]) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM gateway_retry WHERE gateway_name = ?", (key,))
+            conn.executemany(
+                "INSERT INTO gateway_retry (gateway_name, import_ref, reason, detail, since) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [(key, e.import_ref, e.reason, e.detail, e.since) for e in entries],
+            )
+
+    async def set_retry(self, key: str, entries: list[RetryEntry]) -> None:
+        """Replace the retry list for *key* with *entries*."""
+        await self.init()
+        await asyncio.to_thread(self._set_retry_sync, key, entries)
 
 
 # ------------------------------------------------------------------
@@ -266,13 +362,25 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         d["errors"] = json.loads(errors_raw)
     except (json.JSONDecodeError, TypeError):
         d["errors"] = []
+    deferred_raw = d.pop("deferred", None) or "[]"
+    try:
+        deferred = json.loads(deferred_raw)
+    except (json.JSONDecodeError, TypeError):
+        deferred = []
+    range_raw = d.pop("range", None) or ""
+    try:
+        range_ = json.loads(range_raw) if range_raw else None
+    except (json.JSONDecodeError, TypeError):
+        range_ = None
     # Build a nested result dict when the job is finished
     if d.get("status") in ("done", "error"):
         d["result"] = {
             "created": d.pop("created", 0),
             "updated": d.pop("updated", 0),
             "skipped": d.pop("skipped", 0),
+            "deferred": deferred,
             "errors": d.pop("errors", []),
+            "range": range_,
         }
     else:
         d.pop("created", None)

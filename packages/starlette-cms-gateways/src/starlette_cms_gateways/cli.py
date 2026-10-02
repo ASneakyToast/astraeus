@@ -122,6 +122,22 @@ def _require_cms_url(cms_url: str) -> str:
     return cms_url.rstrip("/")
 
 
+async def run_sync_via_cms(
+    gateway_cls: Any, gateway_name: str, client: Any, sync_range: Any
+) -> Any:
+    """
+    Run one gateway as an outside worker: its cursor, retry list and job history
+    are read and written through the CMS gateway API, so they are the same ones
+    the admin page and the MCP tools see.
+    """
+    from starlette_cms_gateways.runner import run_recorded
+    from starlette_cms_gateways.state import RemoteSyncState
+
+    state = RemoteSyncState(client)
+    gateway = gateway_cls(cms_client=client, job_store=state, job_store_key=gateway_name)
+    return await run_recorded(gateway, state, gateway_name, sync_range)
+
+
 # ---------------------------------------------------------------------------
 # Root group
 # ---------------------------------------------------------------------------
@@ -190,12 +206,6 @@ def list_gateways() -> None:
 )
 @click.option("--from", "range_from", default=None, help="Custom range start, YYYY-MM-DD.")
 @click.option("--to", "range_to", default=None, help="Custom range end, YYYY-MM-DD.")
-@click.option(
-    "--jobs-db",
-    envvar="GATEWAY_JOBS_DB",
-    default=None,
-    help="SQLite file holding the sync cursor. Without one, since_last_sync syncs all time.",
-)
 def sync(
     gateway_name: str,
     cms_url: str,
@@ -203,13 +213,14 @@ def sync(
     range_mode: str | None,
     range_from: str | None,
     range_to: str | None,
-    jobs_db: str | None,
 ) -> None:
     """
     Run a sync for the named gateway.
 
     GATEWAY_NAME must be a registered entry point under
-    starlette_cms_gateways.gateways.
+    starlette_cms_gateways.gateways. The sync cursor, the retry list and the job
+    history are kept by the CMS itself (through its gateway API), so this run,
+    the admin page and an MCP tool all see the same ones.
     """
     cms_url = _require_cms_url(cms_url)
 
@@ -236,16 +247,11 @@ def sync(
 
     async def _run() -> None:
         from starlette_cms_gateways.client import CMSClient, CMSError
-        from starlette_cms_gateways.jobstore import JobStore
 
         client = CMSClient(base_url=cms_url, api_key=api_key)
         try:
-            job_store = JobStore(jobs_db) if jobs_db else None
-            gateway = gateway_cls(
-                cms_client=client, job_store=job_store, job_store_key=gateway_name
-            )
             click.echo(f"Syncing {click.style(gateway_name, fg='cyan')} ({sync_range.mode})…")
-            result = await gateway.sync(sync_range)
+            result = await run_sync_via_cms(gateway_cls, gateway_name, client, sync_range)
         except CMSError as exc:
             raise click.ClickException(str(exc)) from exc
         finally:
@@ -269,8 +275,16 @@ def sync(
                 fg=status_fg,
             )
         )
+        if result.deferred:
+            click.echo("Deferred (a person has a draft on these; retried next run):")
+            for ref in result.deferred:
+                click.echo(f"  {ref}")
+        if result.recovered:
+            click.echo(f"Recovered from the retry list: {len(result.recovered)}")
+        if result.dropped:
+            click.echo(f"Dropped from the retry list (gone at the source): {len(result.dropped)}")
         if result.errors:
-            click.echo("Errors:")
+            click.echo("Errors (retried next run):")
             for ref, msg in result.errors:
                 click.echo(f"  {ref}: {msg}")
 
