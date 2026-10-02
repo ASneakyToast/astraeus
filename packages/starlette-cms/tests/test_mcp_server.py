@@ -144,7 +144,9 @@ async def test_list_documents_no_filters():
     with patch("httpx.AsyncClient.get", mock_get):
         result = await _call_tool(mcp, "list_documents")
 
-    assert result == payload
+    assert result["documents"] == []
+    assert result["total"] == 0
+    assert result["filters_applied"] == {}
     call_kwargs = mock_get.call_args
     assert "/api/documents" in str(call_kwargs)
 
@@ -152,13 +154,17 @@ async def test_list_documents_no_filters():
 @pytest.mark.anyio
 async def test_list_documents_with_type_filter():
     mcp = _build_server()
-    payload = {"documents": [{"id": "abc"}], "total": 1, "filters_applied": {}}
+    payload = {
+        "documents": [{"id": "abc", "doc_type": "blog_post", "body": {}}],
+        "total": 1,
+        "filters_applied": {},
+    }
     mock_get = AsyncMock(return_value=_mock_response(200, payload))
 
     with patch("httpx.AsyncClient.get", mock_get):
         result = await _call_tool(mcp, "list_documents", doc_type="blog_post", limit=10)
 
-    assert result == payload
+    assert result["documents"][0]["id"] == "abc"
     # Check the correct query params were sent
     call_args = mock_get.call_args
     params = call_args.kwargs.get("params") or call_args.args[1] if len(call_args.args) > 1 else {}
@@ -454,3 +460,229 @@ async def test_all_tools_registered():
         "unpublish_document",
     }
     assert expected <= tool_names, f"Missing tools: {expected - tool_names}"
+
+
+# ---------------------------------------------------------------------------
+# list_documents: summaries, pagination, size caps
+# ---------------------------------------------------------------------------
+
+HUGE_BODY = {"title": "A post", "excerpt": "Short teaser", "content": "x" * 50_000}
+
+
+def _full_doc(doc_id: str, published: bool = True) -> dict[str, Any]:
+    return {
+        "id": doc_id,
+        "doc_type": "blog_post",
+        "slug": f"post-{doc_id}",
+        "published": published,
+        "has_draft": False,
+        "created_at": "2026-01-01T00:00:00",
+        "updated_at": "2026-01-02T00:00:00",
+        "published_at": None,
+        "body": dict(HUGE_BODY),
+    }
+
+
+async def _list(mcp, docs: list[dict[str, Any]], total: int, **kwargs) -> dict[str, Any]:
+    payload = {"documents": docs, "total": total, "filters_applied": {}}
+    mock_get = AsyncMock(return_value=_mock_response(200, payload))
+    with patch("httpx.AsyncClient.get", mock_get):
+        result = await _call_tool(mcp, "list_documents", **kwargs)
+    result["_params"] = mock_get.call_args.kwargs["params"]
+    return result
+
+
+@pytest.mark.anyio
+async def test_list_documents_returns_summaries_without_bodies():
+    mcp = _build_server()
+    result = await _list(mcp, [_full_doc("a"), _full_doc("b", published=False)], total=2)
+
+    first, second = result["documents"]
+    assert "body" not in first
+    assert first["title"] == "A post"
+    assert first["excerpt"] == "Short teaser"
+    assert first["status"] == "published"
+    assert second["status"] == "draft"
+    assert len(json.dumps(result)) < 2_000
+
+
+@pytest.mark.anyio
+async def test_list_documents_default_limit_is_small():
+    result = await _list(_build_server(), [], total=0)
+
+    assert result["limit"] == 10
+    assert result["_params"]["limit"] == 10
+
+
+@pytest.mark.anyio
+async def test_list_documents_pagination_metadata_with_more():
+    docs = [_full_doc(str(i)) for i in range(5)]
+    result = await _list(_build_server(), docs, total=12, limit=5, offset=5)
+
+    assert result["total"] == 12
+    assert result["limit"] == 5
+    assert result["offset"] == 5
+    assert result["returned"] == 5
+    assert result["has_more"] is True
+    assert result["next_offset"] == 10
+
+
+@pytest.mark.anyio
+async def test_list_documents_pagination_metadata_last_page():
+    docs = [_full_doc(str(i)) for i in range(2)]
+    result = await _list(_build_server(), docs, total=12, limit=5, offset=10)
+
+    assert result["has_more"] is False
+    assert result["next_offset"] is None
+
+
+@pytest.mark.anyio
+async def test_list_documents_empty_type_hints_at_list_block_types():
+    result = await _list(_build_server(), [], total=0, doc_type="blogpost")
+
+    assert "list_block_types" in result["hint"]
+
+
+@pytest.mark.anyio
+async def test_list_documents_include_body_restores_full_documents():
+    doc = {"id": "a", "doc_type": "blog_post", "body": {"content": "short"}}
+    result = await _list(_build_server(), [doc], total=1, include_body=True)
+
+    assert result["documents"] == [doc]
+    assert result["truncated"] is False
+
+
+@pytest.mark.anyio
+async def test_list_documents_include_body_oversized_single_document_falls_back():
+    result = await _list(_build_server(), [_full_doc("a")], total=1, include_body=True)
+
+    assert result["truncated"] is True
+    assert "body" not in result["documents"][0]
+    assert "get_document" in result["notice"]
+
+
+@pytest.mark.anyio
+async def test_list_documents_include_body_is_capped_with_notice():
+    from starlette_cms.mcp.server import MAX_RESPONSE_CHARS
+
+    small = {"id": "s", "doc_type": "blog_post", "body": {"content": "y" * 8_000}}
+    docs = [dict(small, id=str(i)) for i in range(10)]
+    result = await _list(_build_server(), docs, total=10, include_body=True)
+
+    assert result["truncated"] is True
+    assert result["returned"] < 10
+    assert result["has_more"] is True
+    assert result["next_offset"] == result["returned"]
+    assert "next_offset" in result["notice"]
+    assert len(json.dumps(result["documents"])) <= MAX_RESPONSE_CHARS
+
+
+# ---------------------------------------------------------------------------
+# get_document: size cap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_get_document_truncates_huge_body_with_notice():
+    mcp = _build_server()
+    doc = _full_doc("big")
+    with patch(
+        "httpx.AsyncClient.get",
+        new_callable=AsyncMock,
+        return_value=_mock_response(200, doc),
+    ):
+        result = await _call_tool(mcp, "get_document", doc_id="big", max_chars=5_000)
+
+    assert result["truncated"] is True
+    assert len(result["content"]) == 5_000
+    assert "max_chars" in result["notice"]
+
+
+@pytest.mark.anyio
+async def test_get_document_not_found_has_hint():
+    with patch(
+        "httpx.AsyncClient.get",
+        new_callable=AsyncMock,
+        return_value=_mock_response(404, {"error": "not found"}),
+    ):
+        result = await _call_tool(_build_server(), "get_document", doc_id="nope")
+
+    assert "list_documents" in result["hint"]
+
+
+# ---------------------------------------------------------------------------
+# Argument validation through the real FastMCP call path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_unknown_parameter_is_rejected_with_suggestion():
+    """The incident: document_type was silently dropped and every document returned."""
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    mcp = _build_server()
+    mock_get = AsyncMock()
+
+    with patch("httpx.AsyncClient.get", mock_get):
+        with pytest.raises(ToolError) as exc_info:
+            await mcp.call_tool("list_documents", {"document_type": "blog_post"})
+
+    message = str(exc_info.value)
+    assert "Unknown parameter `document_type`" in message
+    assert "Did you mean `doc_type`?" in message
+    assert "`limit`" in message
+    mock_get.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_known_parameters_still_work_through_call_tool():
+    mcp = _build_server()
+    payload = {"documents": [], "total": 0, "filters_applied": {}}
+    mock_get = AsyncMock(return_value=_mock_response(200, payload))
+
+    with patch("httpx.AsyncClient.get", mock_get):
+        await mcp.call_tool("list_documents", {"doc_type": "blog_post", "limit": 5})
+
+    assert mock_get.call_args.kwargs["params"]["type"] == "blog_post"
+
+
+@pytest.mark.anyio
+async def test_limit_above_maximum_is_rejected():
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    mcp = _build_server()
+
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("list_documents", {"limit": 500})
+
+    assert "50" in str(exc_info.value)
+
+
+@pytest.mark.anyio
+async def test_every_tool_rejects_unknown_parameters():
+    mcp = _build_server()
+
+    for tool in await mcp.list_tools():
+        assert tool.inputSchema["additionalProperties"] is False, tool.name
+
+
+@pytest.mark.anyio
+async def test_tool_annotations_distinguish_read_write_destructive():
+    mcp = _build_server()
+    tools = {t.name: t.annotations for t in await mcp.list_tools()}
+
+    assert tools["list_documents"].readOnlyHint is True
+    assert tools["get_document"].readOnlyHint is True
+    assert tools["create_document"].readOnlyHint is False
+    assert tools["delete_document"].destructiveHint is True
+    assert tools["publish_document"].destructiveHint is False
+    assert tools["publish_document"].openWorldHint is True
+
+
+@pytest.mark.anyio
+async def test_publish_description_mentions_rebuild():
+    mcp = _build_server()
+    tools = {t.name: t.description for t in await mcp.list_tools()}
+
+    assert "rebuild" in tools["publish_document"]
+    assert "DRAFT" in tools["create_document"]
