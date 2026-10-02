@@ -207,3 +207,29 @@ as a `GatewaySyncState` CMS singleton. Three amendments followed:
    `job_store` / `job_store_key` params to `BaseGateway.__init__`. `GatewayAdmin` now wires these
    automatically when constructing gateways. Admin UI shows "Last synced" per gateway card, updating live
    after a sync completes. Examples updated to demonstrate the incremental sync pattern.
+
+5. **Sync ownership, ranges and cursor (2026-10-02):** Driven by joellithgow.com, where every gateway run
+   parked a draft revision on already-published documents and nothing published the update.
+   - *Field ownership.* A gateway declares `owned_fields`. `GatewayItem.content_hash()` covers only those, and
+     an update PATCHes only those, so everything else in the body (a title, commentary, tags a person edited)
+     is written at creation and never touched again. `None` keeps the old whole-body behaviour.
+   - *Writes that find nothing new write nothing.* Identical hash → no PATCH, no draft, no `updated_at` change.
+   - *Updates publish.* On an `auto_publish` gateway the run's changeset is published once at the end, so an
+     update goes live the way a create does, and no open changeset is left behind. A document with a pending
+     human draft, or one a human unpublished, is **deferred**: left alone, reported in `SyncResult.deferred`,
+     retried next run. Merging into a person's draft and then publishing would push their work-in-progress
+     live. No `starlette-cms` change was needed.
+   - *Ranges.* `sync(range)` takes a `SyncRange`: `since_last_sync`, `all_time`, or `custom` (content-date
+     `start`/`end`). A gateway sets its default with `default_range`. The admin API, CLI (`--range/--from/--to`)
+     and consumers' MCP tools pass it through.
+   - *Cursor — this narrows the "does NOT inject `since`" rule above rather than reversing it.* The framework
+     still passes no datetime into `fetch()`. `self.range` is the request, which is shape-agnostic; a gateway
+     that wants a datetime cursor calls `resolve_window()` and gets a `SyncWindow` (`changed_since`, or
+     `start`/`end`). Only a gateway that called it has its cursor advanced, so existing gateways are unaffected.
+     The cursor lives in `JobStore` (new `gateway_cursors` table, `get_cursor`/`set_cursor`), is the run's
+     *start* time, and is written only after a clean run: no exception, no item errors, nothing deferred, and
+     never after a `custom` backfill. `get_last_synced()` is the wrong source for it (`finished_at`, and a job
+     is `done` even when items failed). Because syncs are idempotent a lost cursor is harmless: the next run
+     covers everything.
+   - *Deletions.* An incremental run cannot see an item that disappeared at the source. The framework never
+     deletes a document; only a gateway's `all_time` run can notice, and it is for the gateway to flag it.

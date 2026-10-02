@@ -34,7 +34,13 @@ from __future__ import annotations
 
 import logging as _logging
 
-from starlette_cms_gateways.base import BaseGateway, GatewayItem, SyncResult
+from starlette_cms_gateways.base import (
+    BaseGateway,
+    GatewayItem,
+    SyncRange,
+    SyncResult,
+    SyncWindow,
+)
 
 # Library contract: install NullHandler so the host app controls log routing.
 # See ADR 017.
@@ -46,7 +52,9 @@ __all__ = [
     "BaseGateway",
     "GatewayItem",
     "JobStore",
+    "SyncRange",
     "SyncResult",
+    "SyncWindow",
     "GatewayAdmin",
 ]
 

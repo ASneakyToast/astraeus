@@ -235,6 +235,59 @@ async def test_trigger_sync_unknown_gateway(mock_disc, admin_app):
     assert resp.status_code == 404
 
 
+@patch(
+    "starlette_cms_gateways.admin.api.discover_gateways",
+    return_value=_FAKE_ENTRY_POINTS,
+)
+async def test_trigger_sync_passes_the_requested_range(mock_disc, admin_app):
+    """A JSON body picks the range for this run, overriding the gateway default."""
+    import asyncio
+
+    global _ADMIN_FAKE_DB
+    _ADMIN_FAKE_DB = [{"id": "R1", "name": "Ranged"}]
+    seen: list = []
+
+    original_sync = AdminTestGateway.sync
+
+    async def capturing_sync(self, range=None):  # noqa: A002
+        seen.append(range)
+        return await original_sync(self, range)
+
+    with patch.object(AdminTestGateway, "sync", capturing_sync):
+        resp = await admin_app["client"].post(
+            "/cms/api/gateways/admin-test/sync",
+            headers=_auth_headers(),
+            json={"range": "custom", "from": "2026-01-01", "to": "2026-01-31"},
+        )
+        assert resp.status_code == 202
+        for _ in range(20):
+            await asyncio.sleep(0.25)
+            if seen:
+                break
+
+    assert seen and seen[0].mode == "custom"
+    assert (seen[0].start.isoformat(), seen[0].end.isoformat()) == ("2026-01-01", "2026-01-31")
+
+
+@patch(
+    "starlette_cms_gateways.admin.api.discover_gateways",
+    return_value=_FAKE_ENTRY_POINTS,
+)
+async def test_trigger_sync_rejects_a_bad_range(mock_disc, admin_app):
+    for payload in (
+        {"range": "sometimes"},
+        {"range": "custom"},  # needs dates
+        {"range": "all_time", "from": "2026-01-01"},  # dates need custom
+        {"range": "custom", "from": "not-a-date"},
+    ):
+        resp = await admin_app["client"].post(
+            "/cms/api/gateways/admin-test/sync",
+            headers=_auth_headers(),
+            json=payload,
+        )
+        assert resp.status_code == 422, payload
+
+
 # ---------------------------------------------------------------------------
 # GET /cms/api/gateways/{name}/sync/{run_id} — poll
 # ---------------------------------------------------------------------------
