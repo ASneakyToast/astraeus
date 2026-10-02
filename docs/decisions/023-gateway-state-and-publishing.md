@@ -41,35 +41,37 @@ defaulting to `False`, and **no `since` injected into `fetch()`**.
 
 ### 1. Sync state lives in the CMS's own database, behind the gateway API
 
-Three things outlive a run: the **cursor**, the **retry list** and the **job history**. They are tables
-(`gateway_cursors`, `gateway_retry`, `gateway_sync_jobs`) in the CMS's database file, the one file that is
+Two things outlive a run: the **cursor** and the **job history**. They are tables
+(`gateway_cursors`, `gateway_sync_jobs`) in the CMS's database file, the one file that is
 persistent and replicated (Litestream replicates the whole file, so new tables ride along). `GatewayAdmin`
 defaults its `JobStore` to that file when the CMS is on SQLite, and warns when it is not.
 
 Only the CMS process opens the file. A worker that is not the CMS (the `gateways` CLI, an MCP sidecar in
 another pod) reads and writes the state through the CMS gateway API: `GET/PUT /api/gateways/{name}/cursor`,
-`GET/PUT .../retry`, `POST .../runs` and `PATCH .../runs/{run_id}`, authenticated like the other writes.
+`POST .../runs` and `PATCH .../runs/{run_id}`, authenticated like the other writes.
 `RemoteSyncState` is the client; `JobStore` and `RemoteSyncState` both satisfy the `SyncState` protocol that
 `BaseGateway` takes. So there is **one cursor however a run starts**, it survives a restart, and every entry
 point records its run (`run_recorded`), which makes "last synced" true.
 
 Every connection sets WAL and a busy timeout, so the state's writes and the CMS's wait for each other.
 
-### 2. The cursor never freezes; what a run could not finish goes on a retry list
+### 2. The cursor never freezes; what a run could not finish is reported, not remembered
 
-After any run that did not raise, the cursor is set to **the run's start time**. A run that raises changes
-neither the cursor nor the retry list. A `custom` backfill never moves it. A gateway that does not call
-`resolve_window()` (a page-token gateway) has no cursor, as before.
+After any run that did not raise, the cursor is set to **the run's start time**, whatever the run deferred
+(a person's draft or unpublish is in the way) or failed on. A run that raises changes nothing. A `custom`
+backfill never moves it. A gateway that does not call `resolve_window()` has no cursor, as before.
 
-An item a run could not finish goes on the gateway's **retry list** instead of holding the cursor back:
-*deferred* (a person's draft or unpublish is in the way) or *error* (the write failed). An optional hook,
-`BaseGateway.refetch(import_refs)`, rebuilds items for specific refs; the framework calls it at the start of
-the next run, whatever its range. A gateway refetches the smallest unit that can rebuild an item (an
-iNaturalist outing's day, a Spotify month). A ref the hook yields nothing for is dropped (the source no
-longer has it). A gateway without the hook only *reports* its list; entries clear when a later run happens to
-process them. A retry-list entry keeps the time it first went on the list.
+Deferred and failed items are listed in the run's result (and in the MCP reply and CLI output), and that is all.
+There is no retry list and no re-fetch hook: an incremental run meets such a document again only if its source
+changes, and an `all_time` (or `custom`) run catches it up. That is the same rerun/backfill a person already
+does to repair or extend content, so it is not given machinery of its own.
 
-A fixed lookback window was considered and rejected: syncs here are manual and irregular.
+Rejected: a persisted per-gateway retry list with an optional `refetch(import_refs)` hook (built, then removed
+before merge as more than the problem needed); a fixed lookback window (syncs here are manual and irregular);
+freezing the cursor on the first deferred item (one stuck post makes every run re-read everything).
+
+`JobStore.get_last_synced()` stays, for the admin page's "Last synced" label only. It is when a run
+*finished* and a run is `done` even when items failed, so it is never a cursor.
 
 ### 3. Ownership, and whose draft it is
 
@@ -80,7 +82,7 @@ New: **drafts are checked before the hash**, and a draft is classified by what i
 (`starlette_cms_gateways.drafts.draft_verdict`). A draft that differs from the live body only in owned fields
 is the gateway's own leftover (a `PATCH` whose publish failed, or a revision awaiting review): the gateway
 re-PATCHes it and publishes (a review gateway only re-PATCHes). A draft that touches anything else, a staged
-unpublish, or a document a person unpublished, is a person's: deferred if the source changed, skipped if not
+unpublish, or a document a person unpublished, is a person's: left alone and reported as deferred if the source changed, skipped if not
 (there is nothing to write and nothing to wait for). A gateway that declares no `owned_fields` cannot tell
 whose draft it is and defers on any. This is what lets a review gateway (`auto_publish = False`) take a
 second and third update to a never-published draft, and what finishes a document whose publish failed.
@@ -111,15 +113,15 @@ introduced with the first rework. Deletions are never made by a sync.
 
 **Positive**
 - One cursor, durable, and the same for the admin page, the CLI and MCP tools.
-- A stuck document no longer slows every run; it is listed, retried, and cleared when a person acts.
-- A failed publish or a failed write costs one document one run.
+- A stuck document no longer slows every run; it is listed in the result, and caught up by the next `all_time`.
+- A failed publish or a failed write strands one document, which the next run to meet it finishes.
 
 **Negative / trade-offs**
 - Workers need the CMS API to run at all (no offline CLI run), and CMS and sidecar must be on compatible
   versions (they ship in one image in joellithgow).
 - The default state file assumes the CMS is on SQLite. Elsewhere the integrator must pass `jobs_db_path`.
 - `X-Skip-Changeset` is now part of the CMS's public write API.
-- A retry-list entry for a gateway with no `refetch` hook is only cleared by a run that covers the item.
+- An item left alone or failed in one run is not retried by later incremental runs unless its source changes; someone has to run `all_time`.
 
 **Testing.** Anything touching draft, publish, changeset or state semantics is tested against the real
 in-process CMS over `ASGITransport` (`test_sync_state.py`, `test_sync_ownership.py`), not against mocked HTTP.

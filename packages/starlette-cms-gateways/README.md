@@ -83,13 +83,16 @@ The framework handles everything except the external API call:
   skip based on a content hash stored in `meta`.
 - **Idempotent syncs** — running `sync` twice on the same data is safe; unchanged items are skipped
   (content hash comparison), so re-syncing is cheap and has no side effects.
-- **Cursor, retry list and job history live in the CMS** — in its own database, so they persist and are
+- **The cursor and job history live in the CMS** — in its own database, so they persist and are
   backed up with the content. A worker outside the CMS process (the CLI, an MCP sidecar) reads and writes
   them through the gateway API, so there is one cursor however a run starts. The framework still does not
   inject a `since` into `fetch()`: a gateway that wants a datetime cursor calls `await
-  self.resolve_window()`. After any run that did not raise, the cursor moves to the run's start; items a run
-  deferred (a person's draft is in the way) or failed on go on a retry list instead of holding it back, and
-  an optional `refetch(import_refs)` hook lets the next run rebuild them. See ADR 023.
+  self.resolve_window()` (see the iNaturalist example); one that doesn't need a cursor just fetches
+  everything and lets the content-hash skip keep re-runs free (see the Spotify example). After any run that
+  did not raise, the cursor moves to the run's start. Documents a run left alone (a person's draft is in the
+  way) or failed on are *reported* in the result, not remembered: an incremental run meets them again only if
+  the source changes, so catch them up with an `all_time` or `custom` run. `get_last_synced()` is for the
+  admin page's "Last synced" label only, never a cursor. See ADR 023.
 - **Each document is published as soon as it is written** (`auto_publish = True`), so one failure strands
   one document, not a run, and no changeset is left open.
 

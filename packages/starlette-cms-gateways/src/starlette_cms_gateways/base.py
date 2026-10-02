@@ -36,7 +36,7 @@ from __future__ import annotations
 import hashlib
 import json
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
@@ -44,8 +44,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 import structlog
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
-
-from starlette_cms_gateways.state import RetryEntry
 
 if TYPE_CHECKING:
     from starlette_cms_gateways.client import CMSClient
@@ -201,15 +199,13 @@ class SyncResult:
     :param updated: Number of existing documents updated.
     :param skipped: Number of documents skipped (identical content).
     :param deferred: ``import_ref`` of documents the run left alone because a
-        person holds a draft on them (or unpublished them). They go on the retry
-        list; the cursor does not wait for them.
+        person holds a draft on them (or unpublished them). Nothing remembers them:
+        a later incremental run only meets them again if the source changes. To
+        catch them up, run ``all_time`` (or a ``custom`` range) once the person has
+        published or discarded their draft.
     :param window: The :class:`SyncWindow` the run actually covered.
-    :param errors: List of ``(import_ref, error_message)`` pairs. These go on the
-        retry list too.
-    :param retry: What the retry list holds after this run.
-    :param recovered: Refs that were on the retry list and finished this run.
-    :param dropped: Refs that were on the retry list, whose gateway re-fetched
-        them and found nothing at the source any more.
+    :param errors: List of ``(import_ref, error_message)`` pairs. Same as
+        *deferred*: reported, not remembered.
     :param cursor: The cursor the run stored, or ``None`` if it stored none
         (no state wired, a ``custom`` run, or a gateway that never resolved a window).
     :param changeset_id: The review-batch changeset of a gateway that does not
@@ -224,9 +220,6 @@ class SyncResult:
     deferred: list[str] = field(default_factory=list)
     window: SyncWindow | None = None
     errors: list[tuple[str, str]] = field(default_factory=list)
-    retry: list[RetryEntry] = field(default_factory=list)
-    recovered: list[str] = field(default_factory=list)
-    dropped: list[str] = field(default_factory=list)
     cursor: datetime | None = None
     changeset_id: str | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -253,9 +246,6 @@ class SyncResult:
             "deferred": self.deferred,
             "window": self.window.to_dict() if self.window else None,
             "errors": self.errors,
-            "retry": [e.to_dict() for e in self.retry],
-            "recovered": self.recovered,
-            "dropped": self.dropped,
             "cursor": self.cursor.isoformat() if self.cursor else None,
             "changeset_id": self.changeset_id,
             "total": self.total,
@@ -340,7 +330,7 @@ class BaseGateway(ABC):
         job_store_key: str | None = None,
     ) -> None:
         self._client = cms_client
-        # Cursor, retry list and job history. A JobStore inside the CMS process, a
+        # Cursor and job history. A JobStore inside the CMS process, a
         # RemoteSyncState (over the CMS gateway API) anywhere else. None: a run
         # remembers nothing.
         self._job_store = job_store
@@ -372,29 +362,6 @@ class BaseGateway(ABC):
         after a clean run. A gateway that never calls it is unaffected.
         """
         ...
-
-    async def refetch(self, import_refs: Sequence[str]) -> AsyncIterator[GatewayItem]:
-        """
-        Optional hook: yield the current item for each of *import_refs*.
-
-        The framework calls it at the start of a run with the refs on the retry
-        list (documents an earlier run deferred or failed on), so they are tried
-        again whatever the run's range. Refetch the smallest unit that can
-        rebuild an item: an iNaturalist outing's day, a Spotify month. It may
-        yield items for other refs too (the rest of that day); the upsert makes
-        them no-ops. A ref it yields nothing for is dropped from the list: the
-        source no longer has it.
-
-        A gateway that does not override this only *reports* its retry list; its
-        entries clear when a later run happens to process them.
-        """
-        return
-        yield  # pragma: no cover - makes this an async generator
-
-    @property
-    def can_refetch(self) -> bool:
-        """True when the gateway overrides :meth:`refetch`."""
-        return type(self).refetch is not BaseGateway.refetch
 
     # -----------------------------------------------------------------------
     # Framework-provided sync loop
@@ -434,30 +401,17 @@ class BaseGateway(ABC):
         """
         return result.started_at
 
-    async def _items(self, retry_refs: list[str]) -> AsyncIterator[GatewayItem]:
-        """Retried documents first, then the run's own fetch. Each ref once."""
-        seen: set[str] = set()
-        if retry_refs and self.can_refetch:
-            async for item in self.refetch(retry_refs):
-                if item.import_ref not in seen:
-                    seen.add(item.import_ref)
-                    yield item
-        async for item in self.fetch():
-            if item.import_ref not in seen:
-                seen.add(item.import_ref)
-                yield item
-
     async def sync(self, range: SyncRange | None = None) -> SyncResult:  # noqa: A002
         """
         Run a sync cycle for this gateway.
 
         1. Record *range* (default :attr:`default_range`) as ``self.range``.
-        2. Load the retry list: documents earlier runs deferred or failed on.
-        3. Yield items: first :meth:`refetch` for the retry list (if the gateway
-           has the hook), then :meth:`fetch`. For each :class:`GatewayItem`:
+        2. Call :meth:`fetch` to get items from the external service.
+        3. For each :class:`GatewayItem` yielded:
 
            a. No document yet → create.
-           b. A person's draft is on it, or a person unpublished it → defer.
+           b. A person's draft is on it, or a person unpublished it → leave it
+              alone and report it in ``SyncResult.deferred``.
            c. A leftover draft of the gateway's own → finish it (re-PATCH, publish).
            d. Owned fields changed → update those fields only.
            e. Nothing changed → skip, writing nothing.
@@ -465,13 +419,15 @@ class BaseGateway(ABC):
            On an auto-publish gateway each document is published as soon as its
            write succeeds. A gateway that does not publish groups its writes in
            one review changeset.
-        4. Store the retry list: this run's deferred and failed refs, plus
-           retry-list refs the run never reached.
-        5. Advance the cursor to the run's *start* time. Always, once the run did
-           not raise — deferred and failed items are on the retry list, so they
-           no longer hold it back. Only for a gateway that called
+        4. Advance the cursor to the run's *start* time, once the run did not
+           raise: whatever was deferred or failed, so one stuck document never
+           makes every later run re-read everything. Only for a gateway that called
            :meth:`resolve_window`, and never for a ``custom`` backfill. A run that
-           raises changes neither the cursor nor the retry list.
+           raises leaves the cursor alone.
+
+        Deferred and failed items are reported, not remembered. An incremental
+        run meets them again only if the source changes; to catch them up run
+        ``all_time`` (or a ``custom`` range).
 
         :param range: Override the gateway's default range for this run.
         :returns: :class:`SyncResult` with create/update/skip counts.
@@ -480,9 +436,6 @@ class BaseGateway(ABC):
         self.range = range or SyncRange(self.default_range)
         self._window = None
         store = self._job_store
-        key = self._job_store_key
-
-        prior = {e.import_ref: e for e in (await store.get_retry(key) if store else [])}
 
         # A gateway that does not publish groups its writes in one review changeset,
         # created lazily on the first write so an all-skip run leaves none behind.
@@ -492,17 +445,16 @@ class BaseGateway(ABC):
                 result.changeset_id = await self._client.create_changeset(title)
             return result.changeset_id
 
-        now = datetime.now(UTC).isoformat()
-        entries: dict[str, RetryEntry] = {}
-        reached: set[str] = set()
-
+        seen: set[str] = set()
         with tracer.start_as_current_span("gateways.sync") as span:
             span.set_attribute("gateway_name", self.service_name)
             span.set_attribute("sync_range", self.range.mode)
             try:
-                async for item in self._items(list(prior)):
+                async for item in self.fetch():
                     ref = item.import_ref
-                    reached.add(ref)
+                    if ref in seen:
+                        continue
+                    seen.add(ref)
                     try:
                         publish = self.auto_publish if item.published is None else item.published
                         action = await self._client.upsert(
@@ -514,7 +466,6 @@ class BaseGateway(ABC):
                         )
                     except Exception as exc:  # noqa: BLE001
                         result.errors.append((ref, str(exc)))
-                        entries[ref] = _entry(prior, ref, "error", str(exc), now)
                         continue
                     if action == "created":
                         result.created += 1
@@ -522,46 +473,18 @@ class BaseGateway(ABC):
                         result.updated += 1
                     elif action == "deferred":
                         result.deferred.append(ref)
-                        entries[ref] = _entry(prior, ref, "deferred", "", now)
                     else:
                         result.skipped += 1
-                    if ref in prior and ref not in entries:
-                        result.recovered.append(ref)
-
-                # Retry-list refs this run never reached. With a refetch hook that
-                # means the source has nothing for them any more; without one they
-                # simply have not come round again, so they stay.
-                for ref, entry in prior.items():
-                    if ref in reached:
-                        continue
-                    if self.can_refetch:
-                        result.dropped.append(ref)
-                    else:
-                        entries[ref] = entry
 
                 result.finish()
                 result.window = self._window
-                result.retry = sorted(entries.values(), key=lambda e: (e.since, e.import_ref))
                 span.set_attribute("item_count", result.total)
 
-                if store is not None:
-                    await store.set_retry(key, result.retry)
-                    if self._window is not None and self._window.mode != "custom":
-                        result.cursor = self.next_cursor(result)
-                        await store.set_cursor(key, result.cursor)
+                if store is not None and self._window is not None and self._window.mode != "custom":
+                    result.cursor = self.next_cursor(result)
+                    await store.set_cursor(self._job_store_key, result.cursor)
             except Exception as exc:
                 span.set_status(StatusCode.ERROR, str(exc))
                 raise
 
         return result
-
-
-def _entry(
-    prior: dict[str, RetryEntry],
-    ref: str,
-    reason: Literal["deferred", "error"],
-    detail: str,
-    now: str,
-) -> RetryEntry:
-    """The retry entry for *ref*, keeping the time it first went on the list."""
-    return RetryEntry(ref, reason, detail, prior[ref].since if ref in prior else now)

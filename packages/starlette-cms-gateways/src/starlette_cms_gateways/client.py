@@ -264,7 +264,7 @@ class CMSClient:
         Call the CMS gateway API: ``{method} /api/gateways/{path}``.
 
         This is how a worker outside the CMS process reads and writes the sync
-        cursor, the retry list and the job history, which live in the CMS's
+        cursor and the job history, which live in the CMS's
         database. Returns the JSON body (``{}`` when there is none).
         """
         http = self._get_http()
