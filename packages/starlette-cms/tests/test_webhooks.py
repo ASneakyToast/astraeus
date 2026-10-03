@@ -212,7 +212,7 @@ async def test_delete_webhook_missing(wh_client):
 
 
 # ---------------------------------------------------------------------------
-# Auth: POST/DELETE require auth; GET respects read_auth=False
+# Auth: every webhook route requires auth, whatever read_auth says
 # ---------------------------------------------------------------------------
 
 
@@ -249,10 +249,41 @@ async def test_delete_webhook_blocked_without_auth(authed_wh_client):
     assert resp.status_code == 401
 
 
-async def test_get_webhooks_no_auth_required_by_default(authed_wh_client):
-    """GET /api/webhooks succeeds without auth when read_auth=False."""
+async def test_list_webhooks_blocked_without_auth_even_with_public_reads(authed_wh_client):
+    """GET /api/webhooks returns 401 without auth even when read_auth=False.
+
+    A webhook URL is a credential (a Netlify build hook is just a URL), so the
+    list must not be public the way document reads are, and must not leak it.
+    """
+    create_resp = await authed_wh_client.post(
+        "/api/webhooks",
+        headers={"Authorization": "Bearer wh-secret"},
+        json={"url": "https://example.com/hook-secret", "events": ["document.published"]},
+    )
+    assert create_resp.status_code == 201
+
     resp = await authed_wh_client.get("/api/webhooks")
+    assert resp.status_code == 401
+    assert "hook-secret" not in resp.text
+
+
+async def test_list_webhooks_blocked_with_wrong_key(authed_wh_client):
+    """GET /api/webhooks returns 401 for a bad Bearer token."""
+    resp = await authed_wh_client.get("/api/webhooks", headers={"Authorization": "Bearer nope"})
+    assert resp.status_code == 401
+
+
+async def test_list_webhooks_allowed_with_auth(authed_wh_client):
+    """GET /api/webhooks lists webhooks with a valid Bearer header."""
+    headers = {"Authorization": "Bearer wh-secret"}
+    await authed_wh_client.post(
+        "/api/webhooks",
+        headers=headers,
+        json={"url": "https://example.com/hook", "events": ["document.published"]},
+    )
+    resp = await authed_wh_client.get("/api/webhooks", headers=headers)
     assert resp.status_code == 200
+    assert [w["url"] for w in resp.json()["webhooks"]] == ["https://example.com/hook"]
 
 
 # ---------------------------------------------------------------------------

@@ -270,7 +270,11 @@ No auth required (always open).
 
 ```
 GET /api/webhooks
+Authorization: Bearer <api key>
 ```
+
+Requires auth even when `read_auth=False`: a webhook URL is a credential (a
+build-hook URL can be triggered by anyone who has it), so it is never public.
 
 **Response:**
 

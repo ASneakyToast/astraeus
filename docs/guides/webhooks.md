@@ -56,8 +56,12 @@ Singleton publishes include an additional field:
 ### List all webhooks
 
 ```bash
-curl http://localhost:8000/cms/api/webhooks
+curl http://localhost:8000/cms/api/webhooks \
+  -H "Authorization: Bearer secret"
 ```
+
+Listing needs the API key even when `read_auth=False`, because a webhook URL
+is a credential (a build-hook URL can be triggered by anyone who has it).
 
 ### Delete a webhook
 
