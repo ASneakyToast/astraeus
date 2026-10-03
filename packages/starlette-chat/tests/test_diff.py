@@ -56,13 +56,13 @@ class TestNodeSize:
 
 class TestBlockStartPositions:
     def test_empty(self) -> None:
-        assert _block_start_positions([]) == [1]
+        assert _block_start_positions([]) == [0]
 
     def test_two_paragraphs(self) -> None:
         blocks = [_para("ab"), _para("cd")]
         # para("ab") size = 2+2 = 4; para("cd") size = 4
         positions = _block_start_positions(blocks)
-        assert positions == [1, 5, 9]
+        assert positions == [0, 4, 8]
 
     def test_sentinel_is_past_last(self) -> None:
         blocks = [_para("x")]
@@ -90,10 +90,10 @@ class TestDiffDocs:
         assert len(steps) == 1
         step = steps[0]
         assert step["stepType"] == "replace"
-        # from should be 1 (start of first block)
-        assert step["from"] == 1
-        # to should be 1 + node_size(para("Original"))
-        expected_to = 1 + node_size(_para("Original"))
+        # from should be 0 (start of first block: doc content starts at 0)
+        assert step["from"] == 0
+        # to should be node_size(para("Original"))
+        expected_to = node_size(_para("Original"))
         assert step["to"] == expected_to
         assert step["slice"]["content"] == [_para("Changed")]
 
@@ -135,7 +135,7 @@ class TestDiffDocs:
         assert len(steps) == 1
         step = steps[0]
         # Single insert step
-        assert step["from"] == step["to"] == 1
+        assert step["from"] == step["to"] == 0
         assert len(step["slice"]["content"]) == 2
 
     def test_populated_current_empty_new(self) -> None:

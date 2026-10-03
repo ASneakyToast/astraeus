@@ -20,7 +20,8 @@ def _inline_nodes(ast_children: list[dict]) -> list[dict]:
     """Walk a list of inline mistune AST nodes and return PM text/break nodes.
 
     Each plain text run becomes a ``{"type": "text", "text": "..."}`` node,
-    optionally with a ``marks`` list for bold/italic/code styling.
+    optionally with a ``marks`` list for strong/em/code styling (the mark names the
+    editor's schema uses).
     ``softbreak`` and ``linebreak`` both become a ``hard_break`` node.
     """
     result: list[dict] = []
@@ -43,12 +44,12 @@ def _inline_nodes(ast_children: list[dict]) -> list[dict]:
 
         elif ntype == "strong":
             for child_node in _inline_nodes(node.get("children", [])):
-                _add_mark(child_node, {"type": "bold"})
+                _add_mark(child_node, {"type": "strong"})
                 result.append(child_node)
 
         elif ntype == "emphasis":
             for child_node in _inline_nodes(node.get("children", [])):
-                _add_mark(child_node, {"type": "italic"})
+                _add_mark(child_node, {"type": "em"})
                 result.append(child_node)
 
         elif ntype == "image":
@@ -178,7 +179,7 @@ def markdown_to_pm(text: str) -> dict:
     """Parse markdown text into a ProseMirror document dict.
 
     Supports the node types used by starlette-editor:
-    paragraph, heading, text (bold/italic/code marks), code_block,
+    paragraph, heading, text (strong/em/code marks), code_block,
     blockquote, bullet_list, ordered_list, list_item, image, hard_break.
 
     Unknown node types are wrapped in a paragraph rather than silently
