@@ -247,7 +247,9 @@ describe('CollabConnection._handleMessage()', () => {
     conn.destroy()
   })
 
-  it('handles steps: updates version and calls toolbar.setState("editing")', () => {
+  it('handles steps: updates version and calls toolbar.setState("editing")', async () => {
+    const { getVersion } = await import('prosemirror-collab')
+    getVersion.mockReturnValue(5)
     const view = makeMinimalView()
     const toolbar = makeToolbar()
     const conn = new CollabConnection({
@@ -262,14 +264,74 @@ describe('CollabConnection._handleMessage()', () => {
 
     conn._handleMessage({
       type: 'steps',
-      steps: [],
-      clientIDs: [],
+      steps: [{ stepType: 'replace' }],
+      clientIDs: ['xyz'],
       version: 6,
     })
 
     expect(conn.version).toBe(6)
     expect(toolbar.setState).toHaveBeenCalledWith('editing')
+    getVersion.mockReturnValue(0)
     conn.destroy()
+  })
+
+  describe('steps that do not start at our version (ADR 024)', () => {
+    async function connect(localVersion) {
+      const { getVersion } = await import('prosemirror-collab')
+      getVersion.mockReturnValue(localVersion)
+      const view = makeMinimalView()
+      const conn = new CollabConnection({
+        view, schema: {}, documentId: 'doc-1', cmsBase: 'https://cms.example.com',
+        initialVersion: localVersion, toolbar: makeToolbar(), clientID: 'abc',
+      })
+      return { conn, view, getVersion }
+    }
+
+    it('asks for catch-up instead of applying a batch that leaves a gap', async () => {
+      const { conn, view, getVersion } = await connect(2)
+      receiveTransaction.mockClear()
+
+      // Batch is versions 6..7; we are at 2, so 3..5 are missing.
+      conn._handleMessage({ type: 'steps', steps: [{ stepType: 'replace' }], clientIDs: ['x'], version: 7 })
+
+      expect(receiveTransaction).not.toHaveBeenCalled()
+      expect(view.dispatch).not.toHaveBeenCalled()
+      expect(conn.ws.sent.filter(m => m.type === 'catch_up')).toEqual([{ type: 'catch_up', version: 2 }])
+      getVersion.mockReturnValue(0)
+      conn.destroy()
+    })
+
+    it('ignores a batch we already have', async () => {
+      const { conn, view, getVersion } = await connect(5)
+      receiveTransaction.mockClear()
+
+      conn._handleMessage({ type: 'steps', steps: [{ stepType: 'replace' }], clientIDs: ['x'], version: 5 })
+
+      expect(receiveTransaction).not.toHaveBeenCalled()
+      expect(view.dispatch).not.toHaveBeenCalled()
+      expect(conn.ws.sent).toEqual([])
+      getVersion.mockReturnValue(0)
+      conn.destroy()
+    })
+
+    it('applies only the part of an overlapping batch that is new', async () => {
+      const { conn, getVersion } = await connect(5)
+      receiveTransaction.mockClear()
+
+      // Versions 4..7 (three steps), of which 4 and 5 we already applied.
+      conn._handleMessage({
+        type: 'steps',
+        steps: [{ stepType: 'a' }, { stepType: 'b' }, { stepType: 'c' }],
+        clientIDs: ['x', 'y', 'z'],
+        version: 7,
+      })
+
+      const [, steps, clientIDs] = receiveTransaction.mock.calls[0]
+      expect(steps.map(s => s.toJSON().stepType)).toEqual(['b', 'c'])
+      expect(clientIDs).toEqual(['y', 'z'])
+      getVersion.mockReturnValue(0)
+      conn.destroy()
+    })
   })
 
   it('handles reject: holds the socket open so pending steps survive', () => {
@@ -299,7 +361,9 @@ describe('CollabConnection._handleMessage()', () => {
     conn.destroy()
   })
 
-  it('retries pending steps when the broadcast that rejected us arrives', () => {
+  it('retries pending steps when the broadcast that rejected us arrives', async () => {
+    const { getVersion } = await import('prosemirror-collab')
+    getVersion.mockReturnValue(2)
     const view = makeMinimalView()
     const conn = new CollabConnection({
       view,
@@ -316,11 +380,12 @@ describe('CollabConnection._handleMessage()', () => {
     // prosemirror-collab rebases pending steps through receiveTransaction; the
     // steps handler then retries the send.
     sendableSteps.mockReturnValueOnce({ steps: [{ toJSON: () => ({ stepType: 'replace' }) }], version: 3 })
-    conn._handleMessage({ type: 'steps', steps: [], clientIDs: [], version: 3 })
+    conn._handleMessage({ type: 'steps', steps: [{ stepType: 'replace' }], clientIDs: ['other'], version: 3 })
 
     const sentSteps = conn.ws.sent.filter(m => m.type === 'steps')
     expect(sentSteps).toHaveLength(1)
     expect(sentSteps[0].version).toBe(3)
+    getVersion.mockReturnValue(0)
     conn.destroy()
   })
 
@@ -467,9 +532,8 @@ describe('CollabConnection reconnect resume', () => {
     conn.destroy()
   })
 
-  it('holds pending steps and warns when the server moved on while away', async () => {
+  it('holds pending steps and asks for the missed steps when the server moved on while away', async () => {
     const { getVersion } = await import('prosemirror-collab')
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const conn = new CollabConnection({
       view: makeMinimalView(),
       schema: {},
@@ -485,11 +549,36 @@ describe('CollabConnection reconnect resume', () => {
 
     conn._handleMessage({ type: 'init', version: 9, peers: [] })
 
-    // Sending at a version the server has passed would just reject again.
+    // Sending at a version the server has passed would just reject again, so
+    // ask for the steps in between; they rebase the pending ones when they arrive.
     expect(conn.ws.sent.filter(m => m.type === 'steps')).toHaveLength(0)
-    expect(warn).toHaveBeenCalled()
+    expect(conn.ws.sent.filter(m => m.type === 'catch_up')).toEqual([{ type: 'catch_up', version: 4 }])
 
     sendableSteps.mockReturnValue(null)
+    conn.destroy()
+  })
+
+  it('warns and keeps the pending steps when the server cannot catch the client up', async () => {
+    const { getVersion } = await import('prosemirror-collab')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const toolbar = makeToolbar()
+    toolbar.setSaveError = vi.fn()
+    const conn = new CollabConnection({
+      view: makeMinimalView(),
+      schema: {},
+      documentId: 'doc-1',
+      cmsBase: 'https://cms.example.com',
+      initialVersion: 4,
+      toolbar,
+      clientID: 'abc',
+    })
+    getVersion.mockReturnValue(4)
+
+    conn._handleMessage({ type: 'resync_required', version: 90, doc: null })
+
+    expect(warn).toHaveBeenCalled()
+    expect(toolbar.setSaveError).toHaveBeenCalled()
+    expect(conn.ws.sent.filter(m => m.type === 'steps')).toHaveLength(0)
     conn.destroy()
   })
 

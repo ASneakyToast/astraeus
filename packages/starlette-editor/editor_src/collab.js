@@ -12,7 +12,8 @@
  *   Server → client init:   { type: 'init', doc: <PM JSON>, version: <int> }
  *   Client → server steps:  { type: 'steps', steps: [...], clientID, version, doc }
  *   Server → client steps:  { type: 'steps', steps: [...], clientIDs: [...], version }
- *   Server → client reject: { type: 'reject', version: <int> }
+ *   Server → client reject: { type: 'reject', version: <int>, reason?: string }
+ *   Client → server catch-up: { type: 'catch_up', version } → { type: 'steps', ... } | { type: 'resync_required', doc, version }
  *   Keep-alive:             { type: 'ping' } → { type: 'pong' }
  */
 import { collab, sendableSteps, receiveTransaction, getVersion } from 'prosemirror-collab'
@@ -168,9 +169,23 @@ export class CollabConnection {
     }
 
     else if (msg.type === 'steps') {
-      // Apply confirmed steps from server
-      const steps = msg.steps.map(s => Step.fromJSON(this.schema, s))
-      const clientIDs = msg.clientIDs
+      // prosemirror-collab counts steps; it does not know which version a step
+      // belongs to. A batch that does not start exactly at our version (one that
+      // raced ahead of a catch-up, one we already have) would be applied to the
+      // wrong document, so check before applying. `msg.version` is the version
+      // *after* the batch.
+      const localVersion = getVersion(this.view.state)
+      const firstVersion = msg.version - msg.steps.length
+      if (msg.version <= localVersion) return  // already have all of these
+      if (firstVersion > localVersion) {
+        // A gap: we missed steps (a broadcast raced our catch-up). Ask for them;
+        // the reply starts at our version and includes this batch.
+        this._requestCatchUp()
+        return
+      }
+      const skip = localVersion - firstVersion  // overlap we already applied
+      const steps = msg.steps.slice(skip).map(s => Step.fromJSON(this.schema, s))
+      const clientIDs = msg.clientIDs.slice(skip)
 
       const tr = receiveTransaction(
         this.view.state,
@@ -185,6 +200,17 @@ export class CollabConnection {
 
       // After receiving, check if we have pending local steps to send
       this._sendPendingSteps()
+    }
+
+    else if (msg.type === 'resync_required') {
+      // The server no longer has the steps between our version and its own, so
+      // our pending steps cannot be rebased. Keep them and say so rather than
+      // silently diverging or dropping them.
+      console.warn(
+        `[astraeus] Server version ${msg.version} is too far ahead of local edits ` +
+        `(based on version ${getVersion(this.view.state)}) to catch up. They have not been saved.`,
+      )
+      this.toolbar?.setSaveError?.('⚠ Edits made while offline could not be merged — copy them out, then reload')
     }
 
     else if (msg.type === 'reject') {
@@ -210,29 +236,34 @@ export class CollabConnection {
    *
    * A brief drop — tunnel, wifi handoff — leaves the server where we left it,
    * so pending steps are still based on a document it recognises and can just
-   * be sent. Nothing else resends them: only onTransaction and an incoming
-   * steps broadcast call _sendPendingSteps.
+   * be sent.
    *
    * If the server moved on while we were away, our steps are based on a
-   * document it no longer has. Rebasing needs the steps we missed, and the
-   * protocol has no way to pull them — see ADR 021 §5. Leave them pending and
-   * say so: the next broadcast rebases them if one arrives.
+   * document it no longer has. Rebasing needs the steps we missed, so ask for
+   * them (`catch_up`, ADR 024). They come back as an ordinary `steps` message,
+   * which the handler below applies with `receiveTransaction`, rebasing our
+   * pending steps over them, and then resends what is left. A server that
+   * cannot serve them answers `resync_required`; one that predates the message
+   * ignores it, and the steps stay pending as before.
    *
    * @param {number} serverVersion
    */
   _resumePendingSteps(serverVersion) {
     if (!sendableSteps(this.view.state)) return
 
-    if (getVersion(this.view.state) === serverVersion) {
+    const localVersion = getVersion(this.view.state)
+    if (localVersion === serverVersion) {
       this._sendPendingSteps()
       return
     }
 
-    console.warn(
-      `[astraeus] Reconnected at server version ${serverVersion} but local edits are ` +
-      `based on version ${getVersion(this.view.state)}. They cannot be rebased without ` +
-      'the missed steps and have not been saved.',
-    )
+    this._requestCatchUp()
+  }
+
+  /** Ask the server for the steps after our version (ADR 024). */
+  _requestCatchUp() {
+    if (this.ws?.readyState !== WebSocket.OPEN) return
+    this.ws.send(JSON.stringify({ type: 'catch_up', version: getVersion(this.view.state) }))
   }
 
   _sendPendingSteps() {
