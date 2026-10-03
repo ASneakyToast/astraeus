@@ -1,0 +1,1493 @@
+{
+  "generatedWith": {
+    "prosemirror-transform": "1.12.2",
+    "prosemirror-model": "1.25.12"
+  },
+  "cases": [
+    {
+      "name": "insert text",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello world"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replace",
+          "from": 12,
+          "to": 12,
+          "slice": {
+            "content": [
+              {
+                "type": "text",
+                "text": "!"
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello world!"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "delete range",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello world"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replace",
+          "from": 1,
+          "to": 7
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "world"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "replace text",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello world"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replace",
+          "from": 7,
+          "to": 12,
+          "slice": {
+            "content": [
+              {
+                "type": "text",
+                "text": "there"
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello there"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "split paragraph",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello world"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replace",
+          "from": 6,
+          "to": 6,
+          "slice": {
+            "content": [
+              {
+                "type": "paragraph"
+              },
+              {
+                "type": "paragraph"
+              }
+            ],
+            "openStart": 1,
+            "openEnd": 1
+          },
+          "structure": true
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": " world"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "join paragraphs",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "First paragraph"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Second paragraph"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replace",
+          "from": 16,
+          "to": 18,
+          "structure": true
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "First paragraphSecond paragraph"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "autocorrect batch (delete, insert, mark)",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "teh cat"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replace",
+          "from": 1,
+          "to": 4
+        },
+        {
+          "stepType": "replace",
+          "from": 1,
+          "to": 1,
+          "slice": {
+            "content": [
+              {
+                "type": "text",
+                "text": "the"
+              }
+            ]
+          }
+        },
+        {
+          "stepType": "addMark",
+          "mark": {
+            "type": "em"
+          },
+          "from": 1,
+          "to": 4
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "marks": [
+                  {
+                    "type": "em"
+                  }
+                ],
+                "text": "the"
+              },
+              {
+                "type": "text",
+                "text": " cat"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "add strong",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello world"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "addMark",
+          "mark": {
+            "type": "strong"
+          },
+          "from": 1,
+          "to": 6
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "marks": [
+                  {
+                    "type": "strong"
+                  }
+                ],
+                "text": "Hello"
+              },
+              {
+                "type": "text",
+                "text": " world"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "add link with attrs",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello world"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "addMark",
+          "mark": {
+            "type": "link",
+            "attrs": {
+              "href": "https://example.com",
+              "title": "Example"
+            }
+          },
+          "from": 1,
+          "to": 6
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "marks": [
+                  {
+                    "type": "link",
+                    "attrs": {
+                      "href": "https://example.com",
+                      "title": "Example"
+                    }
+                  }
+                ],
+                "text": "Hello"
+              },
+              {
+                "type": "text",
+                "text": " world"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "remove mark",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello",
+                "marks": [
+                  {
+                    "type": "strong"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "removeMark",
+          "mark": {
+            "type": "strong"
+          },
+          "from": 1,
+          "to": 6
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "insert hard break",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello world"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replace",
+          "from": 1,
+          "to": 1,
+          "slice": {
+            "content": [
+              {
+                "type": "hard_break"
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "hard_break"
+              },
+              {
+                "type": "text",
+                "text": "Hello world"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "insert image",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello world"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replace",
+          "from": 1,
+          "to": 1,
+          "slice": {
+            "content": [
+              {
+                "type": "image",
+                "attrs": {
+                  "src": "https://example.com/a.png",
+                  "alt": "a",
+                  "title": null
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "image",
+                "attrs": {
+                  "src": "https://example.com/a.png",
+                  "alt": "a",
+                  "title": null
+                }
+              },
+              {
+                "type": "text",
+                "text": "Hello world"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "insert horizontal rule",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "First paragraph"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Second paragraph"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replace",
+          "from": 17,
+          "to": 17,
+          "slice": {
+            "content": [
+              {
+                "type": "horizontal_rule"
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "First paragraph"
+              }
+            ]
+          },
+          {
+            "type": "horizontal_rule"
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Second paragraph"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "set heading level (attr step)",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "heading",
+            "attrs": {
+              "level": 1
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Title"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "attr",
+          "pos": 0,
+          "attr": "level",
+          "value": 3
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "heading",
+            "attrs": {
+              "level": 3
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Title"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "paragraph to heading",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello world"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replaceAround",
+          "from": 0,
+          "to": 13,
+          "gapFrom": 1,
+          "gapTo": 12,
+          "insert": 1,
+          "slice": {
+            "content": [
+              {
+                "type": "heading",
+                "attrs": {
+                  "level": 2
+                }
+              }
+            ]
+          },
+          "structure": true
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "heading",
+            "attrs": {
+              "level": 2
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello world"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "wrap in blockquote",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "First paragraph"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Second paragraph"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replaceAround",
+          "from": 0,
+          "to": 17,
+          "gapFrom": 0,
+          "gapTo": 17,
+          "insert": 1,
+          "slice": {
+            "content": [
+              {
+                "type": "blockquote"
+              }
+            ]
+          },
+          "structure": true
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "blockquote",
+            "content": [
+              {
+                "type": "paragraph",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "First paragraph"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Second paragraph"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "lift out of blockquote",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "blockquote",
+            "content": [
+              {
+                "type": "paragraph",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Roses are red"
+                  }
+                ]
+              },
+              {
+                "type": "paragraph",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Violets are blue"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replaceAround",
+          "from": 0,
+          "to": 16,
+          "gapFrom": 1,
+          "gapTo": 16,
+          "insert": 0,
+          "slice": {
+            "content": [
+              {
+                "type": "blockquote"
+              }
+            ],
+            "openEnd": 1
+          },
+          "structure": true
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Roses are red"
+              }
+            ]
+          },
+          {
+            "type": "blockquote",
+            "content": [
+              {
+                "type": "paragraph",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Violets are blue"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "wrap in bullet list",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "First paragraph"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Second paragraph"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replaceAround",
+          "from": 0,
+          "to": 35,
+          "gapFrom": 0,
+          "gapTo": 35,
+          "insert": 2,
+          "slice": {
+            "content": [
+              {
+                "type": "bullet_list",
+                "content": [
+                  {
+                    "type": "list_item"
+                  }
+                ]
+              }
+            ]
+          },
+          "structure": true
+        },
+        {
+          "stepType": "replace",
+          "from": 19,
+          "to": 19,
+          "slice": {
+            "content": [
+              {
+                "type": "list_item"
+              },
+              {
+                "type": "list_item"
+              }
+            ],
+            "openStart": 1,
+            "openEnd": 1
+          },
+          "structure": true
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "bullet_list",
+            "content": [
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "First paragraph"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Second paragraph"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "wrap in ordered list",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "First paragraph"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Second paragraph"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replaceAround",
+          "from": 0,
+          "to": 17,
+          "gapFrom": 0,
+          "gapTo": 17,
+          "insert": 2,
+          "slice": {
+            "content": [
+              {
+                "type": "ordered_list",
+                "attrs": {
+                  "order": 1
+                },
+                "content": [
+                  {
+                    "type": "list_item"
+                  }
+                ]
+              }
+            ]
+          },
+          "structure": true
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "ordered_list",
+            "attrs": {
+              "order": 1
+            },
+            "content": [
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "First paragraph"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Second paragraph"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "split list item",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "bullet_list",
+            "content": [
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "one"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "two"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replace",
+          "from": 6,
+          "to": 6,
+          "slice": {
+            "content": [
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph"
+                  }
+                ]
+              },
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph"
+                  }
+                ]
+              }
+            ],
+            "openStart": 2,
+            "openEnd": 2
+          },
+          "structure": true
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "bullet_list",
+            "content": [
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "one"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph"
+                  }
+                ]
+              },
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "two"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "sink list item",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "bullet_list",
+            "content": [
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "one"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "two"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replaceAround",
+          "from": 7,
+          "to": 15,
+          "gapFrom": 8,
+          "gapTo": 15,
+          "insert": 1,
+          "slice": {
+            "content": [
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "bullet_list"
+                  }
+                ]
+              }
+            ],
+            "openStart": 1
+          },
+          "structure": true
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "bullet_list",
+            "content": [
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "one"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "bullet_list",
+                    "content": [
+                      {
+                        "type": "list_item",
+                        "content": [
+                          {
+                            "type": "paragraph",
+                            "content": [
+                              {
+                                "type": "text",
+                                "text": "two"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "lift list item",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "bullet_list",
+            "content": [
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "one"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "two"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replaceAround",
+          "from": 0,
+          "to": 8,
+          "gapFrom": 2,
+          "gapTo": 7,
+          "insert": 0,
+          "slice": {
+            "content": [
+              {
+                "type": "bullet_list"
+              }
+            ],
+            "openEnd": 1
+          }
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "one"
+              }
+            ]
+          },
+          {
+            "type": "bullet_list",
+            "content": [
+              {
+                "type": "list_item",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "two"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "replace across paragraphs",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "First paragraph"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Second paragraph"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replace",
+          "from": 5,
+          "to": 25
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Firsparagraph"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "code block text",
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "code_block",
+            "content": [
+              {
+                "type": "text",
+                "text": "x = 1"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replace",
+          "from": 6,
+          "to": 6,
+          "slice": {
+            "content": [
+              {
+                "type": "text",
+                "text": " + 2"
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "code_block",
+            "content": [
+              {
+                "type": "text",
+                "text": "x = 1 + 2"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

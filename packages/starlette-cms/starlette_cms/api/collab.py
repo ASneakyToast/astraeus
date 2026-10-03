@@ -15,10 +15,11 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+import structlog
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
-from starlette.websockets import WebSocket
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from starlette_cms.api.changesets import link_document_to_changeset
 from starlette_cms.auth import check_session_auth
@@ -27,6 +28,24 @@ from starlette_cms.tables import CMSDocument
 
 if TYPE_CHECKING:
     from starlette_cms.app import CMS
+
+log = structlog.get_logger(__name__)
+
+
+def _is_editable_rich_text(cms: CMS, doc_type: str, field: str) -> bool:
+    """True if *field* is a rich-text field of *doc_type* that is not immutable."""
+    try:
+        model = cms.registry.get(doc_type)
+    except Exception:  # noqa: BLE001 - unknown type
+        return False
+    info = model.model_fields.get(field)
+    if info is None:
+        return False
+    extra = info.json_schema_extra if isinstance(info.json_schema_extra, dict) else {}
+    meta = extra.get("cms:field_meta") or {}
+    if meta.get("field_type") != "rich_text":
+        return False
+    return field not in getattr(model, "__immutable_fields__", [])
 
 
 def _check_ws_auth(websocket: WebSocket, cms: CMS) -> bool:
@@ -120,6 +139,16 @@ def make_collab_routes(cms: CMS) -> list:
             .run()
         )
         doc_type: str = doc_type_rows[0]["doc_type"] if doc_type_rows else ""
+
+        # Verifying mode: the socket may only edit a rich-text field the block
+        # type actually defines, and never an immutable one. Without this any
+        # authenticated client could name any key and have it written into the body.
+        if cms.verify_collab and not _is_editable_rich_text(cms, doc_type, field):
+            await websocket.send_json(
+                {"type": "error", "message": f"{field!r} is not an editable rich-text field"}
+            )
+            await websocket.close(code=4403)
+            return
         # Changeset this connection's persisted edits are already grouped into,
         # so we link once per changeset rather than on every step batch.
         linked_cs: str | None = None
@@ -240,7 +269,9 @@ def make_collab_routes(cms: CMS) -> list:
                             steps,
                             step_client_id,
                             client_version,
-                            updated_doc if updated_doc is not None else authority._doc,
+                            updated_doc
+                            if updated_doc is not None or authority._schema is None
+                            else None,
                         )
 
                     if result.accepted:
@@ -249,7 +280,21 @@ def make_collab_routes(cms: CMS) -> list:
                         try:
                             await authority._persist_steps(steps, step_client_id, base_version)
                         except Exception:
-                            pass  # DB persistence failure should not drop the connection
+                            # Don't drop the connection, but don't hide it either: the
+                            # in-memory version is now ahead of what is stored.
+                            log.exception(
+                                "collab_persist_failed",
+                                document_id=document_id,
+                                field=field,
+                                version=result.version,
+                            )
+                            await websocket.send_json(
+                                {
+                                    "type": "error",
+                                    "code": "persist_failed",
+                                    "version": result.version,
+                                }
+                            )
 
                         # Group this body edit into a changeset so a batch publish
                         # includes it — the collab path bypasses the HTTP PATCH that
@@ -286,11 +331,42 @@ def make_collab_routes(cms: CMS) -> list:
                             {
                                 "type": "reject",
                                 "version": result.version,
+                                "reason": result.reason,
                             }
                         )
 
+                # ── Catch-up after a reconnect ─────────────────────────────────
+                elif msg_type == "catch_up" and authority._schema is not None:
+                    since = data.get("version")
+                    missed = (
+                        authority.steps_since(since) if isinstance(since, int) else None
+                    )
+                    if missed is None:
+                        # Too far behind (or ahead): pending steps cannot be rebased.
+                        await websocket.send_json(
+                            {
+                                "type": "resync_required",
+                                "doc": authority._doc,
+                                "version": authority._version,
+                            }
+                        )
+                    else:
+                        missed_steps, missed_ids = missed
+                        await websocket.send_json(
+                            {
+                                "type": "steps",
+                                "steps": missed_steps,
+                                "clientIDs": missed_ids,
+                                "version": authority._version,
+                            }
+                        )
+
+        except WebSocketDisconnect:
+            pass  # the client went away
         except Exception:
-            pass  # disconnect / receive error
+            # Anything else ends the connection too; record it rather than hide a
+            # server bug behind what looks like a client disconnect.
+            log.exception("collab_socket_failed", document_id=document_id, field=field)
         finally:
             manager.unregister_peer(client_id)
             await manager.remove_connection(room, websocket)

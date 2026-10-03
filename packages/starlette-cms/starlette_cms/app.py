@@ -41,6 +41,10 @@ class CMS:
     :param api_key: Required when auth="apikey".
     :param read_auth: If True, protect GET endpoints with auth too.
     :param mount_path: The path this CMS is mounted at (used for self-links).
+    :param verify_collab: If True, the collab WebSocket applies every step to the
+        server's copy of the field (needs the ``collab-verify`` extra), refuses steps
+        that do not apply or would break the schema, stores the server-computed
+        document, answers ``catch_up`` requests, and only accepts rich-text fields.
     :param discover_blocks: If True, auto-discover blocks via entry points.
     :param media_backend: Optional :class:`~starlette_cms.media.MediaBackend`
         implementation.  When set, ``ImageField`` values are validated against
@@ -60,6 +64,7 @@ class CMS:
         session_secret: str | None = None,
         admin_users: dict[str, str] | None = None,
         cors_origins: list[str] | None = None,
+        verify_collab: bool = False,
     ) -> None:
         self.database_url = database_url
         self.auth = auth
@@ -78,7 +83,16 @@ class CMS:
         self._db: Any = None  # CMSDatabase instance, set in lifespan
 
         from starlette_cms.collab import CollabManager, DocumentEventBus
-        self.collab_manager = CollabManager()
+
+        # ADR 024 spike: apply collab steps server-side instead of trusting the
+        # client's document. Needs the ``collab-verify`` extra.
+        self.verify_collab = verify_collab
+        if verify_collab:
+            from starlette_cms.collab_verify import editor_schema
+
+            self.collab_manager = CollabManager(schema=editor_schema())
+        else:
+            self.collab_manager = CollabManager()
         self.event_bus = DocumentEventBus()
 
         if discover_blocks:
