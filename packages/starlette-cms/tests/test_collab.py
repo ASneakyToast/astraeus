@@ -310,6 +310,61 @@ def test_ws_two_client_broadcast(cms_with_doc):
 
 
 # ---------------------------------------------------------------------------
+# Test 6b: A multi-step batch is attributed one client ID per step
+# ---------------------------------------------------------------------------
+#
+# prosemirror-collab's receiveTransaction pairs ``clientIDs[i]`` with
+# ``steps[i]`` and treats the leading run of its own ID as already applied.
+# A single ID for a batch made the sender re-apply every step after the first,
+# so autocorrect, paste or any batch of unconfirmed steps duplicated text.
+
+
+def test_apply_steps_attributes_every_step_to_the_sender():
+    from starlette_cms.collab import CollabAuthority
+
+    authority = CollabAuthority("doc-1", "body", None, 0)
+    steps = [{"stepType": "replace", "from": i, "to": i} for i in range(3)]
+
+    result = authority.apply_steps(steps, "client-a", 0, {"type": "doc"})
+
+    assert result.accepted
+    assert result.version == 3
+    assert result.client_ids == ["client-a"] * 3
+
+
+def test_ws_multi_step_broadcast_has_one_client_id_per_step(cms_with_doc):
+    client, doc_id = cms_with_doc
+    steps = [
+        {"stepType": "replace", "from": 0, "to": 1, "slice": {}},
+        {"stepType": "replace", "from": 1, "to": 1, "slice": {}},
+        {"stepType": "replace", "from": 2, "to": 2, "slice": {}},
+    ]
+
+    with client.websocket_connect(f"/api/documents/{doc_id}/collab?field=body") as ws_a:
+        ws_a.receive_json()  # init for A
+
+        with client.websocket_connect(f"/api/documents/{doc_id}/collab?field=body") as ws_b:
+            ws_b.receive_json()  # init for B
+
+            ws_a.send_json(
+                {
+                    "type": "steps",
+                    "steps": steps,
+                    "clientID": "client-a",
+                    "version": 0,
+                    "doc": {"title": "from A"},
+                }
+            )
+
+            for ws in (ws_a, ws_b):
+                msg = ws.receive_json()
+                assert msg["type"] == "steps"
+                assert msg["version"] == 3
+                assert len(msg["steps"]) == 3
+                assert msg["clientIDs"] == ["client-a"] * 3
+
+
+# ---------------------------------------------------------------------------
 # Test 7: Ping → pong
 # ---------------------------------------------------------------------------
 

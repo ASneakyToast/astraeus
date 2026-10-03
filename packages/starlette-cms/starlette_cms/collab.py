@@ -50,6 +50,9 @@ class CollabResult:
     accepted: bool
     version: int
     steps: list[dict] = field(default_factory=list)
+    #: One entry per step, parallel to ``steps``. ``prosemirror-collab`` matches
+    #: IDs to steps by position to tell which of a broadcast's steps are the
+    #: receiver's own; a shorter list makes it re-apply its own steps.
     client_ids: list[str] = field(default_factory=list)
 
 
@@ -118,7 +121,7 @@ class CollabAuthority:
             accepted=True,
             version=self._version,
             steps=steps,
-            client_ids=[client_id],
+            client_ids=[client_id] * len(steps),
         )
 
     async def _persist_steps(self, steps: list[dict], client_id: str, base_version: int) -> None:
