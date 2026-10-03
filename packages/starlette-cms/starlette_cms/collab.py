@@ -22,8 +22,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+import structlog
+
 if TYPE_CHECKING:
+    from prosemirror.model import Schema
     from starlette.websockets import WebSocket
+
+log = structlog.get_logger(__name__)
+
+#: Most steps one authority keeps for catch-up. A client further behind than
+#: this has to take the server's copy instead of rebasing.
+MAX_STEP_LOG = 5000
 
 
 def collab_room(document_id: str, field: str) -> str:
@@ -54,6 +63,12 @@ class CollabResult:
     #: IDs to steps by position to tell which of a broadcast's steps are the
     #: receiver's own; a shorter list makes it re-apply its own steps.
     client_ids: list[str] = field(default_factory=list)
+    #: Why a batch was refused: ``"version"``, or a description of the step
+    #: that did not apply (verifying authority only).
+    reason: str | None = None
+    #: Verifying authority only: the client's claimed document differed from
+    #: the one the steps produce. The server's document was kept.
+    mismatch: bool = False
 
 
 class CollabAuthority:
@@ -74,20 +89,53 @@ class CollabAuthority:
     :param version: Current version number (incremented per accepted step).
     """
 
-    def __init__(self, document_id: str, field: str, field_doc: dict | None, version: int) -> None:
+    def __init__(
+        self,
+        document_id: str,
+        field: str,
+        field_doc: dict | None,
+        version: int,
+        schema: Schema | None = None,
+    ) -> None:
         self.document_id = document_id
         self.field = field
         self._doc = field_doc
         self._version = version
         self._lock = asyncio.Lock()
         self._last_activity = time.monotonic()
+        #: When set, steps are applied server-side and the client's document is
+        #: only compared, never stored (see :mod:`starlette_cms.collab_verify`).
+        self._schema = schema
+        # Accepted steps since this authority was created, for catch-up.
+        # ``_log[i]`` took the document from version ``_log_base + i`` to ``+ 1``.
+        self._log: list[tuple[dict, str]] = []
+        self._log_base = version
+
+    def steps_since(self, version: int) -> tuple[list[dict], list[str]] | None:
+        """Accepted steps after *version*, with one client ID per step.
+
+        :returns: ``None`` if *version* is older than the log reaches or newer
+            than the server's, in which case the client must take the server's
+            copy instead.
+        """
+        if version > self._version or version < self._log_base:
+            return None
+        tail = self._log[version - self._log_base :]
+        return [step for step, _ in tail], [cid for _, cid in tail]
+
+    def _record(self, steps: list[dict], client_id: str) -> None:
+        self._log.extend((step, client_id) for step in steps)
+        overflow = len(self._log) - MAX_STEP_LOG
+        if overflow > 0:
+            del self._log[:overflow]
+            self._log_base += overflow
 
     def apply_steps(
         self,
         steps: list[dict],
         client_id: str,
         client_version: int,
-        updated_doc: dict,
+        updated_doc: dict | None,
     ) -> CollabResult:
         """
         Attempt to apply a batch of ProseMirror steps from a client.
@@ -97,24 +145,52 @@ class CollabAuthority:
         :param steps: List of ProseMirror step dicts (each must have ``stepType``).
         :param client_id: Opaque client identifier string.
         :param client_version: The version the client claims to be based on.
-        :param updated_doc: The client's document state after applying steps.
+        :param updated_doc: The client's document state after applying steps. Stored on
+            trust unless the authority verifies, in which case it is only compared.
         :returns: ``CollabResult`` with ``accepted=True`` on success.
         """
         # Version must match exactly
         if client_version != self._version:
-            return CollabResult(accepted=False, version=self._version)
+            return CollabResult(accepted=False, version=self._version, reason="version")
 
         # Structural validation: each step must be a dict with a non-empty stepType
         for step in steps:
             if not isinstance(step, dict):
-                return CollabResult(accepted=False, version=self._version)
+                return CollabResult(accepted=False, version=self._version, reason="malformed step")
             step_type = step.get("stepType")
             if not isinstance(step_type, str) or not step_type:
-                return CollabResult(accepted=False, version=self._version)
+                return CollabResult(accepted=False, version=self._version, reason="malformed step")
+
+        mismatch = False
+        new_doc = updated_doc
+        if self._schema is not None:
+            from starlette_cms.collab_verify import apply_steps as apply_to_doc
+            from starlette_cms.collab_verify import docs_equal
+
+            outcome = apply_to_doc(self._schema, self._doc, steps)
+            if not outcome.ok:
+                log.warning(
+                    "collab_step_refused",
+                    document_id=self.document_id,
+                    field=self.field,
+                    client_id=client_id,
+                    reason=outcome.reason,
+                )
+                return CollabResult(accepted=False, version=self._version, reason=outcome.reason)
+            new_doc = outcome.doc
+            if updated_doc is not None and not docs_equal(self._schema, new_doc, updated_doc):
+                mismatch = True
+                log.warning(
+                    "collab_doc_mismatch",
+                    document_id=self.document_id,
+                    field=self.field,
+                    client_id=client_id,
+                )
 
         # Accept: advance version and update authoritative doc state
         self._version += len(steps)
-        self._doc = updated_doc
+        self._doc = new_doc
+        self._record(steps, client_id)
         self._last_activity = time.monotonic()
 
         return CollabResult(
@@ -122,6 +198,7 @@ class CollabAuthority:
             version=self._version,
             steps=steps,
             client_ids=[client_id] * len(steps),
+            mismatch=mismatch,
         )
 
     async def _persist_steps(self, steps: list[dict], client_id: str, base_version: int) -> None:
@@ -177,7 +254,10 @@ class CollabManager:
     object and is shared across all requests.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, schema: Schema | None = None) -> None:
+        #: Set (by ``CMS(verify_collab=True)``) to make every authority apply
+        #: steps server-side against this schema.
+        self.schema = schema
         self._authorities: dict[str, CollabAuthority] = {}
         self._connections: dict[str, set[WebSocket]] = {}
         self._peer_info: dict[str, dict] = {}
@@ -220,7 +300,7 @@ class CollabManager:
             row = rows[0]
             field_doc = _effective_body(row).get(field)
             version = row.get("draft_version") or 0
-            authority = CollabAuthority(document_id, field, field_doc, version)
+            authority = CollabAuthority(document_id, field, field_doc, version, self.schema)
             self._authorities[room] = authority
             return authority
 
