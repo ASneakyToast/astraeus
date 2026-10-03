@@ -178,9 +178,11 @@ def make_webhook_routes(cms: CMS) -> list[Route]:
     """Build and return all webhook CRUD routes, closed over ``cms``."""
 
     async def list_webhooks(request: Request) -> JSONResponse:
-        if cms.read_auth:
-            if (err := await require_auth(request, cms)) is not None:
-                return err
+        # Always authenticated, whatever ``read_auth`` says: a webhook's URL is
+        # a credential (a Netlify build hook is just a URL anyone can POST to),
+        # so listing it is not a public read like listing published documents.
+        if (err := await require_auth(request, cms)) is not None:
+            return err
 
         rows = await CMSWebhook.select().order_by(CMSWebhook.created_at, ascending=False).run()
         return JSONResponse({"webhooks": [_row_to_dict(r) for r in rows]})
