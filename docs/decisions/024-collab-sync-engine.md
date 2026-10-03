@@ -488,15 +488,15 @@ settle; they are not weaknesses of the option. "F#" points at the finding the ce
 | Criterion | A1 Authority in Python (`prosemirror-py`) | A2 Node authority | B Hocuspocus | C pycrdt (Python) |
 |---|---|---|---|---|
 | 1 Convergence | Good: central order. Rejects and rebase churn under bursts | Good, same | Strong at the Yjs level. At the ProseMirror level, merged state can violate the schema and the binding then deletes content (F3) | Same engine, same caveat (F3) |
-| 2 Server holds truth | Strong once built: steps are applied and checked (F1) | Strong: same code as client | **Weaker than the draft said.** Server holds a merged Yjs state; nothing checks it is a valid PM document unless added (F3) | Same, and a validator would be `prosemirror-py` (F2), so C needs it too |
+| 2 Server holds truth | Strong, and shown by the spike: steps are applied and checked (F1; spike T9, T11, T12) | Strong: same code as client | **Weaker than the draft said.** Server holds a merged Yjs state; nothing checks it is a valid PM document unless added (F3) | Same, and a validator would be `prosemirror-py` (F2), so C needs it too |
 | 3 Attribution | Per-step ID is stored. Today client-asserted; can be bound to the authenticated user (F7) | Same | **?** Per update via `onChange` context; `onStoreDocument` sees only state, debounced 2 s/10 s (F5). Per-character authorship is not native | **?** Per update at write; squashing discards it (F6) |
 | 4 History | Log can become verified. Fix version-collision bug first | Same | **Weakened.** Snapshots need `gc:false` everywhere, which one large team abandoned; undo manager blocks GC (F4) | Same (F4); `pycrdt-store` squashes (F6) |
 | 5 AI peer | Unchanged (could use a real `Transform`) | Unchanged | Needs a Yjs write path: `openDirectConnection`, broadcast behavior **[unchecked]** (F5) | **?** XML insert/format API exists (F6); result must render in the binding |
-| 6 Missed updates | Weak today; fixed by adding `stepsSince` (F1) over a log with the collision bug | Same | Strong: state-vector sync is built in | Strong |
+| 6 Missed updates | Weak on `main`. The spike's `catch_up` fixes it with real clients (T3) over an in-memory log; a durable log still needs a schema change (spike F16) | Same | Strong: state-vector sync is built in | Strong |
 | 7 Persistence | Strong: existing tables | Strong | Moderate: binary state is truth, JSON one-way and must not be re-hydrated (F5) | Moderate: store must write into `content.db`; default is a second SQLite file (F6) |
-| 8 Package independence | Strong: pure Python, plus one small dependency (F2) | Weak: Node runtime | Weak: Node runtime | Python server; needs `prosemirror-py` for validation (F2) and a hand-written JSON reader/writer (F6), tight `pycrdt` pin |
+| 8 Package independence | Strong: no Node, plus one small dependency that needs compiled `lxml` (F2, spike F11) | Weak: Node runtime | Weak: Node runtime | Python server; needs `prosemirror-py` for validation (F2) and a hand-written JSON reader/writer (F6), tight `pycrdt` pin |
 | 9 Maturity / lock-in | `prosemirror-collab` is small and canonical (F1). `prosemirror-py`: one vendor, 63 stars, 11-month gap between 0.5.2 and 0.6.0 (F2) | Strong engine, bespoke glue | Yjs very mature; Hocuspocus smaller and **provider lock-in confirmed**; one project left it (F5) | Yjs mature; `pycrdt` Beta, `pycrdt-websocket` 0.x with a tight pin (F6) |
-| 10 Migration cost | **Low to moderate**: editor and chat unchanged; add authority + Python schema (F2, F8) | Moderate | **High**: editor, history, chat write path, stored docs, tests (F8) | **High**, no Node, plus JSON converter |
+| 10 Migration cost | **Low to moderate**, measured: about 60 editor lines, 290 server lines, 18 chat lines, plus the durable log and identity work (F2, F8, spike) | Moderate | **High**: editor, history, chat write path, stored docs, tests (F8) | **High**, no Node, plus JSON converter |
 | 11 Authorization | Gap today (F7). Per-step judgment is possible | Same | Connection-level hooks only; one room per field (F5, F7) | Connection-level `on_connect` only (F6, F7) |
 
 ---
@@ -528,7 +528,8 @@ settle; they are not weaknesses of the option. "F#" points at the finding the ce
 
 ## Proposed decision procedure
 
-No option is chosen here. Run a time-boxed spike on **B and C** (the Yjs candidates) against a hardened
+No option is chosen here. *Update: the Path A1 spike has been run at Joel's request; its results are in the
+next section. B and C have not been built.* Run a time-boxed spike on **B and C** (the Yjs candidates) against a hardened
 step authority as baseline — now **A1 on `prosemirror-py`**, with A2 kept only if A1's conformance test
 (T12) fails — using one shared acceptance suite, then write the deciding ADR (or amend this one before
 acceptance).
@@ -570,7 +571,7 @@ from his answer.
 and the Figma comparison (F10), Joel said he agrees with Path A. He has not yet given the criteria
 weights, so this records a leaning only; the spike and the deciding ADR still stand.
 
-**Still to read before the spike (everything else on the original list is done):**
+**Still to read before a spike on B or C (everything else on the original list is done):**
 
 - Whether a stock JS `y-websocket` client interoperates with `pycrdt-websocket`, and how to mount its
   ASGI server and lifespan beside the CMS app (F6).
@@ -580,6 +581,123 @@ weights, so this records a leaning only; the spike and the deciding ADR still st
   `y-prosemirror` has changed the delete-on-invalid behavior (F3).
 - Whether `prosemirror-py` 0.6.1 is current against `prosemirror-model` / `prosemirror-transform` latest (F2).
 - Source of the XWiki problems beyond their post (F5): the thread names symptoms, not causes.
+
+---
+
+## Spike results: Path A1 (server-side step application on `prosemirror-py`)
+
+Run 2026-10-03 at Joel's request, as the time-boxed spike this ADR proposed, on the branch
+`claude/adr-024-evidence-verify-tae1du` of `asneakytoast/astraeus` (not merged; four commits on top of
+`a4ba3d2`: `0379739` chat fixes, `69a090c` server verification, `e89555c` editor client, `b4b8c2a` harness). It tests **only Path A1**. B and C were not built, so nothing below compares A to the Yjs
+options; it says how far A1 gets and what it cost to get there. Status of this ADR is unchanged: Proposed.
+
+### What was built
+
+- **Verification (opt-in).** `CMS(verify_collab=True)` makes `CollabAuthority` apply every step to its own
+  copy of the field with `prosemirror-py` and store the document the steps produce. The client's claimed
+  document is compared and logged (`collab_doc_mismatch`), never stored. A batch whose steps do not parse,
+  do not apply, or would leave a node with content its schema forbids is refused whole. The `collab-verify`
+  extra installs `prosemirror>=0.6.1,<0.7`. Default behaviour is unchanged.
+- **Catch-up.** A client sends `{type: "catch_up", version}` and gets the steps after that version, one sender
+  per step, as an ordinary `steps` message; or `resync_required` when the server cannot serve them.
+- **Socket hardening in verifying mode.** The `field` must be a rich-text field the block type defines and
+  must not be `immutable`; a failed database write is reported to the client; unexpected exceptions in the
+  socket handler are logged instead of swallowed.
+- **Client.** `CollabConnection` asks for the missed steps on reconnect instead of warning, and checks the
+  version of every incoming batch (below, F14).
+- **Fixes found on the way, outside Path A (F12).** The AI peer's block positions and mark names.
+- **Harness.** A browser-less end-to-end harness that drives the editor's real `CollabConnection` and
+  `prosemirror-collab` against a live uvicorn server (`packages/starlette-editor/scripts/e2e-collab.mjs`,
+  server in `packages/starlette-cms/tests/e2e/serve_collab.py`), in three server modes: `verify`, `legacy`
+  (today's `main`) and `bug34` (legacy with the #34 bug put back).
+
+### Results against the acceptance suite
+
+| Test | Result | Evidence |
+|---|---|---|
+| T1 autocorrect-style batches | **Pass** | In-process: a batch is applied server-side with one sender ID per step. Real client: `verify` passes on every run. `bug34` mode reproduces the original duplication (`the⟦t1⟧the⟦t1⟧⟦t1⟧`), so the harness would have caught #34. |
+| T2 human + AI concurrency | **Partial** | The AI peer's steps now apply on the server to exactly the document it claims: 200 seeded random rewrites over 12 block kinds. Two bugs found and fixed to get there (F12). A real concurrent AI peer against live human typing, including `tools.py`'s reconnect-and-re-diff, was not run. |
+| T3 missed updates | **Pass** (`verify`), **fail** (`legacy`) | A tab edits offline while another advances the server, then reconnects: `verify` converges with every edit present once. On `legacy` the offline edits stay pending forever and the server never receives them. |
+| T4 convergence fuzz | **Pass** (`verify`), **fail** (`legacy`) | 4 tabs, about 300 random operations each run (insert, delete, mark, split, join, autocorrect batches), random disconnects, 8 seeds: all tabs and the server end on the same document and no insertion is duplicated. `legacy` does not converge. |
+| T5 durability | **Partial** | A restarted authority reloads the server's document and version from the database (test). A failed write is now reported. The acknowledgement is sent after the database write (code read). Killing the server and restoring from Litestream was **not run**. |
+| T6 attribution | **Not run** | Nothing to run against: step IDs are still client-asserted, and no `identity` hook exists (F7). |
+| T7 history between publishes | **Not run** | The catch-up log is in memory (F16); `cms_steps` is unchanged. |
+| T8 growth | **Not measured** | No CRDT growth question applies to A. The in-memory log is capped at 5000 steps; `cms_steps` rows are still never pruned. |
+| T9 JSON derivation | **Pass** | The stored `draft_body` field is the server-computed document and validates against the schema. |
+| T10 publish cycle | **Partial** | Editing after a publish works while the authority is alive. A server restart between a publish and the next edit reloads the reset version (0) while clients still hold the old one; a client with pending edits then gets `resync_required`. The ADR 021 version-collision flaw, not fixed here (F16). |
+| T11 schema-invalid merge | **Pass** | Two erases that are each valid (either line of a two-line quote box) are accepted alone; the second one applied after the first is refused with `Invalid content for node blockquote`. Nothing is merged and later deleted. |
+| T12 step conformance | **Pass** | 23 batches built with the editor's own `prosemirror-transform` reach the same document in `prosemirror-py`. See F11. |
+| T13 authorization | **Partial** | A field that is not an editable rich-text field of the block type is refused with close code 4403. Binding edits to the authenticated user is **not** done: it needs ADR 012. |
+
+### Findings from the spike
+
+**F11. `prosemirror-py` held up, with three qualifiers.**
+All 23 fixtures pass (steps: `replace`, `replaceAround`, `addMark`, `removeMark`, `attr`) although the
+editor resolves `prosemirror-transform` 1.12.2 and `prosemirror-model` 1.25.12 against the port's 1.11.0 and
+1.25.4. `addNodeMark`, `removeNodeMark` and `docAttr` are not covered because the editor's schema does not
+emit them. (1) The package depends on `lxml` and `cssselect`, so "pure Python" needs a footnote: `lxml` is a
+compiled extension with wheels for common platforms. (2) Applying a step that would leave a node with invalid
+content **raises** `ValueError` instead of returning a failed result, so a verifier must catch exceptions as
+well as check `failed`. (3) Its last release was Feb 2026; the skew above is a standing risk that T12 now
+measures.
+
+**F12. The AI peer's edit path did not work against a real editor.**
+Found by T2 and confirmed against the real JavaScript `prosemirror-model`, not just the Python port.
+(a) `diff_docs` counted block positions from 1; ProseMirror's document content starts at 0, so the first
+block starts at 0. A replace of the last block reached past the end of the document and threw
+`RangeError: Position 15 out of range`; shifting by one made it apply correctly. (b) `markdown_to_pm` emitted
+the marks `bold` and `italic`; the editor's schema calls them `strong` and `em`, so a document containing
+them throws on `nodeFromJSON`. The existing tests encoded both mistakes ("from should be 1 (start of first
+block)", `{"type": "bold"}`), and the server accepted anything, so nothing failed. Both are fixed on the
+spike branch. Consequence **[inferred]**: AI edits would have failed to apply in live editors while the
+server stored the document the AI claimed, so they would appear after a reload; that fits the original
+"the server cannot tell" finding and is exactly what server-side application catches.
+
+**F13. A real-client harness separates the three server states.**
+Driving the editor's real classes, `verify` passed T1, T3 and T4 on all 8 seeds; `legacy` failed T3 and T4 on
+all 3 seeds tried (it passes T1, because #34 is fixed); `bug34` failed all three scenarios on both seeds
+tried, T1 with the original duplication. It is a Node process with Node's
+WebSocket, not a browser, so it does not cover the DOM, input events or the editor's rendering.
+
+**F14. Reconnecting needs the client to check versions, not only the server to serve steps.**
+`prosemirror-collab` counts steps and does not know which version a step belongs to. After a reconnect the
+server registers a tab for live broadcasts before its catch-up reply arrives, so a live batch can arrive
+first and be applied on a stale base. The first T4 runs failed with `RangeError` thrown inside
+`prosemirror-collab`'s rebase. Every `steps` message already carries the version after the batch, so the
+client now compares it with its own: a batch that is entirely old is ignored, one that leaves a gap triggers
+a catch-up request, and an overlap is trimmed. The old client left pending steps in place after a missed gap
+and relied on "the next broadcast" to rebase them (a comment in `collab.js`); that is unsafe for the same reason.
+
+**F15. Pre-existing, not fixed: some closes never complete under rapid reconnects.**
+In the fuzz, 0 to 3 sockets per run stay in the closing state indefinitely while the server answers other
+requests. It happens on `legacy` as well as `verify`, so it is not caused by this work. The server had
+accepted the handshake but never reached `add_connection` for that socket. The root cause was not found
+(uvicorn 0.54's sans-I/O WebSocket implementation and Starlette are involved; running the harness server
+with `COLLAB_TRACE=1` prints the connection lifecycle that shows it). The socket handler also swallowed every exception behind `except Exception: pass`, which
+hid a Starlette `WebSocketDisconnected` ("not connected") that the new logging exposed. A half-dead socket is
+normal on a phone, and the client reconnects regardless, but the stuck server-side connection should be
+understood before this ships.
+
+**F16. The catch-up log is not durable, and version numbering has a structural flaw.**
+The step log lives in the authority and starts at the version it loaded, so after a restart or an idle
+eviction only newer steps can be served; anything older gets `resync_required`, and the client only warns.
+A durable log needs a schema change. `cms_steps` has no `field` column and `draft_version` is one column per
+document, while authorities are per (document, field), so two rich-text fields on one document share a
+version space **[repo]**; this was not tested. It would be fixed together with the version-collision flaw
+ADR 021 left open (a publish generation and a field on each step).
+
+### What this does and does not show
+
+- **Shows:** Path A1 can be made to do what the guide's authority does (apply, validate, serve catch-up) on
+  the existing stack; the editor client needed about 60 changed lines, the server about 290 (a 93-line verifier module plus
+  changes to the authority, the socket handler and `CMS`), and the AI peer 18 lines in two small fixes. A hardened authority refuses the schema-invalid edit that the Yjs maintainer says a CRDT
+  would merge and then delete (T11), and the real-client harness fails exactly where ADR 021 said the
+  current design is weak.
+- **Does not show:** anything about B or C; behaviour in a real browser; the editor's preview against the
+  published Astro rendering; durability under Litestream; attribution to a user; a durable history; or
+  scale. The harness's 4 tabs and ~300 operations are a smoke test for convergence, not a load test.
+- **What it costs:** a dependency on `prosemirror-py` (single vendor, `lxml`), a Python schema that must be
+  kept equal to the editor's, and the durable log and identity work above.
 
 ---
 
@@ -609,3 +727,6 @@ weights, so this records a leaning only; the spike and the deciding ADR still st
    added, tie-break order withdrawn pending Joel's weights. Status remains Proposed.
 3. 2026-10-03 — Added F10 (Figma as a reference point for Path A) and recorded Joel's stated leaning
    toward Path A. No weights given and no option chosen; status remains Proposed.
+4. 2026-10-03 — Ran the Path A1 spike (server-side step application on `prosemirror-py`, catch-up, a
+   real-client end-to-end harness) and recorded the results and findings F11–F16. Two AI-peer bugs found
+   and fixed on the spike branch. B and C not run. Status remains Proposed.
