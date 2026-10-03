@@ -53,7 +53,7 @@ class TestMarkdownToPm:
         text_node = para["content"][0]
         assert text_node["type"] == "text"
         assert text_node["text"] == "bold"
-        assert {"type": "bold"} in text_node["marks"]
+        assert {"type": "strong"} in text_node["marks"]
 
     def test_italic_text(self) -> None:
         doc = markdown_to_pm("*italic*")
@@ -61,7 +61,7 @@ class TestMarkdownToPm:
         text_node = para["content"][0]
         assert text_node["type"] == "text"
         assert text_node["text"] == "italic"
-        assert {"type": "italic"} in text_node["marks"]
+        assert {"type": "em"} in text_node["marks"]
 
     def test_inline_code(self) -> None:
         doc = markdown_to_pm("`code`")
@@ -133,8 +133,8 @@ class TestMarkdownToPm:
         para = doc["content"][0]
         # Should have at least: bold text node, plain " and ", italic text node
         types_and_marks = [(n["type"], n.get("marks", [])) for n in para["content"]]
-        bold_nodes = [m for _, m in types_and_marks if {"type": "bold"} in m]
-        italic_nodes = [m for _, m in types_and_marks if {"type": "italic"} in m]
+        bold_nodes = [m for _, m in types_and_marks if {"type": "strong"} in m]
+        italic_nodes = [m for _, m in types_and_marks if {"type": "em"} in m]
         assert len(bold_nodes) >= 1
         assert len(italic_nodes) >= 1
 
@@ -222,7 +222,7 @@ class TestPmToText:
             "type": "paragraph",
             "content": [
                 {"type": "text", "text": "plain "},
-                {"type": "text", "text": "bold", "marks": [{"type": "bold"}]},
+                {"type": "text", "text": "bold", "marks": [{"type": "strong"}]},
             ],
         })
         assert pm_to_text(doc) == "plain bold"

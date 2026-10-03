@@ -38,8 +38,8 @@ Supported node types (outbound from markdown_to_pm):
 | blockquote        | `blockquote`      |
 | bullet list       | `bullet_list` + `list_item` |
 | ordered list      | `ordered_list` + `list_item` |
-| `**bold**`        | `text` with `bold` mark |
-| `_italic_`        | `text` with `italic` mark |
+| `**bold**`        | `text` with `strong` mark |
+| `_italic_`        | `text` with `em` mark |
 | `` `code` ``      | `text` with `code` mark |
 | `![alt](src)`     | `image` (attrs: src, alt, title) |
 | line break        | `hard_break`      |

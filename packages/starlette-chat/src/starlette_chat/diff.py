@@ -48,8 +48,9 @@ def node_size(node: dict) -> int:
 def _block_start_positions(blocks: list[dict]) -> list[int]:
     """Return start positions for each block plus a sentinel past the last.
 
-    Positions are measured from inside the doc node (i.e. the first block
-    starts at position 1).
+    ProseMirror positions index into the doc node's *content*: the doc's own
+    open token is not counted, so the first block starts at position 0 (position
+    1 is already inside that block).
 
     ::
 
@@ -57,10 +58,10 @@ def _block_start_positions(blocks: list[dict]) -> list[int]:
         ...     {"type": "paragraph", "content": [{"type": "text", "text": "ab"}]},
         ...     {"type": "paragraph", "content": [{"type": "text", "text": "cd"}]},
         ... ])
-        [1, 5, 9]
+        [0, 4, 8]
     """
     positions: list[int] = []
-    pos = 1
+    pos = 0
     for block in blocks:
         positions.append(pos)
         pos += node_size(block)
