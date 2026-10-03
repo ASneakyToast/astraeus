@@ -4,10 +4,11 @@
 settles it. It reopens [ADR 021](021-editing-transport-and-durability.md) §5.
 **Date:** 2026-10-03
 
-> **Evidence labels.** Every non-obvious claim below is tagged:
-> **[repo]** read in this repository or reproduced locally; **[reported]** from a project page or
-> search summary that was not read in full; **[verify]** not checked, and must be before this ADR is
-> accepted. A decision should not rest on a **[verify]** line.
+> **Evidence labels.** **[repo]** read in this repository or reproduced locally; **[reported]** from
+> a project page or search summary that was not read in full; **[verify]** not checked, and must be
+> before this ADR is accepted; **[background]** general knowledge of ProseMirror and Yjs, not
+> checked in this research. Unlabelled ratings in the Assessment table are my judgment and mostly
+> rest on **[background]**. A decision should not rest on a **[verify]** or **[background]** line.
 
 ---
 
@@ -23,17 +24,17 @@ stores the client's post-edit document on trust (`api/collab.py`, ADR 021 §5) *
 
 The bug is not the point. The point is what it exposed: the server cannot tell a correct document from
 a corrupted one, because it never applies the steps it accepts. The fix was one line; **finding** it
-took reading three layers because nothing server-side could have noticed.
+took reading the client, the protocol and the server, because nothing server-side checked the result.
 
-### Why ADR 021 §5 is now due for reopening
+### Why ADR 021 §5 is due for reopening
 
-ADR 021 §5 made server-side step application a non-goal and wrote down when to reopen it. Two of
-the three conditions now hold:
+ADR 021 §5 made server-side step application a non-goal and wrote down when to reopen it. One
+condition is imminent and one is plausibly met; neither is proven:
 
 | ADR 021 §5 reopening condition | Now |
 |---|---|
-| The package is deployed by someone other than the author | **Met.** Astraeus is being dogfooded on joellithgow.com specifically so it can be used on client projects. |
-| Server `_doc` and peer-computed documents are observed to diverge | **Met.** The duplicated-text bug is exactly that: peers' documents diverged from the intended edit, and the server stored the diverged one. |
+| The package is deployed by someone other than the author | **Imminent, not yet met.** Astraeus is being dogfooded on joellithgow.com so it can be used on client projects; no client deployment exists yet. |
+| Server `_doc` and peer-computed documents are observed to diverge | **Plausibly met, not observed.** The sender's document diverged from the intended edit and the server stored it; other peers would have received each step once. That is inferred from the code and a single-client reproduction, not seen between two live peers. |
 | Verified rewind becomes a required feature | Open. ADR 018 §3 promises it; ADR 021 says it is not delivered. |
 
 ### Other debts that point the same way
@@ -101,7 +102,8 @@ Same client as B; the server is Python, in the CMS process or beside it.
 - `pycrdt-websocket` syncs Yjs documents over WebSockets with rooms and a pluggable store (file or
   database); ~269 commits **[reported]**. The older `y-py`/`ypy-websocket` pair appears to be
   superseded by `pycrdt` and should not be used **[verify]**.
-- Keeps the package pure Python **[repo constraint 3]**.
+- Would keep the package pure Python (constraint 3) — but only if the open question below about deriving
+  ProseMirror JSON in Python has a good answer.
 - Open questions: ASGI/Starlette mounting; whether Python can turn a `y-prosemirror` XML fragment
   into schema-valid ProseMirror JSON without reimplementing the mapping; whether Python can *write*
   edits the binding will render correctly (relevant to the AI peer) **[verify all three]**.
@@ -126,6 +128,10 @@ making a third-party service load-bearing for the core write path contradicts th
 8. **Package independence** — what a client project must install and run.
 9. **Maturity and lock-in** — of the engine and of the server layer.
 10. **Migration cost** — editor, chat, history endpoints, existing documents, tests.
+11. **Authorization** — who may edit which field. The current authority is scoped to one field per
+    connection; a CRDT merges whatever update arrives. ADR 012 (multi-author permissions) and ADR 013
+    (field-level access control) bear on this and were **not read for this draft [verify]**. It matters
+    most for client projects.
 
 ---
 
@@ -138,14 +144,15 @@ settle; they are not weaknesses of the option.
 |---|---|---|---|---|
 | 1 Convergence | Good: central order. Rejects and rebase churn under bursts | Good, same | Strong: CRDT merges without rejects | Strong, same engine as B |
 | 2 Server holds truth | Strong once built | Strong: same code as client | Strong: server merges updates | Strong |
-| 3 Attribution | Strong: per-step client ID, already stored | Strong | **?** Updates are attributable per message; per-character authorship is not native | **?** same |
+| 3 Attribution | Moderate: per-step client ID is stored, but it is client-asserted and not bound to the authenticated user | Moderate, same | **?** Updates are attributable per message; per-character authorship is not native | **?** same |
 | 4 History | Log can become verified. Fix version-collision bug first | Same | **?** Needs snapshots; GC and undo-manager growth are known tensions **[reported]** | **?** same |
 | 5 AI peer | Unchanged | Unchanged (Python still builds steps) | Needs a Node bridge or Yjs edits from Python | **?** Edits must produce what the binding renders |
 | 6 Missed updates | Weak: needs step catch-up over a log with the collision bug | Same | Strong: state-vector sync is built in | Strong |
 | 7 Persistence | Strong: existing tables | Strong | Moderate: new binary state; JSON derived | Moderate: same |
-| 8 Package independence | Strong: pure Python | Weak: Node runtime | Weak: Node runtime | Strong: pure Python |
+| 8 Package independence | Strong: pure Python | Weak: Node runtime | Weak: Node runtime | Strong *if* Python can derive PM JSON itself; otherwise it needs Node too |
 | 9 Maturity / lock-in | `prosemirror-collab` is small and canonical. Python model has no upstream | Strong engine, bespoke glue | Yjs mature; Hocuspocus smaller, provider lock-in **[verify]** | Yjs mature; `pycrdt-websocket` **?** |
 | 10 Migration cost | Low for editor and chat; **high** to build the model | Moderate | **High**: editor, chat, history, converting stored docs | **High**, but no Node |
+| 11 Authorization | Existing per-field connection scoping carries over **[repo]** | Same | **?** Needs auth hooks and per-field documents or checks | **?** same |
 
 Yjs itself: MIT, 22.9k GitHub stars, ~113 open issues, ~700k weekly downloads, used in production by
 AFFiNE, Cargo, GitBook and Evernote; its README cites formal verification **[reported]**.
@@ -161,7 +168,7 @@ y-prosemirror". An XWiki forum thread about *removing* Hocuspocus also exists; i
 ## What the evidence does and does not support
 
 - **Supported:** the current design is the weakest on criteria 2 and 6, and those are the ones ADR 021
-  said would trigger a rethink. Doing nothing is not on the table.
+  said would trigger a rethink. Leaving §5 as written is hard to defend once the package is deployed for clients.
 - **Supported:** A1 is the largest *permanent* cost, per ADR 021. It is the option least likely to be
   chosen on merit.
 - **Not supported yet:** that Yjs beats a hardened step authority for *Astraeus*. Yjs wins on
@@ -181,24 +188,24 @@ write the deciding ADR (or amend this one before acceptance).
 
 **Acceptance suite** (Playwright with the preinstalled Chromium for browser cases):
 
-1. **Autocorrect-style batches.** Multi-step edits in a real browser (the bug that started this).
-2. **Human + AI concurrency.** The AI peer rewrites a paragraph while a human types in it and in
+T1. **Autocorrect-style batches.** Multi-step edits in a real browser (the bug that started this).
+T2. **Human + AI concurrency.** The AI peer rewrites a paragraph while a human types in it and in
    the next one; the result is deterministic and schema-valid.
-3. **Missed updates.** Client offline, server advances, client reconnects: no lost edits, no
+T3. **Missed updates.** Client offline, server advances, client reconnects: no lost edits, no
    duplicates, no manual recovery.
-4. **Convergence fuzz.** Random concurrent edits across N replicas with random disconnects; all
+T4. **Convergence fuzz.** Random concurrent edits across N replicas with random disconnects; all
    replicas equal at quiescence.
-5. **Durability.** Kill the server mid-edit; restart from a Litestream restore; no loss beyond the
+T5. **Durability.** Kill the server mid-edit; restart from a Litestream restore; no loss beyond the
    documented window.
-6. **Attribution.** For a sequence of human and AI edits, recover who made each, at what granularity.
-7. **History between publishes.** Rewind to a prior point; state the guarantees honestly.
-8. **Growth.** Document size after thousands of edits, with undo enabled.
-9. **JSON derivation.** `draft_body` JSON from the sync state validates against the ProseMirror schema
+T6. **Attribution.** For a sequence of human and AI edits, recover who made each, at what granularity.
+T7. **History between publishes.** Rewind to a prior point; state the guarantees honestly.
+T8. **Growth.** Document size after thousands of edits, with undo enabled.
+T9. **JSON derivation.** `draft_body` JSON from the sync state validates against the ProseMirror schema
    and equals what the editor shows.
-10. **Publish cycle.** Draft → publish → next draft: versions and history stay coherent (this also
+T10. **Publish cycle.** Draft → publish → next draft: versions and history stay coherent (this also
     exposes the existing version-collision bug).
 
-**Exit criteria.** An option is viable only if it passes 1–3, 5 and 9 and has a stated answer for 6–8.
+**Exit criteria.** An option is viable only if it passes T1–T3, T5 and T9 and has a stated answer for T6–T8, and for criterion 11.
 Between viable options, prefer the one that keeps the package pure Python, then the lower migration cost.
 
 **Reading to finish first [verify]:** the ProseMirror collab guide (reference authority and per-step
@@ -212,7 +219,7 @@ client IDs); Hocuspocus hooks, auth and persistence docs; the Yjs forum threads 
 - Nothing changes in production. The editor keeps `prosemirror-collab` with the #34 fix.
 - The version-collision bug in ADR 021 stays open until this is decided; it is cheap to fix
   independently if the answer is A, and moot if the answer is Yjs.
-- The spike costs a branch and a few days. Skipping it risks choosing on architecture taste, which is
+- The spike costs a branch and real engineering time (not estimated here). Skipping it risks choosing on architecture taste, which is
   how the current design acquired its unverified claims.
 
 ---
