@@ -435,6 +435,49 @@ separate fix **[repo]**:
   version, so a failed DB write is invisible and the version in memory runs ahead of `draft_version`.
 - The socket accepts any `field` (F7).
 
+### F10. Figma as a reference point for Path A
+
+Added after the first evidence pass, at Joel's request. **[checked]** at Figma's own posts, read through
+the same summarising fetch tool as everything else (no outside commentary was read):
+https://www.figma.com/blog/how-figmas-multiplayer-technology-works/ (Oct 2019),
+https://www.figma.com/blog/making-multiplayer-more-reliable/ (Oct 2022),
+https://www.figma.com/blog/rust-in-production-at-figma/ (May 2018),
+https://www.figma.com/blog/multiplayer-editing-in-figma/ (Sep 2016).
+
+- **Central authority, not a CRDT.** Figma rejected OT as "unnecessarily complex for our problem space" and
+  says "Figma isn't using true CRDTs… Since Figma is centralized (our server is the central authority), we
+  can simplify our system." The server keeps the latest value any client sent for each property of each
+  object.
+- **Conflicts are last-writer-wins per property.** Same property on the same object: the last value to
+  reach the server wins. Clients apply their own change at once and ignore conflicting server echoes until
+  it is confirmed.
+- **The server rejects invalid changes** (for example a parent change that would create a cycle in the
+  document tree). Child order uses fractional indexes.
+- **Reconnect:** the client downloads a fresh copy and reapplies its offline edits on top.
+- **Durability:** state lives in memory with a checkpoint every 30–60 s, plus (since 2022) a journal in
+  DynamoDB of incremental changes, each with a per-file incrementing sequence number. After a crash the
+  latest checkpoint is loaded and journal entries with higher sequence numbers are replayed. Figma reports
+  95% of edits saved within about 600 ms, a goal of under 1 s of loss, and over 2.2 billion changes a day.
+- **One process per document** (a Rust child process per document under a Node server, 2018).
+
+What this does and does not tell us:
+
+- **Supports** that a centrally ordered, server-validated design can be very smooth at scale, and that
+  its authors chose it over both OT and a full CRDT. It is the same shape as option A.
+- **Does not transfer:** the conflict rule. Property-level last-writer-wins suits independent properties
+  such as position or fill; two people typing in one paragraph need step rebasing. How Figma merges text
+  inside a text layer is **[unchecked]**; the posts I read do not say.
+- **Transfers directly:** a numbered journal (what `cms_steps` would become once the publish-cycle
+  version collision is fixed), server-side rejection of invalid changes (F1, F3), catch-up by loading a
+  known point and replaying later entries (F1, criterion 6), and a stated durability target to measure
+  T5 against (Hocuspocus defaults are 2 s / 10 s, F5).
+- **A hybrid is already implied:** ADR 021 §2 keeps structured fields (title, tags, selects) on REST
+  `PATCH` and defers a `{type: "field"}` socket message, which is the property-level model. Rich text
+  would stay on step rebasing **[inferred]**.
+- **Public delivery is untouched by any option.** The static site reads only published `body`; edits go
+  to `draft_body` and reach the site on publish (ADR 018 §1, 023). The sync engine is part of the editing
+  path only **[repo]**.
+
 ---
 
 ## Assessment
@@ -523,6 +566,10 @@ migration cost". That was my guess at a weighting and Joel has not confirmed it;
 question for Joel (see the reply that accompanies this change), and this section should be filled in
 from his answer.
 
+**Stated leaning (2026-10-03), not a decision:** after reading the plain-language walkthrough of this ADR
+and the Figma comparison (F10), Joel said he agrees with Path A. He has not yet given the criteria
+weights, so this records a leaning only; the spike and the deciding ADR still stand.
+
 **Still to read before the spike (everything else on the original list is done):**
 
 - Whether a stock JS `y-websocket` client interoperates with `pycrdt-websocket`, and how to mount its
@@ -560,3 +607,5 @@ from his answer.
    `y-prosemirror` delete-on-invalid behavior (F3), Yjs history trade-offs (F4), the missing
    catch-up and application in our authority versus the guide's (F1). Option A1 restated, tests T11–T13
    added, tie-break order withdrawn pending Joel's weights. Status remains Proposed.
+3. 2026-10-03 — Added F10 (Figma as a reference point for Path A) and recorded Joel's stated leaning
+   toward Path A. No weights given and no option chosen; status remains Proposed.
