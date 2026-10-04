@@ -558,6 +558,56 @@ describe('CollabConnection reconnect resume', () => {
     conn.destroy()
   })
 
+  it('warns if the server never answers a catch-up request (a server that predates it)', async () => {
+    const { getVersion } = await import('prosemirror-collab')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const conn = new CollabConnection({
+      view: makeMinimalView(),
+      schema: {},
+      documentId: 'doc-1',
+      cmsBase: 'https://cms.example.com',
+      initialVersion: 4,
+      toolbar: makeToolbar(),
+      clientID: 'abc',
+    })
+    sendableSteps.mockReturnValue({ steps: [{ toJSON: () => ({ stepType: 'replace' }) }], version: 4 })
+    getVersion.mockReturnValue(4)
+
+    conn._handleMessage({ type: 'init', version: 9, peers: [] })
+    vi.advanceTimersByTime(4900)
+    expect(warn).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(200)
+    expect(warn).toHaveBeenCalledTimes(1)
+
+    sendableSteps.mockReturnValue(null)
+    conn.destroy()
+  })
+
+  it('does not warn when the catch-up reply arrives', async () => {
+    const { getVersion } = await import('prosemirror-collab')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const conn = new CollabConnection({
+      view: makeMinimalView(),
+      schema: {},
+      documentId: 'doc-1',
+      cmsBase: 'https://cms.example.com',
+      initialVersion: 4,
+      toolbar: makeToolbar(),
+      clientID: 'abc',
+    })
+    sendableSteps.mockReturnValue({ steps: [{ toJSON: () => ({ stepType: 'replace' }) }], version: 4 })
+    getVersion.mockReturnValue(4)
+
+    conn._handleMessage({ type: 'init', version: 9, peers: [] })
+    conn._handleMessage({ type: 'steps', steps: [], clientIDs: [], version: 4 })
+    vi.advanceTimersByTime(10000)
+
+    expect(warn).not.toHaveBeenCalled()
+    sendableSteps.mockReturnValue(null)
+    getVersion.mockReturnValue(0)
+    conn.destroy()
+  })
+
   it('warns and keeps the pending steps when the server cannot catch the client up', async () => {
     const { getVersion } = await import('prosemirror-collab')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

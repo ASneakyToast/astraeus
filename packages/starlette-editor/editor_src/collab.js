@@ -23,6 +23,9 @@ import { stateForServerCopy } from './collab-sync.js'
 
 export { collab }
 
+/** How long to wait for a `catch_up` reply before warning that it was not served. */
+const CATCH_UP_TIMEOUT_MS = 5000
+
 export class CollabConnection {
   constructor({ view, schema, documentId, field, cmsBase, initialVersion, toolbar, clientID, apiKey = null }) {
     this.view = view              // EditorView instance
@@ -169,6 +172,7 @@ export class CollabConnection {
     }
 
     else if (msg.type === 'steps') {
+      this._catchUpAnswered()
       // prosemirror-collab counts steps; it does not know which version a step
       // belongs to. A batch that does not start exactly at our version (one that
       // raced ahead of a catch-up, one we already have) would be applied to the
@@ -203,6 +207,7 @@ export class CollabConnection {
     }
 
     else if (msg.type === 'resync_required') {
+      this._catchUpAnswered()
       // The server no longer has the steps between our version and its own, so
       // our pending steps cannot be rebased. Keep them and say so rather than
       // silently diverging or dropping them.
@@ -260,10 +265,29 @@ export class CollabConnection {
     this._requestCatchUp()
   }
 
-  /** Ask the server for the steps after our version (ADR 024). */
+  /**
+   * Ask the server for the steps after our version (ADR 024).
+   *
+   * A server that predates `catch_up` ignores it, which would leave pending
+   * edits unsaved without a word (they used to produce a warning). So if
+   * nothing answers, say so.
+   */
   _requestCatchUp() {
     if (this.ws?.readyState !== WebSocket.OPEN) return
-    this.ws.send(JSON.stringify({ type: 'catch_up', version: getVersion(this.view.state) }))
+    const version = getVersion(this.view.state)
+    this.ws.send(JSON.stringify({ type: 'catch_up', version }))
+    clearTimeout(this._catchUpTimer)
+    this._catchUpTimer = setTimeout(() => {
+      console.warn(
+        `[astraeus] Asked the server for the steps after version ${version} and got no answer. ` +
+        'Local edits based on that version cannot be rebased and have not been saved.',
+      )
+    }, CATCH_UP_TIMEOUT_MS)
+  }
+
+  _catchUpAnswered() {
+    clearTimeout(this._catchUpTimer)
+    this._catchUpTimer = null
   }
 
   _sendPendingSteps() {
@@ -296,6 +320,7 @@ export class CollabConnection {
     this._destroyed = true
     clearInterval(this._pingInterval)
     this._pingInterval = null
+    this._catchUpAnswered()
     if (this.ws) this.ws.close()
   }
 }
