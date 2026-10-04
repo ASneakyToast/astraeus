@@ -1,0 +1,281 @@
+// @vitest-environment jsdom
+/**
+ * The embed toolbar's draft picker: what it offers, what choosing does, and
+ * that drafts drawn onto the page are edited like any other card without being
+ * swept up by Discard or Publish.
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { EditToolbar } from '../embed/toolbar.js'
+import { getActiveChangesetId, setActiveChangesetId } from '../changeset-store.js'
+import { LENS_ALL, LENS_PROD, changesetLens, getLens, setLens } from '../embed/drafts.js'
+
+const CMS = 'https://cms.example.com'
+const flush = () => new Promise((r) => setTimeout(r, 0))
+
+const pm = (text) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] })
+const draft = (id, title) => ({
+  id,
+  doc_type: 'blog_post',
+  published: false,
+  has_draft: false,
+  body: { title, description: `About ${title}`, publish_date: '2026-09-01', body_markdown: pm('Body') },
+})
+const live = (id, title) => ({ ...draft(id, title), published: true })
+
+function mountPage({ withSlot = true } = {}) {
+  document.body.innerHTML = `
+    <div ${withSlot ? 'data-cms-list="blog_post"' : ''} id="feed">
+      <article data-cms-id="live-1" data-cms-type="blog_post">
+        <span data-cms-field="title">Live post</span>
+      </article>
+    </div>
+    ${withSlot ? `<template data-cms-draft-template="blog_post">
+      <article>
+        <span data-cms-field="title" data-cms-fill="title"></span>
+        <p data-cms-field="description" data-cms-fill="description"></p>
+      </article>
+    </template>` : ''}
+  `
+}
+
+/** Fake CMS: documents by id, the open changesets, and what the list endpoint says is unpublished. */
+function fakeCms({ docs = {}, changesets = [], failDrafts = false } = {}) {
+  const fetchMock = vi.fn(async (url) => {
+    const u = new URL(url)
+    const json = (data) => ({ ok: true, json: async () => data, headers: new Headers() })
+    if (u.pathname === '/api/changesets') return json({ changesets })
+    const cs = u.pathname.match(/^\/api\/changesets\/([^/]+)$/)
+    if (cs) return json(changesets.find((c) => c.id === cs[1]) ?? { documents: [] })
+    if (u.pathname === '/api/documents') {
+      if (failDrafts && u.searchParams.get('published') === 'false') return { ok: false, status: 500, json: async () => ({}) }
+      if (u.searchParams.get('published') === 'false') return json({ documents: Object.values(docs).filter((d) => !d.published) })
+      return json({ documents: [] })
+    }
+    const single = u.pathname.match(/^\/api\/documents\/([^/]+)$/)
+    if (single) return docs[single[1]] ? json(docs[single[1]]) : { ok: false, status: 404, json: async () => ({}) }
+    return { ok: false, status: 404, json: async () => ({}) }
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+function newToolbar() {
+  const toolbar = new EditToolbar({
+    cmsBase: CMS,
+    cmsElements: [...document.querySelectorAll('[data-cms-id]')],
+  })
+  toolbar.mount()
+  return toolbar
+}
+
+const picker = () => document.querySelector('#astraeus-toolbar select')
+const optionValues = () => [...picker().options].map((o) => o.value)
+const feedIds = () => [...document.querySelectorAll('#feed [data-cms-id]')].map((el) => el.dataset.cmsId)
+
+beforeEach(() => {
+  localStorage.clear()
+  mountPage()
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+  document.body.innerHTML = ''
+})
+
+describe('the Edit button and picker', () => {
+  it('shows an Edit button and a picker on a listing that can show drafts', async () => {
+    fakeCms()
+    newToolbar()
+    const bar = document.getElementById('astraeus-toolbar')
+    expect(bar.textContent).toContain('Edit')
+    expect(picker()).not.toBeNull()
+  })
+
+  it('has no picker on a page with nowhere to put drafts', async () => {
+    mountPage({ withSlot: false })
+    fakeCms()
+    newToolbar()
+    expect(picker()).toBeNull()
+  })
+
+  it('offers live + all drafts, live only, and each open changeset', async () => {
+    fakeCms({
+      changesets: [
+        { id: 'cs-a', title: 'Oct 3', documents: [{ id: 'x' }, { id: 'y' }] },
+        { id: 'cs-b', title: '', documents: [] },
+      ],
+    })
+    newToolbar()
+    await flush()
+
+    expect(optionValues()).toEqual([LENS_ALL, LENS_PROD, changesetLens('cs-a'), changesetLens('cs-b')])
+    const labels = [...picker().options].map((o) => o.textContent)
+    expect(labels[2]).toBe('Live + 📋 Oct 3 · 2 docs')
+    expect(labels[3]).toBe('Live + 📋 Untitled · 0 docs')
+  })
+
+  it('starts on all drafts', async () => {
+    fakeCms()
+    newToolbar()
+    expect(picker().value).toBe(LENS_ALL)
+  })
+
+  it('starts on the remembered choice', async () => {
+    setLens(LENS_PROD)
+    fakeCms()
+    newToolbar()
+    expect(picker().value).toBe(LENS_PROD)
+  })
+
+  it('falls back to all drafts when the remembered changeset has been published or deleted', async () => {
+    setLens(changesetLens('gone'))
+    fakeCms({ changesets: [{ id: 'cs-a', title: 'Oct 3', documents: [] }] })
+    const toolbar = newToolbar()
+    await flush()
+
+    expect(toolbar.lens).toBe(LENS_ALL)
+    expect(getLens()).toBe(LENS_ALL)
+    expect(picker().value).toBe(LENS_ALL)
+  })
+
+  it('still works if the changesets cannot be loaded', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
+    newToolbar()
+    await flush()
+    expect(optionValues()).toEqual([LENS_ALL, LENS_PROD])
+  })
+
+  it('keeps a remembered changeset selectable before the list has loaded', async () => {
+    setLens(changesetLens('cs-a'))
+    fakeCms({ changesets: [{ id: 'cs-a', title: 'Oct 3', documents: [] }] })
+    newToolbar()
+    expect(picker().value).toBe(changesetLens('cs-a'))
+  })
+})
+
+describe('choosing a lens', () => {
+  it('remembers it', async () => {
+    fakeCms()
+    const toolbar = newToolbar()
+    await toolbar._setLens(LENS_PROD)
+    expect(getLens()).toBe(LENS_PROD)
+  })
+
+  it('makes a chosen changeset the one edits are saved into', async () => {
+    fakeCms({ changesets: [{ id: 'cs-a', title: 'Oct 3', documents: [] }] })
+    const toolbar = newToolbar()
+    await flush()
+    await toolbar._setLens(changesetLens('cs-a'))
+    expect(getActiveChangesetId()).toBe('cs-a')
+  })
+
+  it('leaves the active changeset alone when choosing prod or all drafts', async () => {
+    setActiveChangesetId('cs-working')
+    fakeCms()
+    const toolbar = newToolbar()
+    await toolbar._setLens(LENS_PROD)
+    await toolbar._setLens(LENS_ALL)
+    expect(getActiveChangesetId()).toBe('cs-working')
+  })
+
+  it('does not change the page before Edit is pressed', async () => {
+    fakeCms({ docs: { d1: draft('d1', 'Unreleased') } })
+    const toolbar = newToolbar()
+    await toolbar._setLens(LENS_ALL)
+    expect(feedIds()).toEqual(['live-1'])
+  })
+})
+
+describe('pressing Edit', () => {
+  it('draws the unpublished posts into the feed and makes them editable', async () => {
+    fakeCms({ docs: { d1: draft('d1', 'Unreleased'), 'live-1': live('live-1', 'Live post') } })
+    const toolbar = newToolbar()
+    await toolbar._startEditing()
+
+    expect(feedIds()).toEqual(['d1', 'live-1'])
+    const card = document.querySelector('[data-cms-id="d1"]')
+    expect(card.querySelector('[data-cms-field="title"]').textContent).toBe('Unreleased')
+    expect(card.querySelector('[data-cms-field="title"]').contentEditable).toBe('true')
+    expect(toolbar.state).toBe('editing')
+  })
+
+  it('shows nothing extra on "live only"', async () => {
+    setLens(LENS_PROD)
+    fakeCms({ docs: { d1: draft('d1', 'Unreleased'), 'live-1': live('live-1', 'Live post') } })
+    const toolbar = newToolbar()
+    await toolbar._startEditing()
+    expect(feedIds()).toEqual(['live-1'])
+    expect(toolbar.state).toBe('editing')
+  })
+
+  it('keeps drawn drafts out of Discard and the single-document Publish', async () => {
+    fakeCms({ docs: { d1: draft('d1', 'Unreleased'), 'live-1': live('live-1', 'Live post') } })
+    const toolbar = newToolbar()
+    await toolbar._startEditing()
+
+    // Discard wipes pending edits; a draft you only looked at must not be swept up.
+    expect(toolbar.activeElements.map((el) => el.dataset.cmsId)).toEqual(['live-1'])
+    // But the toolbar knows about it.
+    expect(toolbar.draftCards.map((el) => el.dataset.cmsId)).toEqual(['d1'])
+  })
+
+  it('still lets the live posts be edited when the drafts cannot be loaded, and says so', async () => {
+    fakeCms({ docs: { 'live-1': live('live-1', 'Live post') }, failDrafts: true })
+    const toolbar = newToolbar()
+    await toolbar._startEditing()
+
+    expect(toolbar.state).toBe('editing')
+    expect(document.querySelector('[data-cms-id="live-1"] [data-cms-field="title"]').contentEditable).toBe('true')
+    expect(document.getElementById('astraeus-toolbar').textContent).toContain('Could not load drafts')
+  })
+
+  it('still offers the picker while editing', async () => {
+    fakeCms()
+    const toolbar = newToolbar()
+    await toolbar._startEditing()
+    expect(picker()).not.toBeNull()
+  })
+})
+
+describe('switching lens while editing', () => {
+  it('adds the drafts a wider lens reveals, editable straight away', async () => {
+    setLens(LENS_PROD)
+    fakeCms({ docs: { d1: draft('d1', 'Unreleased'), 'live-1': live('live-1', 'Live post') } })
+    const toolbar = newToolbar()
+    await toolbar._startEditing()
+    expect(feedIds()).toEqual(['live-1'])
+
+    await toolbar._setLens(LENS_ALL)
+
+    expect(feedIds()).toEqual(['d1', 'live-1'])
+    expect(document.querySelector('[data-cms-id="d1"] [data-cms-field="title"]').contentEditable).toBe('true')
+  })
+
+  it('removes the drafts a narrower lens hides, and keeps the live posts', async () => {
+    fakeCms({ docs: { d1: draft('d1', 'Unreleased'), 'live-1': live('live-1', 'Live post') } })
+    const toolbar = newToolbar()
+    await toolbar._startEditing()
+    expect(feedIds()).toEqual(['d1', 'live-1'])
+
+    await toolbar._setLens(LENS_PROD)
+
+    expect(feedIds()).toEqual(['live-1'])
+    expect(toolbar.draftCards).toEqual([])
+  })
+
+  it('narrows to one changeset', async () => {
+    fakeCms({
+      docs: { d1: draft('d1', 'In the set'), d2: draft('d2', 'Not in the set'), 'live-1': live('live-1', 'Live post') },
+      changesets: [{ id: 'cs-a', title: 'Oct 3', documents: [{ id: 'd1', doc_type: 'blog_post' }] }],
+    })
+    const toolbar = newToolbar()
+    await toolbar._startEditing()
+    expect(feedIds().sort()).toEqual(['d1', 'd2', 'live-1'])
+
+    await toolbar._setLens(changesetLens('cs-a'))
+
+    expect(feedIds().sort()).toEqual(['d1', 'live-1'])
+  })
+})

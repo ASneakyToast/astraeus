@@ -33,9 +33,11 @@ if (cmsBase) {
     }
     if (!authenticated) return
 
-    // Find all CMS-annotated elements on the page
+    // Find all CMS-annotated elements on the page. A listing with a card
+    // template still gets the toolbar with none: its drafts are drawn on Edit.
     const cmsElements = Array.from(document.querySelectorAll('[data-cms-id]'))
-    if (cmsElements.length === 0) return
+    const { findDraftSlots } = await import('./drafts.js')
+    if (cmsElements.length === 0 && findDraftSlots().length === 0) return
 
     // Boot the toolbar
     const { EditToolbar } = await import('./toolbar.js')

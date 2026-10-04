@@ -2,13 +2,23 @@
  * EditToolbar — floating live-editing toolbar for the Astraeus embed script.
  *
  * States:
- *   viewing    — "✏️ Edit draft" button
- *   editing    — "✓ Saved" indicator + Discard + Publish
+ *   viewing    — "✏️ Edit" button + the draft picker
+ *   editing    — "✓ Saved" indicator + Discard + Publish + the draft picker
  *   saving     — "⏳ Saving..." indicator + Discard + Publish
  *   publishing — spinner
  *   published  — "✓ Published — rebuilding site"
  */
 import { getActiveChangesetId, setActiveChangesetId } from '../changeset-store.js'
+import {
+  LENS_ALL,
+  LENS_PROD,
+  changesetLens,
+  changesetOfLens,
+  findDraftSlots,
+  getLens,
+  setLens,
+  syncDraftCards,
+} from './drafts.js'
 
 export class EditToolbar {
   constructor({ cmsBase, cmsElements, reloadUrl = null }) {
@@ -16,7 +26,12 @@ export class EditToolbar {
     this.cmsElements = cmsElements  // all [data-cms-id] elements on page
     this.reloadUrl = reloadUrl      // optional dev-server reload endpoint
     this.state = 'viewing'          // 'viewing' | 'editing' | 'saving' | 'publishing' | 'published'
-    this.activeElements = []        // every [data-cms-id] activated for editing
+    this.activeElements = []        // live [data-cms-id] cards on the page: what Discard and the Publish fallback act on
+    this.draftCards = []            // cards drawn for unpublished posts. Not in activeElements: Discard would wipe
+                                    // a draft the user only looked at, and Publish would ship one nobody chose
+    this.lens = getLens()           // which unpublished posts to show: 'all' | 'prod' | 'cs:<id>'
+    this.changesets = []            // open changesets, for the picker
+    this._draftError = null         // message shown when the drafts could not be loaded
     this.el = null                  // the toolbar DOM element
     this.changesetPanel = null      // set externally by index.js after ChangesetPanel is created
     this._chatPanel = null          // set via setChatPanel()
@@ -54,6 +69,7 @@ export class EditToolbar {
     `
     document.body.appendChild(this.el)
     this._render()
+    this._loadChangesets()
   }
 
   _render() {
@@ -61,8 +77,10 @@ export class EditToolbar {
     this.el.innerHTML = ''
 
     if (this.state === 'viewing') {
-      const btn = this._makeButton('✏️ Edit draft', 'primary', () => this._startEditing())
+      const btn = this._makeButton('✏️ Edit', 'primary', () => this._startEditing())
       this.el.appendChild(btn)
+      const picker = this._makeLensPicker()
+      if (picker) this.el.appendChild(picker)
     }
 
     if (this.state === 'editing' || this.state === 'saving') {
@@ -71,8 +89,9 @@ export class EditToolbar {
       closeBtn.title = 'Stop editing — your draft is kept and can be resumed later'
       // A failed save takes over the indicator — the whole point is that it is
       // impossible to miss, unlike the silent failure this replaces.
-      const saveIndicator = this._saveError
-        ? this._makeIndicator(this._saveError, '#e04b45')
+      const failure = this._saveError ?? this._draftError
+      const saveIndicator = failure
+        ? this._makeIndicator(failure, '#e04b45')
         : this._makeIndicator(this.state === 'saving' ? '⏳ Saving...' : '✓ Saved')
       const discardBtn = this._makeButton('Discard draft', 'danger', () => this._discardDraft())
       const publishBtn = this._makeButton('Publish', 'primary', () => this._publish())
@@ -80,6 +99,8 @@ export class EditToolbar {
       this.el.appendChild(saveIndicator)
       this.el.appendChild(discardBtn)
       this.el.appendChild(publishBtn)
+      const picker = this._makeLensPicker()
+      if (picker) this.el.appendChild(picker)
       if (this.changesetPanel) {
         const csBtn = this._makeButton('📋 Changesets', 'ghost', () => this.changesetPanel.toggle())
         this.el.appendChild(csBtn)
@@ -100,6 +121,120 @@ export class EditToolbar {
 
     if (this.state === 'published') {
       this.el.appendChild(this._makeIndicator('✓ Published — site rebuilding (~30s)'))
+    }
+  }
+
+  // ── Which drafts to show ───────────────────────────────────────────────────
+
+  /** The pick list: live only, every draft, or one open changeset. */
+  _lensOptions() {
+    const count = (cs) => {
+      const n = (cs.documents ?? []).length
+      return `${n} doc${n === 1 ? '' : 's'}`
+    }
+    const options = [
+      { value: LENS_ALL, label: 'Live + all drafts' },
+      { value: LENS_PROD, label: 'Live only (prod)' },
+      ...this.changesets.map((cs) => ({
+        value: changesetLens(cs.id),
+        label: `Live + 📋 ${cs.title || 'Untitled'} · ${count(cs)}`,
+      })),
+    ]
+    // A remembered changeset before the list has loaded: keep the select from going blank.
+    if (!options.some((o) => o.value === this.lens)) {
+      options.push({ value: this.lens, label: 'Live + 📋 changeset' })
+    }
+    return options
+  }
+
+  /**
+   * The picker, or null on a page with no list to put drafts in (a post's own
+   * page has nothing for it to do).
+   */
+  _makeLensPicker() {
+    if (!findDraftSlots().length) return null
+
+    const select = document.createElement('select')
+    select.setAttribute('aria-label', 'Which drafts to show')
+    select.title = 'Which unpublished posts to show alongside the live ones'
+    select.style.cssText = `
+      padding: 5px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px; /* under 16px, iOS zooms the page when a control takes focus (ADR 022) */
+      font-weight: 500;
+      font-family: inherit;
+      line-height: 1.2;
+      max-width: 220px;
+      background: transparent;
+      color: #e8e8e8;
+      border: 1px solid #3a3a3a;
+    `
+    for (const { value, label } of this._lensOptions()) {
+      const option = document.createElement('option')
+      option.value = value
+      option.textContent = label
+      option.style.cssText = 'background:#1a1a1a;color:#e8e8e8;'
+      select.appendChild(option)
+    }
+    select.value = this.lens
+    select.addEventListener('change', () => this._setLens(select.value))
+    return select
+  }
+
+  async _loadChangesets() {
+    if (!findDraftSlots().length) return
+    try {
+      const res = await fetch(`${this.cmsBase}/api/changesets?status=open&include_documents=true`, {
+        credentials: 'include',
+      })
+      if (!res.ok) return
+      this.changesets = (await res.json()).changesets ?? []
+    } catch {
+      return // the picker still offers live-only and all drafts
+    }
+    // A remembered changeset that has since been published or deleted.
+    const csId = changesetOfLens(this.lens)
+    if (csId && !this.changesets.some((cs) => cs.id === csId)) {
+      this.lens = LENS_ALL
+      setLens(this.lens)
+    }
+    this._render()
+  }
+
+  /**
+   * Change which drafts show. Picking a changeset also makes it the one edits
+   * are saved into, so what you see is what you are working in. While editing
+   * the page updates at once; otherwise it applies when you press Edit.
+   */
+  async _setLens(lens) {
+    this.lens = lens
+    setLens(lens)
+    const csId = changesetOfLens(lens)
+    if (csId) setActiveChangesetId(csId)
+    if (this.state === 'editing' || this.state === 'saving') {
+      await this._syncDraftCards({ activate: true })
+    }
+  }
+
+  /** Draw cards for the unpublished posts the lens asks for; optionally make them editable. */
+  async _syncDraftCards({ activate }) {
+    if (!findDraftSlots().length) return
+    try {
+      const { added } = await syncDraftCards({ cmsBase: this.cmsBase, lens: this.lens })
+      this._draftError = null
+      this.draftCards = [...document.querySelectorAll('[data-cms-draft-card]')]
+      if (activate) await this._activateCards(added)
+    } catch {
+      this._draftError = '⚠ Could not load drafts'
+    }
+    this._render()
+  }
+
+  async _activateCards(elements) {
+    const { activateEditMode } = await import('./edit-mode.js')
+    for (const el of elements) {
+      await activateEditMode(el, { cmsBase: this.cmsBase, toolbar: this })
     }
   }
 
@@ -168,7 +303,11 @@ export class EditToolbar {
     // navigating away.
     suppressAnchorNavigationWhileEditing()
     this.activeElements = [...this.cmsElements]
-    for (const el of this.activeElements) {
+    // Unpublished posts have no card in the built page: draw them first, so
+    // they are edited like the rest. A failure leaves the live cards editable.
+    await this._syncDraftCards({ activate: false })
+    this._loadChangesets()
+    for (const el of [...this.activeElements, ...this.draftCards]) {
       await activateEditMode(el, { cmsBase: this.cmsBase, toolbar: this })
     }
     this.setState('editing')

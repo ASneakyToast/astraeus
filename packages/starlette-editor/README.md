@@ -134,6 +134,42 @@ All ProseMirror packages are bundled from npm — no CDN dependency at runtime.
 
 ---
 
+## Inline editing on a static site
+
+A site loads `/editor/embed.js` and the editor edits the page in place when you are logged in. The page tells it what is editable:
+
+| Attribute | On | Meaning |
+|---|---|---|
+| `data-cms-id`, `data-cms-type` | a card | The document this card shows |
+| `data-cms-field="title"` | an element in the card | The field that element edits |
+| `data-cms-collapsible` | a body field | Show an Expand toggle instead of mounting the editor straight away |
+
+### Showing drafts on a listing
+
+A static site is built from published documents, so a post that has never been published has no card to edit. A listing can opt in to having the editor draw them in the browser, while editing:
+
+```html
+<div data-cms-list="blog_post"> …the built cards… </div>
+
+<template data-cms-draft-template="blog_post">
+  <article>
+    <time data-cms-fill="publish_date" data-cms-fill-format="date"></time>
+    <span data-cms-field="title" data-cms-fill="title"></span>
+    <p data-cms-field="description" data-cms-fill="description"></p>
+    <div data-cms-field="body_markdown" data-cms-collapsible
+         data-cms-fill="body_markdown" data-cms-fill-format="excerpt"></div>
+  </article>
+</template>
+```
+
+The template holds one card, built from the same markup and classes as a real one so the site's own styles apply. `data-cms-fill="<field>"` sets that element's text from the draft; `data-cms-fill-format` is `date` or `excerpt` (plain text of a rich-text field, shortened).
+
+The toolbar's picker decides which drafts appear: **Live + all drafts** (the default), **Live only**, or **Live + one open changeset**. Choosing a changeset also makes it the one edits are saved into. The choice is remembered per browser. Drawn drafts are labelled "Draft · not live"; live posts with unpublished edits are labelled "Unpublished edits". Neither Discard nor the single-document Publish fallback touches a drawn draft, so a post you only looked at is never wiped or shipped.
+
+Reload (Close, Discard, Publish) returns the page to what visitors see.
+
+---
+
 ## Field type mapping
 
 | Python field class | Editor widget |

@@ -136,12 +136,12 @@ describe('EditToolbar', async () => {
     expect(el.textContent).toContain('Published')
   })
 
-  it('viewing state renders an Edit draft button', () => {
+  it('viewing state renders an Edit button', () => {
     const toolbar = new EditToolbar({ cmsBase: 'https://cms.example.com', cmsElements: [] })
     toolbar.mount()
     // viewing is initial state
     const el = document.getElementById('astraeus-toolbar')
-    expect(el.textContent).toContain('Edit draft')
+    expect(el.textContent).toContain('Edit')
   })
 
   it('_publish() with no changeset publishes the one active document', async () => {
@@ -291,6 +291,38 @@ describe('activateField field-type detection', async () => {
     })
 
     expect(el.contentEditable).toBe('true')
+  })
+
+  it('shows the draft value in a plain text field, since the page was built from the published one', async () => {
+    const el = document.createElement('h1')
+    el.textContent = 'Published title'
+    document.body.appendChild(el)
+
+    await activateField(el, {
+      fieldName: 'title',
+      fieldValue: 'Draft title',
+      docId: 'doc-1',
+      cmsBase: 'https://cms.example.com',
+      toolbar: { setState: vi.fn() },
+    })
+
+    expect(el.textContent).toBe('Draft title')
+  })
+
+  it('leaves a text field that has markup inside alone', async () => {
+    const el = document.createElement('p')
+    el.innerHTML = 'Some <em>marked up</em> text'
+    document.body.appendChild(el)
+
+    await activateField(el, {
+      fieldName: 'description',
+      fieldValue: 'Something else',
+      docId: 'doc-1',
+      cmsBase: 'https://cms.example.com',
+      toolbar: { setState: vi.fn() },
+    })
+
+    expect(el.innerHTML).toBe('Some <em>marked up</em> text')
   })
 
   it('makes plain string fields contentEditable for <p> tag', async () => {

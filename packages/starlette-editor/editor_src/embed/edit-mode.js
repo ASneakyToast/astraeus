@@ -174,6 +174,9 @@ export async function activateField(el, { fieldName, fieldValue, docId, cmsBase,
 
   // ── 3. Simple text fields (h1–h6, p, span) ──────────────────────────────────
   if (typeof fieldValue === 'string' && ['h1','h2','h3','h4','h5','h6','p','span'].includes(tag)) {
+    // The page was built from the published copy; show the draft being edited.
+    // Only a leaf element — one with markup inside would lose it.
+    if (el.children.length === 0 && el.textContent !== fieldValue) el.textContent = fieldValue
     el.contentEditable = 'true'
     el.style.outline = '1px dashed rgba(37, 99, 235, 0.5)'
     el.style.minHeight = '1em'
