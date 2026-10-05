@@ -166,7 +166,13 @@ The template holds one card, built from the same markup and classes as a real on
 
 The toolbar's picker decides which drafts appear: **Live + all drafts** (the default), **Live only**, or **Live + one open changeset**. Choosing a changeset also makes it the one edits are saved into. The choice is remembered per browser. Drawn drafts are labelled "Draft · not live"; live posts with unpublished edits are labelled "Unpublished edits". Neither Discard nor the single-document Publish fallback touches a drawn draft, so a post you only looked at is never wiped or shipped.
 
+**Publish** ships the changeset you are working in. If this browser has not picked one (a phone, a fresh login), it ships the CMS's default changeset (`CMS(default_changeset=…)`, [ADR 025](../../docs/decisions/025-default-changeset.md)), and the confirm names it and how many documents it holds. With no default and nothing picked, it publishes the one post on the page.
+
 Reload (Close, Discard, Publish) returns the page to what visitors see.
+
+### The editor's own chrome
+
+The changeset panel, chat panel, publish drawer and toasts are written against the shared design tokens and `editor.css` classes. A host site loads neither (and must not: `tokens.css` defines `:root` variables and `editor.css` styles `.btn`), so `embed/styles.js` supplies what they need, scoped to the editor's own elements, and `embed-styles.test.js` keeps its token values equal to `tokens.css`. Add a token to a panel and that test fails until it is in `CHROME_TOKENS`.
 
 ---
 
