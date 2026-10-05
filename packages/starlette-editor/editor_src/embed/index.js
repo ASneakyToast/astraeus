@@ -39,6 +39,12 @@ if (cmsBase) {
     const { findDraftSlots } = await import('./drafts.js')
     if (cmsElements.length === 0 && findDraftSlots().length === 0) return
 
+    // The panels and publish drawer are written against design tokens and
+    // editor.css classes the host never loads; supply them, scoped to the
+    // editor's own elements (see styles.js).
+    const { injectChromeStyles } = await import('./styles.js')
+    injectChromeStyles()
+
     // Boot the toolbar
     const { EditToolbar } = await import('./toolbar.js')
     const toolbar = new EditToolbar({ cmsBase, cmsElements, reloadUrl })
