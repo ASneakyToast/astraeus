@@ -63,7 +63,10 @@ function fakeCms({ unpublished = [], byId = {}, edited = [], changesets = {}, fa
     const json = (data) => ({ ok: true, json: async () => data })
     if (u.pathname === '/api/documents') {
       if (failList) return { ok: false, status: 500, json: async () => ({}) }
-      if (u.searchParams.get('published') === 'false') return json({ documents: unpublished })
+      if (u.searchParams.get('published') === 'false') {
+        const type = u.searchParams.get('type')
+        return json({ documents: unpublished.filter((d) => !type || d.doc_type === type) })
+      }
       if (u.searchParams.get('has_draft') === 'true') return json({ documents: edited.map((id) => ({ id })) })
     }
     const single = u.pathname.match(/^\/api\/documents\/([^/]+)$/)
@@ -273,5 +276,127 @@ describe('syncDraftCards', () => {
     const { added } = await syncDraftCards({ cmsBase: CMS, lens: LENS_ALL })
     expect(added).toEqual([])
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A feed that shows several document types
+// ---------------------------------------------------------------------------
+
+const definition = (id, body = {}, extra = {}) => ({
+  id,
+  doc_type: 'definition',
+  slug: id,
+  published: false,
+  has_draft: false,
+  draft_deleted: null,
+  body: { term: `Term ${id}`, definition: `What ${id} means.`, personal_notes: `My take on ${id}.`, publish_date: '2026-09-15', ...body },
+  ...extra,
+})
+
+/** One feed holding posts and definitions, with a card template for each. */
+function mountMixedPage({ definitionTemplate = true } = {}) {
+  document.body.innerHTML = `
+    <div data-cms-list="blog_post definition" id="feed">
+      <article data-cms-id="live-1" data-cms-type="blog_post"><span data-cms-field="title">Live</span></article>
+      <article data-type="definition" id="live-def"><span>A live definition (not editable here)</span></article>
+    </div>
+    <template data-cms-draft-template="blog_post">
+      <article class="log-record">
+        <span data-cms-field="title" data-cms-fill="title"></span>
+      </article>
+    </template>
+    ${definitionTemplate ? `<template data-cms-draft-template="definition">
+      <article class="log-record" data-type="definition">
+        <time data-cms-fill="publish_date" data-cms-fill-format="date"></time>
+        <h2><span data-cms-fill="term"></span></h2>
+        <blockquote><p data-cms-fill="definition" data-cms-fill-format="excerpt"></p></blockquote>
+        <p data-cms-fill="personal_notes" data-cms-fill-format="excerpt"></p>
+      </article>
+    </template>` : ''}
+  `
+}
+
+describe('a feed that shows several document types', () => {
+  const draftIds = () => [...document.querySelectorAll('#feed [data-cms-draft-card]')].map((el) => el.dataset.cmsId)
+
+  beforeEach(() => mountMixedPage())
+
+  it('finds one slot per type that has a template', () => {
+    const slots = findDraftSlots()
+    expect(slots.map((s) => s.docType)).toEqual(['blog_post', 'definition'])
+    expect(slots[0].list).toBe(slots[1].list)
+  })
+
+  it('ignores a type named by the feed that has no template', () => {
+    mountMixedPage({ definitionTemplate: false })
+    expect(findDraftSlots().map((s) => s.docType)).toEqual(['blog_post'])
+  })
+
+  it('draws a definition from its own template', async () => {
+    fakeCms({ unpublished: [definition('d1')] })
+    const { added } = await syncDraftCards({ cmsBase: CMS, lens: LENS_ALL })
+
+    expect(added).toHaveLength(1)
+    const card = added[0]
+    expect(card.dataset.cmsId).toBe('d1')
+    expect(card.dataset.cmsType).toBe('definition')
+    expect(card.querySelector('[data-cms-fill="term"]').textContent).toBe('Term d1')
+    expect(card.querySelector('[data-cms-fill="definition"]').textContent).toBe('What d1 means.')
+    expect(card.querySelector('[data-cms-fill="personal_notes"]').textContent).toBe('My take on d1.')
+    expect(card.querySelector('time').textContent).toBe('September 15, 2026')
+    expect(card.querySelector('[data-cms-draft-pill="draft"]')).not.toBeNull()
+  })
+
+  it('draws both types in one feed, each from its own template', async () => {
+    fakeCms({ unpublished: [doc('p1'), definition('d1')] })
+    const { added } = await syncDraftCards({ cmsBase: CMS, lens: LENS_ALL })
+
+    expect(added.map((el) => `${el.dataset.cmsType}:${el.dataset.cmsId}`).sort()).toEqual([
+      'blog_post:p1',
+      'definition:d1',
+    ])
+    expect(document.querySelector('[data-cms-id="p1"] [data-cms-fill="title"]').textContent).toBe('Title p1')
+    expect(document.querySelector('[data-cms-id="d1"] [data-cms-fill="term"]').textContent).toBe('Term d1')
+  })
+
+  it('does not let one type\'s sync remove the other type\'s cards', async () => {
+    fakeCms({ unpublished: [doc('p1'), definition('d1')] })
+    await syncDraftCards({ cmsBase: CMS, lens: LENS_ALL })
+    await syncDraftCards({ cmsBase: CMS, lens: LENS_ALL })
+
+    expect(draftIds().sort()).toEqual(['d1', 'p1'])
+  })
+
+  it('drops both types when the lens no longer asks for them, and keeps the live cards', async () => {
+    fakeCms({ unpublished: [doc('p1'), definition('d1')] })
+    await syncDraftCards({ cmsBase: CMS, lens: LENS_ALL })
+    await syncDraftCards({ cmsBase: CMS, lens: LENS_PROD })
+
+    expect(draftIds()).toEqual([])
+    expect(document.getElementById('live-def')).not.toBeNull()
+    expect(document.querySelector('[data-cms-id="live-1"]')).not.toBeNull()
+  })
+
+  it('shows a definition that is in the chosen changeset, and not one that is not', async () => {
+    fakeCms({
+      unpublished: [definition('in-cs'), definition('elsewhere'), doc('post-elsewhere')],
+      changesets: { 'cs-1': [{ id: 'in-cs', doc_type: 'definition' }] },
+    })
+    const { added } = await syncDraftCards({ cmsBase: CMS, lens: changesetLens('cs-1') })
+
+    expect(added.map((el) => el.dataset.cmsId)).toEqual(['in-cs'])
+  })
+
+  it('names an untitled definition rather than drawing an empty heading', async () => {
+    fakeCms({ unpublished: [definition('d1', { term: '' })] })
+    const { added } = await syncDraftCards({ cmsBase: CMS, lens: LENS_ALL })
+    expect(added[0].querySelector('[data-cms-fill="term"]').textContent).toBe('Untitled draft')
+  })
+
+  it('copes with a definition that has no personal notes', async () => {
+    fakeCms({ unpublished: [definition('d1', { personal_notes: undefined })] })
+    const { added } = await syncDraftCards({ cmsBase: CMS, lens: LENS_ALL })
+    expect(added[0].querySelector('[data-cms-fill="personal_notes"]').textContent).toBe('')
   })
 })

@@ -8,11 +8,14 @@
  *
  * A site opts in with two attributes:
  *
- *   <div data-cms-list="blog_post"> …cards… </div>
+ *   <div data-cms-list="blog_post definition"> …cards… </div>
  *   <template data-cms-draft-template="blog_post"> <article>…</article> </template>
+ *   <template data-cms-draft-template="definition"> <article>…</article> </template>
  *
- * The template holds ONE card, built from the same markup and classes as a real
- * one so the site's own styles apply. Inside it:
+ * A feed may name several document types, space-separated, one template each.
+ * A type with no template is simply not drawn. A template holds ONE card, built
+ * from the same markup and classes as a real one so the site's own styles
+ * apply. Inside it:
  *   data-cms-field="title"      the field the editor makes editable (as on real cards)
  *   data-cms-fill="title"       the element's text is set from that field
  *   data-cms-fill-format="date" | "excerpt"   how to show it (optional)
@@ -58,13 +61,17 @@ export function setLens(lens) {
 // Page contract
 // ────────────────────────────────────────────────────────────────────────────
 
-/** Lists on this page that have a card template to render drafts from. */
+/**
+ * Each (list, document type) on this page that has a card template to render
+ * drafts from. A list naming two types with a template each is two slots.
+ */
 export function findDraftSlots(root = document) {
   const slots = []
   for (const list of root.querySelectorAll('[data-cms-list]')) {
-    const docType = list.dataset.cmsList
-    const template = root.querySelector(`template[data-cms-draft-template="${docType}"]`)
-    if (template) slots.push({ list, template, docType })
+    for (const docType of list.dataset.cmsList.split(/\s+/).filter(Boolean)) {
+      const template = root.querySelector(`template[data-cms-draft-template="${docType}"]`)
+      if (template) slots.push({ list, template, docType })
+    }
   }
   return slots
 }
@@ -188,7 +195,8 @@ export function renderDraftCard(template, doc) {
     const field = el.dataset.cmsFill
     fill(el, body[field], el.dataset.cmsFillFormat)
   }
-  const title = card.querySelector('[data-cms-fill="title"]')
+  // What names the document: a post's title, a definition's term.
+  const title = card.querySelector('[data-cms-fill="title"], [data-cms-fill="term"]')
   if (title && !title.textContent) title.textContent = 'Untitled draft'
 
   addPill(card, 'draft', 'Draft · not live')
@@ -221,9 +229,10 @@ export async function syncDraftCards({ cmsBase, lens, root = document }) {
       if (editedIds.has(card.dataset.cmsId)) addPill(card, 'edited', 'Unpublished edits')
     }
 
+    // Only this type's cards: a feed shared by several types syncs each in turn.
     const wanted = new Map(docs.map((d) => [d.id, d]))
     for (const card of list.querySelectorAll('[data-cms-draft-card]')) {
-      if (!wanted.has(card.dataset.cmsId)) card.remove()
+      if (card.dataset.cmsType === docType && !wanted.has(card.dataset.cmsId)) card.remove()
     }
 
     const onPage = new Set([...root.querySelectorAll('[data-cms-id]')].map((el) => el.dataset.cmsId))

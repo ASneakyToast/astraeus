@@ -162,7 +162,9 @@ A static site is built from published documents, so a post that has never been p
 </template>
 ```
 
-The template holds one card, built from the same markup and classes as a real one so the site's own styles apply. `data-cms-fill="<field>"` sets that element's text from the draft; `data-cms-fill-format` is `date` or `excerpt` (plain text of a rich-text field, shortened).
+A feed can show several document types: name them space-separated (`data-cms-list="blog_post definition"`) and give each its own `<template data-cms-draft-template="…">`. A type with no template is not drawn.
+
+The template holds one card, built from the same markup and classes as a real one so the site's own styles apply. `data-cms-fill="<field>"` sets that element's text from the draft; `data-cms-fill-format` is `date` or `excerpt` (plain text of a rich-text or text field, shortened). Fields the editor can edit (`data-cms-field`) are editable on the drawn card; a template with none draws a read-only preview.
 
 The toolbar's picker decides which drafts appear: **Live + all drafts** (the default), **Live only**, or **Live + one open changeset**. Choosing a changeset also makes it the one edits are saved into. The choice is remembered per browser. Drawn drafts are labelled "Draft · not live"; live posts with unpublished edits are labelled "Unpublished edits". Neither Discard nor the single-document Publish fallback touches a drawn draft, so a post you only looked at is never wiped or shipped.
 
