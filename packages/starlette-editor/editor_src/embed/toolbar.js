@@ -102,11 +102,15 @@ export class EditToolbar {
       const picker = this._makeLensPicker()
       if (picker) this.el.appendChild(picker)
       if (this.changesetPanel) {
-        const csBtn = this._makeButton('📋 Changesets', 'ghost', () => this.changesetPanel.toggle())
+        const csBtn = this._makeButton('📋 Changesets', 'ghost', () => {
+          this._clearOfToolbar(this.changesetPanel.el)
+          this.changesetPanel.toggle()
+        })
         this.el.appendChild(csBtn)
       }
       if (this._chatPanel) {
         this._chatBtn = this._makeButton('💬 Chat', 'ghost', () => {
+          this._clearOfToolbar(this._chatPanel._el)
           this._unread = 0
           this._updateChatBadge()
           this._chatPanel.toggle()
@@ -238,6 +242,20 @@ export class EditToolbar {
     }
   }
 
+  /**
+   * Seat a panel just above the toolbar. Both are fixed to the bottom corner,
+   * and the toolbar sits above them in the stack, so a panel left where it
+   * mounts has its bottom edge (its input, its buttons) under the toolbar. The
+   * toolbar wraps to two rows on a phone, so its height is read, not assumed.
+   */
+  _clearOfToolbar(panelEl) {
+    if (!panelEl || !this.el) return
+    const gap = 8
+    panelEl.style.bottom = `${24 + this.el.offsetHeight + gap}px`
+    panelEl.style.zIndex = '2147482900' // just under the toolbar, over the host's own layers
+    panelEl.style.maxHeight = `calc(100dvh - ${24 + this.el.offsetHeight + gap + 16}px)`
+  }
+
   _makeButton(label, variant, onClick) {
     const btn = document.createElement('button')
     btn.textContent = label
@@ -339,12 +357,44 @@ export class EditToolbar {
     window.location.reload()
   }
 
+  /**
+   * The changeset Publish will ship, and what is in it, for the confirm.
+   *
+   * The one you are working in, else the CMS's default (Staging). The default is
+   * what lets a phone, or any browser that has not picked a changeset, publish
+   * what Claude drafted: with none remembered, Publish used to ship a single
+   * post. Reads only; null when there is nothing to name.
+   *
+   * @returns {Promise<{id: string, title: string|null, count: number|null}|null>}
+   */
+  async _publishTarget() {
+    const activeId = getActiveChangesetId()
+    const url = activeId
+      ? `${this.cmsBase}/api/changesets/${activeId}`
+      : `${this.cmsBase}/api/changesets/default`
+    let changeset = null
+    try {
+      const res = await fetch(url, { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        changeset = activeId ? data : data?.changeset
+      }
+    } catch { /* fall through: the active id alone is still publishable */ }
+
+    const count = changeset?.documents ? changeset.documents.length : null
+    if (activeId) return { id: activeId, title: changeset?.title ?? null, count }
+    // An empty default has nothing to ship; let the single-post fallback apply.
+    if (!changeset?.id || count === 0) return null
+    return { id: changeset.id, title: changeset.title ?? null, count }
+  }
+
   async _publish() {
     // A session's edits are grouped into one changeset — publish the whole
     // changeset so everything ships at once and fires a single rebuild.
     // Publish directly (not via the shell's Review & Publish drawer, whose
     // styles live in editor.css and aren't loaded on the host site).
-    const changesetId = getActiveChangesetId()
+    const target = await this._publishTarget()
+    const changesetId = target?.id ?? null
 
     const url = changesetId
       ? `${this.cmsBase}/api/changesets/${changesetId}/publish`
@@ -353,7 +403,10 @@ export class EditToolbar {
         : null
     if (!url) return
 
-    if (!window.confirm('Publish your changes? The site will rebuild — it takes about 30 seconds to go live.')) {
+    // Say what is about to go live: "Staging" is a bag, not a post.
+    const name = target?.title ? `“${target.title}”` : changesetId ? 'your changeset' : 'your changes'
+    const size = target?.count != null ? ` (${target.count} document${target.count === 1 ? '' : 's'})` : ''
+    if (!window.confirm(`Publish ${name}${size}? The site will rebuild — it takes about 30 seconds to go live.`)) {
       return
     }
 
@@ -374,7 +427,7 @@ export class EditToolbar {
       return
     }
 
-    if (changesetId) setActiveChangesetId(null) // session shipped; start fresh
+    if (changesetId && changesetId === getActiveChangesetId()) setActiveChangesetId(null) // session shipped; start fresh
     this.setState('published')
     // In local dev, ping the Astro dev server to trigger a full-page reload
     if (this.reloadUrl) {

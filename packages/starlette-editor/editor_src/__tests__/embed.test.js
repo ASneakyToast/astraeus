@@ -204,7 +204,9 @@ describe('EditToolbar', async () => {
 
     await toolbar._publish()
 
-    expect(fetchMock).not.toHaveBeenCalled()
+    // Reads to name the target are fine; nothing may be published.
+    const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')
+    expect(posts).toEqual([])
     expect(toolbar.state).toBe('editing')
     localStorage.clear()
   })

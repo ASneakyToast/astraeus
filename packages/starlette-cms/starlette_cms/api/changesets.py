@@ -411,11 +411,113 @@ def body_validation_error(cms: CMS, doc_type: str, body: dict) -> str | None:
 # Doc types that never participate in changesets (chat is ephemeral).
 CHANGESET_EXCLUDED_TYPES = {"chat_session", "chat_message"}
 
+# Serialises get-or-create of the default changeset, so two writes arriving
+# together cannot each find none and make two.
+_default_changeset_lock = asyncio.Lock()
+
+
+async def find_default_changeset(title: str) -> dict[str, Any] | None:
+    """The open changeset called *title*, oldest first, or ``None``."""
+    rows = (
+        await CMSChangeset.select()
+        .where(CMSChangeset.title == title, CMSChangeset.status == "open")
+        .order_by(CMSChangeset.created_at, ascending=True)
+        .limit(1)
+        .run()
+    )
+    return rows[0] if rows else None
+
+
+async def get_or_create_default_changeset(title: str) -> tuple[str, bool]:
+    """Return ``(changeset_id, created)`` for the open changeset called *title*.
+
+    Creates it when none is open, which is what happens after the last one was
+    published: the next draft starts a fresh one.
+    """
+    async with _default_changeset_lock:
+        existing = await find_default_changeset(title)
+        if existing is not None:
+            return existing["id"], False
+
+        new_id = generate(size=21)
+        await CMSChangeset.insert(
+            CMSChangeset(
+                id=new_id,
+                title=title,
+                status="open",
+                created_at=datetime.now(UTC),
+                publish_at=None,
+                published_at=None,
+            )
+        ).run()
+        return new_id, True
+
+
+async def _link(changeset_id: str, doc_id: str) -> None:
+    """Put *doc_id* in *changeset_id* unless it is already there."""
+    existing = (
+        await CMSChangesetDocument.select()
+        .where(
+            CMSChangesetDocument.changeset_id == changeset_id,
+            CMSChangesetDocument.document_id == doc_id,
+        )
+        .run()
+    )
+    if not existing:
+        await CMSChangesetDocument.insert(
+            CMSChangesetDocument(
+                changeset_id=changeset_id,
+                document_id=doc_id,
+                added_at=datetime.now(UTC),
+            )
+        ).run()
+
+
+async def unlink_from_open_changesets(doc_id: str) -> None:
+    """Take *doc_id* out of every changeset that has not shipped.
+
+    A document published on its own is live, so it has no change left to carry.
+    Left in its changeset, it would show there as pending and be published a
+    second time with the rest. (Changeset publish does the same for the document's
+    other changesets.) Published and reverted changesets keep their history.
+    """
+    open_ids = [
+        r["id"]
+        for r in await CMSChangeset.select(CMSChangeset.id)
+        .where(CMSChangeset.status.is_in(["open", "review", "scheduled"]))
+        .run()
+    ]
+    if open_ids:
+        await (
+            CMSChangesetDocument.delete()
+            .where(
+                CMSChangesetDocument.document_id == doc_id,
+                CMSChangesetDocument.changeset_id.is_in(open_ids),
+            )
+            .run()
+        )
+
+
+async def link_new_draft_to_default_changeset(
+    doc_id: str, doc_type: str, title: str | None
+) -> None:
+    """Put a freshly created draft in the default changeset, if one is configured.
+
+    Called by document create, which otherwise leaves a draft in no changeset
+    until somebody edits it. A caller that names a changeset (a gateway run) does
+    not come here.
+    """
+    if not title or doc_type in CHANGESET_EXCLUDED_TYPES:
+        return
+    changeset_id, _ = await get_or_create_default_changeset(title)
+    await _link(changeset_id, doc_id)
+
 
 async def link_document_to_changeset(
     doc_id: str,
     doc_type: str,
     active_cs_id: str | None,
+    default_title: str | None = None,
 ) -> tuple[str, str] | None:
     """Ensure *doc_id* is grouped into an open changeset for publishing.
 
@@ -426,10 +528,14 @@ async def link_document_to_changeset(
 
     - If *active_cs_id* names an open/review changeset, link the doc to it.
     - Otherwise, if the doc is already in an open changeset, leave it there.
-    - Otherwise create a date-titled changeset and link the doc to it. This also
-      heals a stale *active_cs_id* (one already published or deleted), which used
-      to leave the edit orphaned from every changeset.
+    - Otherwise link it to the default changeset called *default_title* (made if
+      none is open), or, with no default configured, to a new date-titled one.
+      This also heals a stale *active_cs_id* (one already published or deleted),
+      which used to leave the edit orphaned from every changeset.
 
+    :param default_title: the CMS's ``default_changeset``. With it, edits that name
+        no changeset collect in one place instead of one date-titled changeset
+        per document.
     :returns: ``(changeset_id, title)`` when a NEW changeset was created, so the
         caller can tell the client to adopt it, else ``None``.
     """
@@ -475,6 +581,11 @@ async def link_document_to_changeset(
         )
         if open_cs:
             return None
+
+    if default_title:
+        default_id, created = await get_or_create_default_changeset(default_title)
+        await _link(default_id, doc_id)
+        return (default_id, default_title) if created else None
 
     # Create a fresh date-titled changeset ("Sep 22", "Sep 22 (2)", …) and link.
     today = datetime.now(UTC)
@@ -579,6 +690,22 @@ def make_changeset_routes(cms: "CMS") -> list[Route]:
             result.append(d)
 
         return JSONResponse({"changesets": result})
+
+    async def get_default_changeset(request: Request) -> JSONResponse:
+        """The open default changeset, or ``{"changeset": null}`` when there is none.
+
+        Read-only: it never creates one. The editor asks so Publish can target it
+        on a device that has not picked a changeset (a phone, a fresh browser).
+        """
+        if cms.read_auth:
+            if (err := await require_auth(request, cms)) is not None:
+                return err
+
+        title = cms.default_changeset
+        row = await find_default_changeset(title) if title else None
+        if row is None:
+            return JSONResponse({"changeset": None})
+        return JSONResponse({"changeset": await _build_full_changeset(row)})
 
     async def get_changeset(request: Request) -> JSONResponse:
         if cms.read_auth:
@@ -1069,6 +1196,8 @@ def make_changeset_routes(cms: "CMS") -> list[Route]:
     return [
         Route("/api/changesets", endpoint=create_changeset, methods=["POST"]),
         Route("/api/changesets", endpoint=list_changesets, methods=["GET"]),
+        # Before /{id}, which would read "default" as an id.
+        Route("/api/changesets/default", endpoint=get_default_changeset, methods=["GET"]),
         Route("/api/changesets/{id}", endpoint=get_changeset, methods=["GET"]),
         Route("/api/changesets/{id}", endpoint=patch_changeset, methods=["PATCH"]),
         Route("/api/changesets/{id}", endpoint=delete_changeset, methods=["DELETE"]),

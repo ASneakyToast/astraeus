@@ -279,3 +279,140 @@ describe('switching lens while editing', () => {
     expect(feedIds().sort()).toEqual(['d1', 'live-1'])
   })
 })
+
+describe('Publish targets the changeset drafts collect in', () => {
+  /** Fake CMS for publishing: the default changeset, any changeset by id, and what was POSTed. */
+  function publishCms({ defaultChangeset = null, byId = {} } = {}) {
+    const posts = []
+    const fetchMock = vi.fn(async (url, init = {}) => {
+      const u = new URL(url)
+      const json = (data) => ({ ok: true, json: async () => data, headers: new Headers() })
+      if (init.method === 'POST') {
+        posts.push(u.pathname)
+        return json({})
+      }
+      if (u.pathname === '/api/changesets/default') return json({ changeset: defaultChangeset })
+      const cs = u.pathname.match(/^\/api\/changesets\/([^/]+)$/)
+      if (cs && byId[cs[1]]) return json(byId[cs[1]])
+      return { ok: false, status: 404, json: async () => ({}) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return { posts, fetchMock }
+  }
+
+  const staging = (n) => ({
+    id: 'cs-staging',
+    title: 'Staging',
+    documents: Array.from({ length: n }, (_, i) => ({ id: `d${i}` })),
+  })
+
+  let confirmSpy
+  beforeEach(() => {
+    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  })
+
+  it('publishes the default changeset when this browser has picked none, and names it', async () => {
+    const { posts } = publishCms({ defaultChangeset: staging(3) })
+    const toolbar = newToolbar()
+    toolbar.activeElements = [{ dataset: { cmsId: 'live-1' } }]
+
+    await toolbar._publish()
+
+    expect(posts).toEqual(['/api/changesets/cs-staging/publish'])
+    const message = confirmSpy.mock.calls[0][0]
+    expect(message).toContain('Staging')
+    expect(message).toContain('3 documents')
+    expect(toolbar.state).toBe('published')
+  })
+
+  it('says "1 document", not "1 documents"', async () => {
+    publishCms({ defaultChangeset: staging(1) })
+    const toolbar = newToolbar()
+    await toolbar._publish()
+    expect(confirmSpy.mock.calls[0][0]).toContain('(1 document)')
+  })
+
+  it('prefers the changeset this browser is working in over the default', async () => {
+    setActiveChangesetId('cs-mine')
+    const { posts } = publishCms({
+      defaultChangeset: staging(3),
+      byId: { 'cs-mine': { id: 'cs-mine', title: 'Big rewrite', documents: [{ id: 'x' }, { id: 'y' }] } },
+    })
+    const toolbar = newToolbar()
+
+    await toolbar._publish()
+
+    expect(posts).toEqual(['/api/changesets/cs-mine/publish'])
+    expect(confirmSpy.mock.calls[0][0]).toContain('Big rewrite')
+    expect(confirmSpy.mock.calls[0][0]).toContain('2 documents')
+    expect(getActiveChangesetId()).toBeNull() // shipped, so start fresh
+  })
+
+  it('leaves a remembered changeset alone when it published the default instead', async () => {
+    publishCms({ defaultChangeset: staging(2) })
+    const toolbar = newToolbar()
+    await toolbar._publish()
+    expect(getActiveChangesetId()).toBeNull()
+  })
+
+  it('falls back to the one post on the page when there is no default changeset', async () => {
+    const { posts } = publishCms({ defaultChangeset: null })
+    const toolbar = newToolbar()
+    toolbar.activeElements = [{ dataset: { cmsId: 'live-1' } }]
+
+    await toolbar._publish()
+
+    expect(posts).toEqual(['/api/documents/live-1/publish'])
+    expect(confirmSpy.mock.calls[0][0]).toContain('your changes')
+  })
+
+  it('does not publish an empty default', async () => {
+    const { posts } = publishCms({ defaultChangeset: staging(0) })
+    const toolbar = newToolbar()
+    toolbar.activeElements = [{ dataset: { cmsId: 'live-1' } }]
+
+    await toolbar._publish()
+
+    expect(posts).toEqual(['/api/documents/live-1/publish'])
+  })
+
+  it('still publishes the active changeset when its details cannot be read', async () => {
+    setActiveChangesetId('cs-mine')
+    const posts = []
+    vi.stubGlobal('fetch', vi.fn(async (url, init = {}) => {
+      if (init.method === 'POST') {
+        posts.push(new URL(url).pathname)
+        return { ok: true, json: async () => ({}), headers: new Headers() }
+      }
+      throw new Error('offline')
+    }))
+    const toolbar = newToolbar()
+
+    await toolbar._publish()
+
+    expect(posts).toEqual(['/api/changesets/cs-mine/publish'])
+    expect(confirmSpy.mock.calls[0][0]).toContain('your changeset')
+  })
+
+  it('publishes nothing when the confirm is declined', async () => {
+    confirmSpy.mockReturnValue(false)
+    const { posts } = publishCms({ defaultChangeset: staging(3) })
+    const toolbar = newToolbar()
+
+    await toolbar._publish()
+
+    expect(posts).toEqual([])
+    expect(toolbar.state).not.toBe('published')
+  })
+
+  it('does nothing when there is no target at all', async () => {
+    const { posts } = publishCms({ defaultChangeset: null })
+    const toolbar = newToolbar()
+    toolbar.activeElements = []
+
+    await toolbar._publish()
+
+    expect(posts).toEqual([])
+    expect(confirmSpy).not.toHaveBeenCalled()
+  })
+})

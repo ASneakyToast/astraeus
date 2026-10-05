@@ -65,6 +65,7 @@ class CMS:
         admin_users: dict[str, str] | None = None,
         cors_origins: list[str] | None = None,
         verify_collab: bool = False,
+        default_changeset: str | None = None,
     ) -> None:
         self.database_url = database_url
         self.auth = auth
@@ -75,6 +76,12 @@ class CMS:
         self.session_secret = session_secret
         self.admin_users = admin_users
         self.cors_origins = cors_origins or []
+        # Title of the changeset new drafts collect in, e.g. "Staging". A draft made
+        # by document create, and an edit that names no changeset, join the open
+        # changeset with this title (made if none is open). With ``None``, a create
+        # leaves a draft in no changeset and an unattached edit gets its own
+        # date-titled one.
+        self.default_changeset = default_changeset
 
         self.registry = BlockRegistry()
         self._document_types: dict[str, type] = {}

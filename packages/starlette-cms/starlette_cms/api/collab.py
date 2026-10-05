@@ -305,7 +305,7 @@ def make_collab_routes(cms: CMS) -> list:
                         if active_cs_id != linked_cs:
                             try:
                                 created = await link_document_to_changeset(
-                                    document_id, doc_type, active_cs_id
+                                    document_id, doc_type, active_cs_id, cms.default_changeset
                                 )
                                 linked_cs = created[0] if created else active_cs_id
                                 if created is not None:
