@@ -125,7 +125,30 @@ async def mk_with_assets(mk_config: MediakitConfig) -> AsyncGenerator[MediaKit, 
 async def admin_client(mk_with_assets: MediaKit) -> AsyncGenerator[AsyncClient, None]:
     """httpx AsyncClient wired to the full MediaKit app (with admin routes)."""
     app = mk_with_assets._build_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver", headers=AUTH
+    ) as c:
+        yield c
+
+
+@pytest_asyncio.fixture
+async def anon_client(mk_with_assets: MediaKit) -> AsyncGenerator[AsyncClient, None]:
+    """Same app, no credentials."""
+    app = mk_with_assets._build_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as c:
+        yield c
+
+
+@pytest_asyncio.fixture
+async def mounted_client(mk_with_assets: MediaKit) -> AsyncGenerator[AsyncClient, None]:
+    """The app mounted at /media under a host, as joellithgow serves it."""
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    host = Starlette(routes=[Mount("/media", app=mk_with_assets._build_app())])
+    async with AsyncClient(
+        transport=ASGITransport(app=host), base_url="http://testserver", headers=AUTH
+    ) as c:
         yield c
 
 
@@ -138,7 +161,9 @@ async def empty_admin_client(mk_config: MediakitConfig) -> AsyncGenerator[AsyncC
     instance._storage = FakeStorage(mk_config)  # type: ignore[assignment]
 
     app = instance._build_app()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver", headers=AUTH
+    ) as c:
         yield c
         await instance._catalog.close()
 
@@ -270,10 +295,10 @@ async def test_update_metadata(admin_client: AsyncClient, mk_with_assets: MediaK
 
 
 @pytest.mark.asyncio
-async def test_update_metadata_unauthorized(admin_client: AsyncClient) -> None:
+async def test_update_metadata_unauthorized(anon_client: AsyncClient) -> None:
     """POST /admin/assets/{key} without auth returns 401."""
     key = "originals/aaa/photo_a.webp"
-    response = await admin_client.post(
+    response = await anon_client.post(
         f"/admin/assets/{key}",
         content="alt_text=Sneaky",
         headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -281,3 +306,76 @@ async def test_update_metadata_unauthorized(admin_client: AsyncClient) -> None:
         follow_redirects=False,
     )
     assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Auth — the admin pages take the same auth as the write endpoints
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    ["/admin", "/admin/upload", "/admin/assets/originals/aaa/photo_a.webp", "/admin/assets/nope"],
+)
+async def test_admin_pages_require_auth(anon_client: AsyncClient, path: str) -> None:
+    """Unauthenticated GETs on the admin pages return 401, not the asset list."""
+    response = await anon_client.get(path)
+    assert response.status_code == 401
+    assert "photo_a" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_iiif_and_asset_reads_stay_public(anon_client: AsyncClient) -> None:
+    """The site's <img> tags carry no credentials, so reads must not need them."""
+    assert (await anon_client.get("/assets")).status_code == 200
+    info = await anon_client.get("/iiif/originals/aaa/photo_a.webp/info.json")
+    assert info.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Mounted under a prefix — every link the admin renders must keep the prefix
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mounted_admin_links_keep_prefix(mounted_client: AsyncClient) -> None:
+    """Under /media, no rendered href/src/action points at the host's root."""
+    import re
+
+    key = "originals/aaa/photo_a.webp"
+    for path in ("/media/admin", "/media/admin/upload", f"/media/admin/assets/{key}"):
+        response = await mounted_client.get(path)
+        assert response.status_code == 200, path
+        html = response.text
+        assert 'data-media-base="/media"' in html
+        urls = re.findall(r'(?:href|src|action)="(/[^"]*)"', html)
+        assert urls, path
+        bad = [u for u in urls if not u.startswith("/media/")]
+        assert not bad, f"{path}: unprefixed {bad}"
+
+
+@pytest.mark.asyncio
+async def test_mounted_update_redirects_under_prefix(mounted_client: AsyncClient) -> None:
+    key = "originals/aaa/photo_a.webp"
+    response = await mounted_client.post(
+        f"/media/admin/assets/{key}",
+        content="alt_text=x",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/media/admin/assets/{key}"
+
+
+def test_admin_js_sends_size_and_uses_base() -> None:
+    """The upload routes require ``size``; the admin script must send it, and it
+    must build every request URL from the mount prefix."""
+    from pathlib import Path
+
+    import mediakit
+
+    js = (Path(mediakit.__file__).parent / "static" / "admin.js").read_text()
+    assert js.count("size: file.size") == 2  # prepare and confirm
+    assert "fetch('/" not in js and 'fetch("/' not in js
+    assert "BASE" in js

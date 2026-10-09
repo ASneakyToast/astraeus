@@ -55,9 +55,24 @@ def make_admin_routes(mk: MediaKit) -> list[Route | Mount]:
     # Helper: build a 256px square IIIF thumbnail URL for a given key
     # ------------------------------------------------------------------
 
-    def iiif_thumb(key: str, size: str = "256,") -> str:
+    def base_of(request: Request) -> str:
+        """Where mediakit is mounted (``""`` at the root, ``"/media"`` under a host).
+
+        Starlette's ``Mount`` puts the prefix in ``root_path``, so every link the
+        admin renders is built from it rather than assuming the root.
+        """
+        return request.scope.get("root_path", "").rstrip("/")
+
+    def iiif_thumb(base: str, key: str, size: str = "256,") -> str:
         """Return the IIIF thumbnail URL for *key* at *size*."""
-        return f"/iiif/{key}/square/{size}/0/default.webp"
+        return f"{base}/iiif/{key}/square/{size}/0/default.webp"
+
+    async def guard(request: Request):
+        """Admin pages list the whole library and expose upload and delete, so they
+        take the same auth as the write endpoints. Returns a 401 or ``None``."""
+        from mediakit.auth import require_auth
+
+        return await require_auth(request, mk)
 
     # ------------------------------------------------------------------
     # Asset browser — GET /admin
@@ -65,6 +80,9 @@ def make_admin_routes(mk: MediaKit) -> list[Route | Mount]:
 
     async def browser(request: Request) -> HTMLResponse:
         """``GET /admin`` — responsive grid of asset thumbnails."""
+        if (err := await guard(request)) is not None:
+            return err
+        base = base_of(request)
         params = request.query_params
         try:
             limit = int(params.get("limit", 50))
@@ -92,7 +110,8 @@ def make_admin_routes(mk: MediaKit) -> list[Route | Mount]:
             content_type_filter=content_type or "",
             tags_filter=tags_param or "",
             picker=picker,
-            iiif_thumb=iiif_thumb,
+            base=base,
+            iiif_thumb=lambda key, size="256,": iiif_thumb(base, key, size),
             prev_offset=max(0, offset - limit),
             next_offset=offset + limit,
             has_prev=offset > 0,
@@ -106,9 +125,11 @@ def make_admin_routes(mk: MediaKit) -> list[Route | Mount]:
 
     async def upload_page(request: Request) -> HTMLResponse:
         """``GET /admin/upload`` — drag-and-drop upload form."""
+        if (err := await guard(request)) is not None:
+            return err
         picker = request.query_params.get("picker", "0") == "1"
         template = env.get_template("upload.html")
-        html = template.render(picker=picker)
+        html = template.render(picker=picker, base=base_of(request))
         return HTMLResponse(html)
 
     # ------------------------------------------------------------------
@@ -117,11 +138,14 @@ def make_admin_routes(mk: MediaKit) -> list[Route | Mount]:
 
     async def asset_detail(request: Request) -> Response:
         """``GET /admin/assets/{key:path}`` — asset detail view."""
+        if (err := await guard(request)) is not None:
+            return err
+        base = base_of(request)
         key = request.path_params["key"]
         asset = await mk.catalog.get_asset(key)
         if asset is None:
             template = env.get_template("base.html")
-            html = template.render(title="Not Found", content="<p>Asset not found.</p>")
+            html = template.render(title="Not Found", content="<p>Asset not found.</p>", base=base)
             return HTMLResponse(html, status_code=404)
 
         picker = request.query_params.get("picker", "0") == "1"
@@ -129,7 +153,8 @@ def make_admin_routes(mk: MediaKit) -> list[Route | Mount]:
         html = template.render(
             asset=asset,
             picker=picker,
-            iiif_thumb=iiif_thumb,
+            base=base,
+            iiif_thumb=lambda key, size="256,": iiif_thumb(base, key, size),
         )
         return HTMLResponse(html)
 
@@ -155,7 +180,7 @@ def make_admin_routes(mk: MediaKit) -> list[Route | Mount]:
 
         await mk.catalog.update_asset(key, alt_text=alt_text, tags=tags)
 
-        return RedirectResponse(f"/admin/assets/{key}", status_code=303)
+        return RedirectResponse(f"{base_of(request)}/admin/assets/{key}", status_code=303)
 
     # ------------------------------------------------------------------
     # Route list

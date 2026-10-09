@@ -4,7 +4,7 @@
 
 {% block content %}
 <div class="page-header">
-    <a href="/admin" class="back-link">← All Assets</a>
+    <a href="{{ base }}/admin" class="back-link">← All Assets</a>
     <h1>{{ asset.filename }}</h1>
 </div>
 
@@ -55,7 +55,7 @@
 
         <section class="detail-section">
             <h2>Edit</h2>
-            <form method="post" action="/admin/assets/{{ asset.key }}" class="edit-form">
+            <form method="post" action="{{ base }}/admin/assets/{{ asset.key }}" class="edit-form">
                 <label class="form-label">
                     Alt Text
                     <input

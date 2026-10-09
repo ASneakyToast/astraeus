@@ -9,6 +9,9 @@
 
 'use strict';
 
+// Where mediakit is mounted ("" at the root, "/media" under a host app).
+const BASE = document.documentElement.dataset.mediaBase || '';
+
 /* -------------------------------------------------------------------------
  * 1. Picker mode
  * ---------------------------------------------------------------------- */
@@ -61,9 +64,9 @@ async function deleteAsset(key) {
     if (!confirm(`Delete "${key}"? This cannot be undone.`)) return;
 
     try {
-        const res = await fetch(`/assets/${key}`, { method: 'DELETE' });
+        const res = await fetch(`${BASE}/assets/${key}`, { method: 'DELETE' });
         if (res.ok || res.status === 204) {
-            window.location.href = '/admin';
+            window.location.href = `${BASE}/admin`;
         } else {
             const body = await res.json().catch(() => ({}));
             alert(`Delete failed: ${body.error || res.statusText}`);
@@ -151,10 +154,10 @@ async function deleteAsset(key) {
             // Step 1: prepare — get presigned upload URL
             setStatus('Preparing…');
             setProgress(10);
-            const prepareRes = await fetch('/upload/prepare', {
+            const prepareRes = await fetch(`${BASE}/upload/prepare`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename: file.name, content_type: file.type || 'application/octet-stream' }),
+                body: JSON.stringify({ filename: file.name, content_type: file.type || 'application/octet-stream', size: file.size }),
             });
             if (!prepareRes.ok) {
                 const body = await prepareRes.json().catch(() => ({}));
@@ -177,10 +180,10 @@ async function deleteAsset(key) {
 
             // Step 3: confirm — register in catalog
             setStatus('Confirming…');
-            const confirmRes = await fetch('/upload/confirm', {
+            const confirmRes = await fetch(`${BASE}/upload/confirm`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key, filename: file.name, content_type: file.type || 'application/octet-stream' }),
+                body: JSON.stringify({ key, filename: file.name, content_type: file.type || 'application/octet-stream', size: file.size }),
             });
             if (!confirmRes.ok) {
                 const body = await confirmRes.json().catch(() => ({}));
@@ -192,9 +195,9 @@ async function deleteAsset(key) {
 
             // Show thumbnail + link to detail
             if (asset.key) {
-                const thumbSrc = `/iiif/${asset.key}/square/64,/0/default.webp`;
+                const thumbSrc = `${BASE}/iiif/${asset.key}/square/64,/0/default.webp`;
                 detail.innerHTML = `
-                    <a href="/admin/assets/${asset.key}" class="upload-thumb-link">
+                    <a href="${BASE}/admin/assets/${asset.key}" class="upload-thumb-link">
                         <img src="${thumbSrc}" alt="${escapeHtml(file.name)}" loading="lazy">
                         View asset
                     </a>
