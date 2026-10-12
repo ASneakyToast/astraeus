@@ -217,7 +217,12 @@ def _fit_documents(docs: list[dict[str, Any]], max_chars: int) -> list[dict[str,
     return fitted
 
 
-def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
+def build_mcp_server(
+    base_url: str,
+    api_key: str | None = None,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> FastMCP:
     """
     Build and return a FastMCP server wired to the starlette-cms HTTP API.
 
@@ -226,6 +231,8 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
     :param api_key: API key for ``Authorization: Bearer`` header on all
         mutating requests.  Pass ``None`` when the CMS is running in
         ``auth="none"`` mode.
+    :param transport: Optional httpx transport.  Tests pass an ``ASGITransport``
+        so the tools run against a real in-process CMS instead of the network.
 
     All tools share one httpx.AsyncClient (connection-pooled).  The client is
     created lazily on the first tool call so the server can be imported without
@@ -244,6 +251,7 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
                 base_url=base_url,
                 headers=headers,
                 timeout=30.0,
+                transport=transport,
             )
         return _client
 
@@ -268,6 +276,11 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
             "the public site. Check the result, then publish_document to go live.\n"
             "5. publish_document and unpublish_document change the public site and "
             "trigger a site rebuild; only call them when asked to publish.\n"
+            "Changesets group drafts so they publish together as one site build. "
+            "get_default_changeset shows what is waiting to go live; list_changesets "
+            "shows them all. Move a document with remove_document_from_changeset and "
+            "add_document_to_changeset; publish_changeset publishes every document "
+            "in one, so only call it when asked.\n"
             "Parameter names are exact: an unknown parameter is rejected with a "
             "suggestion, not ignored."
         ),
@@ -650,6 +663,163 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
             return _error(
                 f"Document {doc_id!r} not found",
                 hint="Use an `id` from list_documents.",
+            )
+        r.raise_for_status()
+        return r.json()
+
+    # ------------------------------------------------------------------
+    # Changeset tools
+    # ------------------------------------------------------------------
+
+    def _changeset_not_found(changeset_id: str) -> dict[str, Any]:
+        return _error(
+            f"Changeset {changeset_id!r} not found",
+            hint="Use an `id` from list_changesets or get_default_changeset.",
+        )
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def list_changesets(
+        status: Annotated[
+            str | None,
+            Field(
+                description=(
+                    'Only changesets with this status: "open", "review", "scheduled", '
+                    '"published" or "reverted". Omit for all; "open" is the usual one.'
+                )
+            ),
+        ] = None,
+        include_documents: Annotated[
+            bool,
+            Field(
+                description=(
+                    "true (default) lists each changeset's documents (id, doc_type, slug). "
+                    "false returns only document_count."
+                )
+            ),
+        ] = True,
+    ) -> dict[str, Any]:
+        """
+        List changesets, newest first: the groups of drafts that publish together.
+
+        Use status="open" to see what is waiting to go live. A document listed with
+        `also_in` is in more than one open changeset. A draft in no changeset is not
+        listed here; find it with list_documents(published=false) and compare ids.
+        """
+        client = _get_client()
+        params: dict[str, Any] = {"include_documents": str(include_documents).lower()}
+        if status is not None:
+            params["status"] = status
+        r = await client.get("/api/changesets", params=params, headers=_read_headers())
+        r.raise_for_status()
+        return r.json()
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_default_changeset() -> dict[str, Any]:
+        """
+        Return the changeset new drafts collect in (for joellithgow.com, "Staging"),
+        with its documents, or {"changeset": null} when none is open.
+
+        This is "what is waiting to go live". Read-only: it never creates one.
+        """
+        client = _get_client()
+        r = await client.get("/api/changesets/default", headers=_read_headers())
+        r.raise_for_status()
+        return r.json()
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_changeset(
+        changeset_id: Annotated[
+            str, Field(description="Changeset id from list_changesets or get_default_changeset.")
+        ],
+    ) -> dict[str, Any]:
+        """Return ONE changeset with its documents and its status."""
+        client = _get_client()
+        r = await client.get(f"/api/changesets/{changeset_id}", headers=_read_headers())
+        if r.status_code == 404:
+            return _changeset_not_found(changeset_id)
+        r.raise_for_status()
+        return r.json()
+
+    @mcp.tool(annotations=CREATE)
+    async def create_changeset(
+        title: Annotated[str, Field(description='Name for the changeset, e.g. "Half-written".')],
+    ) -> dict[str, Any]:
+        """
+        Create an empty open changeset, e.g. to move a post that is not ready out of
+        the default one. Not idempotent: calling twice creates two.
+        """
+        client = _get_client()
+        r = await client.post("/api/changesets", json={"title": title})
+        r.raise_for_status()
+        return r.json()
+
+    @mcp.tool(annotations=UPDATE)
+    async def add_document_to_changeset(
+        changeset_id: Annotated[str, Field(description="An open changeset's id.")],
+        doc_id: Annotated[str, Field(description="The document id (nanoid) from list_documents.")],
+    ) -> dict[str, Any]:
+        """
+        Add a document to a changeset. It does not leave the changesets it is
+        already in, so to MOVE a document call remove_document_from_changeset on
+        the old one too, or it will be in both (shown as `also_in`).
+
+        Only "open" and "review" changesets accept documents.
+        """
+        client = _get_client()
+        r = await client.post(f"/api/changesets/{changeset_id}/documents/{doc_id}")
+        if r.status_code in (400, 404, 409):
+            return _error(
+                r.json().get("error", f"HTTP {r.status_code}"),
+                hint=(
+                    "Check both ids with get_changeset and list_documents. A 409 means the "
+                    "document is already in this changeset."
+                ),
+            )
+        r.raise_for_status()
+        return r.json()
+
+    @mcp.tool(annotations=UPDATE)
+    async def remove_document_from_changeset(
+        changeset_id: Annotated[str, Field(description="The changeset to take it out of.")],
+        doc_id: Annotated[str, Field(description="The document id (nanoid) from list_documents.")],
+    ) -> dict[str, Any]:
+        """
+        Remove a document from a changeset. The document and its draft are kept; it
+        is just no longer published with that changeset. If it was in no other, it
+        is now in none and publish_changeset will not ship it.
+        """
+        client = _get_client()
+        r = await client.delete(f"/api/changesets/{changeset_id}/documents/{doc_id}")
+        if r.status_code == 404:
+            return _error(
+                r.json().get("error", "Not found"),
+                hint="Check the ids with get_changeset; the document must be in this changeset.",
+            )
+        r.raise_for_status()
+        return r.json()
+
+    @mcp.tool(annotations=PUBLISH)
+    async def publish_changeset(
+        changeset_id: Annotated[
+            str, Field(description="Changeset id from list_changesets or get_default_changeset.")
+        ],
+    ) -> dict[str, Any]:
+        """
+        Publish EVERY document in a changeset at once. They go live together and the
+        site is rebuilt once (one changeset.published webhook, one Netlify build).
+
+        Only call this when asked to publish. Check get_changeset first: a changeset
+        ships everything in it, including a half-written post, and remove_document_from_changeset
+        takes one out beforehand. Only open, review or scheduled changesets publish.
+        """
+        client = _get_client()
+        r = await client.post(f"/api/changesets/{changeset_id}/publish")
+        if r.status_code == 404:
+            return _changeset_not_found(changeset_id)
+        if r.status_code == 400:
+            return _error(
+                r.json().get("error", "Cannot publish"),
+                hint="Only open, review or scheduled changesets can be published.",
             )
         r.raise_for_status()
         return r.json()
