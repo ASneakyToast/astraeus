@@ -377,3 +377,133 @@ async def test_tool_annotations_distinguish_read_write_destructive():
     assert tools["update_asset"].annotations.readOnlyHint is False
     assert tools["delete_asset"].annotations.destructiveHint is True
     assert all(t.inputSchema["additionalProperties"] is False for t in tools.values())
+
+
+# ---------------------------------------------------------------------------
+# upload_asset
+# ---------------------------------------------------------------------------
+
+PRESIGNED_URL = "https://bucket.r2.example/originals/ab12cd34/photo.png?X-Amz-Signature=sig"
+UPLOADED = {"key": "originals/ab12cd34/photo.png", "filename": "photo.png"}
+
+
+def _patch_upload_flow(image: tuple[bytes, str] = (b"png-bytes", "image/png")):
+    """Patch the fetch and the three HTTP calls; returns the post and put mocks."""
+    fetch = patch("mediakit.mcp.server.fetch_image", AsyncMock(return_value=image))
+    post = AsyncMock(
+        side_effect=[
+            _mock_response(200, {"upload_url": PRESIGNED_URL, "key": UPLOADED["key"]}),
+            _mock_response(201, UPLOADED),
+        ]
+    )
+    put = AsyncMock(return_value=_mock_response(200, {}))
+    return fetch, post, put
+
+
+@pytest.mark.anyio
+async def test_upload_asset_runs_prepare_put_confirm():
+    fetch, post, put = _patch_upload_flow()
+
+    with fetch, patch("httpx.AsyncClient.post", post), patch("httpx.AsyncClient.put", put):
+        result = await _call_tool(
+            _build_server(), "upload_asset", source_url="https://img.example.com/photo.png"
+        )
+
+    prepare_call, confirm_call = post.call_args_list
+    assert prepare_call.args[0] == "/upload/prepare"
+    assert prepare_call.kwargs["json"] == {
+        "filename": "photo.png",
+        "content_type": "image/png",
+        "size": 9,
+    }
+    assert put.call_args.args[0] == PRESIGNED_URL
+    assert put.call_args.kwargs["content"] == b"png-bytes"
+    assert confirm_call.args[0] == "/upload/confirm"
+    assert confirm_call.kwargs["json"]["key"] == UPLOADED["key"]
+    assert result["key"] == UPLOADED["key"]
+    assert result["iiif_url"].endswith(f"/iiif/{UPLOADED['key']}/full/1200,/0/default.webp")
+
+
+@pytest.mark.anyio
+async def test_upload_asset_does_not_send_the_api_key_to_the_bucket():
+    fetch, post, put = _patch_upload_flow()
+
+    with fetch, patch("httpx.AsyncClient.post", post), patch("httpx.AsyncClient.put", put):
+        await _call_tool(
+            _build_server(api_key="secret"),
+            "upload_asset",
+            source_url="https://img.example.com/photo.png",
+        )
+
+    assert "Authorization" not in put.call_args.kwargs["headers"]
+
+
+@pytest.mark.anyio
+async def test_upload_asset_sets_alt_text_and_tags_when_given():
+    fetch, post, put = _patch_upload_flow()
+    patched = {**UPLOADED, "alt_text": "A harbour", "tags": ["boats"]}
+    patch_call = AsyncMock(return_value=_mock_response(200, patched))
+
+    with (
+        fetch,
+        patch("httpx.AsyncClient.post", post),
+        patch("httpx.AsyncClient.put", put),
+        patch("httpx.AsyncClient.patch", patch_call),
+    ):
+        result = await _call_tool(
+            _build_server(),
+            "upload_asset",
+            source_url="https://img.example.com/photo.png",
+            alt_text="A harbour",
+            tags=["boats"],
+        )
+
+    assert patch_call.call_args.kwargs["json"] == {"alt_text": "A harbour", "tags": ["boats"]}
+    assert result["alt_text"] == "A harbour"
+
+
+@pytest.mark.anyio
+async def test_upload_asset_returns_a_refused_url_as_an_error():
+    from mediakit.mcp.fetch import FetchError
+
+    refused = AsyncMock(side_effect=FetchError("Only https URLs are accepted"))
+
+    with patch("mediakit.mcp.server.fetch_image", refused):
+        result = await _call_tool(
+            _build_server(), "upload_asset", source_url="http://internal.local/a.png"
+        )
+
+    assert result["error"] == "Only https URLs are accepted"
+    assert "https" in result["hint"]
+
+
+@pytest.mark.anyio
+async def test_upload_asset_keeps_only_the_last_segment_of_a_filename():
+    fetch, post, put = _patch_upload_flow()
+
+    with fetch, patch("httpx.AsyncClient.post", post), patch("httpx.AsyncClient.put", put):
+        await _call_tool(
+            _build_server(),
+            "upload_asset",
+            source_url="https://img.example.com/x",
+            filename="../../evil/name.png",
+        )
+
+    assert post.call_args_list[0].kwargs["json"]["filename"] == "name.png"
+
+
+@pytest.mark.anyio
+async def test_iiif_urls_use_the_public_url_when_given():
+    mcp = _build_server_with(public_url="https://cms.example.com/media/")
+
+    result = await _call_tool(mcp, "get_iiif_url", key="originals/a/p.webp", size="200,")
+
+    assert (
+        result == "https://cms.example.com/media/iiif/originals/a/p.webp/full/200,/0/default.webp"
+    )
+
+
+def _build_server_with(**kwargs):
+    from mediakit.mcp.server import build_mcp_server
+
+    return build_mcp_server(base_url="http://astraeus-cms:8000/media", **kwargs)
