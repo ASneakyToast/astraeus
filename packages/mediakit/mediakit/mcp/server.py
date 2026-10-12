@@ -8,10 +8,15 @@ No business logic lives here — only tool definitions and httpx calls.
 from __future__ import annotations
 
 import difflib
+import mimetypes
+from pathlib import PurePosixPath
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import Field, model_validator
+
+from mediakit.mcp.fetch import FetchError, fetch_image
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -30,6 +35,12 @@ READ_ONLY = ToolAnnotations(
     destructiveHint=False,
     idempotentHint=True,
     openWorldHint=False,
+)
+UPLOAD = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=True,
 )
 UPDATE = ToolAnnotations(
     readOnlyHint=False,
@@ -80,6 +91,21 @@ def _page(data: dict[str, Any], limit: int, offset: int) -> dict[str, Any]:
     }
 
 
+def _filename_for_upload(source_url: str, filename: str | None, content_type: str) -> str:
+    """
+    Pick the stored filename: the caller's, else the URL's last path segment,
+    else ``upload`` plus an extension guessed from the content type.
+
+    Only the final path segment is kept, so a name can't add key prefixes.
+    """
+    name = PurePosixPath(filename).name if filename else ""
+    if not name:
+        name = PurePosixPath(urlsplit(source_url).path).name
+    if not name:
+        name = "upload" + (mimetypes.guess_extension(content_type) or "")
+    return name
+
+
 def _unknown_parameter_message(tool_name: str, unknown: list[str], valid: list[str]) -> str:
     """Explain unknown tool arguments, suggesting the closest valid name."""
     parts: list[str] = []
@@ -120,7 +146,9 @@ def _reject_unknown_arguments(mcp: FastMCP) -> None:
         tool.parameters["additionalProperties"] = False
 
 
-def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
+def build_mcp_server(
+    base_url: str, api_key: str | None = None, public_url: str | None = None
+) -> FastMCP:
     """
     Build and return a FastMCP server wired to the mediakit HTTP API.
 
@@ -128,12 +156,16 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
         e.g. ``https://mysite.com/media``.  Must not have a trailing slash.
     :param api_key: API key for ``Authorization: Bearer`` header on all
         requests.  Pass ``None`` when running without auth.
+    :param public_url: Where readers reach the instance, used for the image
+        URLs the tools hand back.  Defaults to *base_url*; set it when the
+        server calls the API over an internal address (e.g. a cluster service).
 
     All tools share one httpx.AsyncClient (connection-pooled).  The client is
     created lazily on the first tool call so the server can be imported without
     making any network connections.
     """
 
+    public_base = (public_url or base_url).rstrip("/")
     _client: httpx.AsyncClient | None = None
 
     def _get_client() -> httpx.AsyncClient:
@@ -164,7 +196,9 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
             "2. get_asset(key) for one asset's metadata and a presigned download URL.\n"
             "3. get_iiif_url(key, size=...) to build an embeddable derivative image URL; "
             "it makes no network call.\n"
-            "4. update_asset to set alt_text or tags. delete_asset permanently removes "
+            "4. upload_asset(source_url) to add an image from a public https URL; it "
+            "returns the new asset, its `key` and an embeddable `iiif_url`.\n"
+            "5. update_asset to set alt_text or tags. delete_asset permanently removes "
             "the file and its catalog entry; only call it when asked.\n"
             "Parameter names are exact: an unknown parameter is rejected with a "
             "suggestion, not ignored."
@@ -260,6 +294,84 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
     # Asset write tools
     # ------------------------------------------------------------------
 
+    @mcp.tool(annotations=UPLOAD)
+    async def upload_asset(
+        source_url: Annotated[
+            str,
+            Field(
+                description=(
+                    "Public https URL of an image to add. Plain http, private or "
+                    "internal hosts, non-images and files over 25 MiB are refused."
+                )
+            ),
+        ],
+        filename: Annotated[
+            str | None,
+            Field(description="Stored filename. Defaults to the last segment of the URL path."),
+        ] = None,
+        alt_text: Annotated[
+            str | None, Field(description="Alt text to set on the new asset.")
+        ] = None,
+        tags: Annotated[
+            list[str] | None, Field(description="Tags to set on the new asset.")
+        ] = None,
+    ) -> dict[str, Any]:
+        """
+        Add an image to the library by fetching it from a public https URL.
+
+        Not idempotent: every call creates a new asset, even for the same URL.
+        Returns the asset (including its `key`) plus `iiif_url`, a ready-to-embed
+        1200px-wide WebP URL; use get_iiif_url for other sizes. Originals are
+        stripped of EXIF and converted to WebP by the server.
+        """
+        try:
+            data, content_type = await fetch_image(source_url)
+        except FetchError as exc:
+            return _error(
+                str(exc),
+                hint="Pass a public https URL that serves an image directly.",
+            )
+
+        name = _filename_for_upload(source_url, filename, content_type)
+        client = _get_client()
+
+        # 1. Ask mediakit for a presigned PUT URL and a storage key.
+        r = await client.post(
+            "/upload/prepare",
+            json={"filename": name, "content_type": content_type, "size": len(data)},
+        )
+        r.raise_for_status()
+        prepared = r.json()
+
+        # 2. PUT the bytes straight to the bucket. The URL is presigned, so this
+        # uses a bare client: the media API key must not be sent to the bucket.
+        async with httpx.AsyncClient(timeout=60.0) as storage:
+            put = await storage.put(
+                prepared["upload_url"], content=data, headers={"Content-Type": content_type}
+            )
+        put.raise_for_status()
+
+        # 3. Confirm: mediakit verifies the object, processes it, and catalogs it.
+        r = await client.post(
+            "/upload/confirm",
+            json={
+                "key": prepared["key"],
+                "filename": name,
+                "content_type": content_type,
+                "size": len(data),
+            },
+        )
+        r.raise_for_status()
+        asset = r.json()
+
+        if alt_text is not None or tags is not None:
+            asset = await update_asset(key=asset["key"], alt_text=alt_text, tags=tags)
+
+        return {
+            **asset,
+            "iiif_url": f"{public_base}/iiif/{asset['key']}/full/1200,/0/default.webp",
+        }
+
     @mcp.tool(annotations=UPDATE)
     async def update_asset(
         key: Annotated[str, Field(description="The asset storage key from list_assets.")],
@@ -343,7 +455,7 @@ def build_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
             get_iiif_url(key="originals/abc/photo.jpg", size="200,")
             # → "https://mysite.com/media/iiif/originals/abc/photo.jpg/full/200,/0/default.webp"
         """
-        return f"{base_url}/iiif/{key}/{region}/{size}/{rotation}/{quality}.{format}"
+        return f"{public_base}/iiif/{key}/{region}/{size}/{rotation}/{quality}.{format}"
 
     _reject_unknown_arguments(mcp)
 
