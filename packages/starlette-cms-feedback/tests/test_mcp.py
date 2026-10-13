@@ -73,3 +73,28 @@ async def test_get_missing_report_returns_error(tools):
     result = await tools["get_feedback"](report_id="nope")
 
     assert "not found" in result["error"]
+
+
+async def test_list_returns_summaries_without_long_text(tools):
+    await tools["file_feedback"](kind="bug", title="t", description="a long description")
+
+    listed = await tools["list_feedback"]()
+
+    assert "description" not in listed["reports"][0]
+    assert listed["reports"][0]["title"] == "t"
+
+
+async def test_every_tool_is_annotated_and_rejects_unknown_arguments(feedback_app, monkeypatch):
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        mcp_module.httpx,
+        "AsyncClient",
+        lambda **kw: real_client(transport=ASGITransport(app=feedback_app["root"]), **kw),
+    )
+    server = build_feedback_mcp_server(base_url="http://testserver/cms", api_key=API_KEY)
+
+    for tool in await server.list_tools():
+        assert tool.annotations is not None, f"{tool.name} has no annotations"
+
+    with pytest.raises(Exception, match="status"):
+        await server.call_tool("list_feedback", {"statuss": "new"})

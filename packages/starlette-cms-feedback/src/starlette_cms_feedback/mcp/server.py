@@ -20,17 +20,30 @@ Usage::
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
+from pydantic import Field
 
 try:
     from mcp.server.fastmcp import FastMCP
+    from starlette_cms.mcp.server import (
+        CREATE,
+        DEFAULT_LIST_LIMIT,
+        MAX_LIST_LIMIT,
+        READ_ONLY,
+        UPDATE,
+        _reject_unknown_arguments,
+    )
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "The MCP server requires the 'mcp' extra. "
         "Install with: pip install starlette-cms-feedback[mcp]"
     ) from exc
+
+
+# What list_feedback returns per report; the long free-text fields come from get_feedback.
+SUMMARY_FIELDS = ("component", "created_at", "id", "kind", "severity", "status", "title")
 
 
 def build_feedback_mcp_server(base_url: str, api_key: str | None = None) -> FastMCP:
@@ -78,7 +91,7 @@ def build_feedback_mcp_server(base_url: str, api_key: str | None = None) -> Fast
         ),
     )
 
-    @mcp.tool()
+    @mcp.tool(annotations=CREATE)
     async def file_feedback(
         kind: str,
         title: str,
@@ -124,24 +137,26 @@ def build_feedback_mcp_server(base_url: str, api_key: str | None = None) -> Fast
             return err
         return r.json()
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     async def list_feedback(
         status: str | None = None,
         kind: str | None = None,
         component: str | None = None,
-        limit: int = 20,
+        limit: Annotated[int, Field(ge=1, le=MAX_LIST_LIMIT)] = DEFAULT_LIST_LIMIT,
         offset: int = 0,
     ) -> dict[str, Any]:
         """
-        List feedback reports, newest first.
+        List feedback reports as short summaries, newest first.
 
+        Each summary has the id, title, kind, status, severity, component and
+        created_at — not the description or steps. Use get_feedback for those.
         Returns ``reports``, ``total`` (all matches, ignoring limit/offset),
         ``limit`` and ``offset``.
 
         :param status: Filter by status — one of: new, triaged, in_progress, fixed, wontfix.
         :param kind: Filter by kind — one of: bug, feedback, idea.
         :param component: Filter to one component, exact match.
-        :param limit: Max reports to return (default 20, max 200).
+        :param limit: Max reports to return (1-50, default 10).
         :param offset: Reports to skip, for pagination.
         """
         params: dict[str, Any] = {"limit": limit, "offset": offset}
@@ -151,9 +166,13 @@ def build_feedback_mcp_server(base_url: str, api_key: str | None = None) -> Fast
         r = await _get_client().get("/api/feedback", params=params)
         if (err := _error(r)) is not None:
             return err
-        return r.json()
+        data = r.json()
+        data["reports"] = [
+            {name: report[name] for name in SUMMARY_FIELDS} for report in data["reports"]
+        ]
+        return data
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     async def get_feedback(report_id: str) -> dict[str, Any]:
         """
         Return one feedback report by id, with all its fields.
@@ -165,7 +184,7 @@ def build_feedback_mcp_server(base_url: str, api_key: str | None = None) -> Fast
             return err
         return r.json()
 
-    @mcp.tool()
+    @mcp.tool(annotations=UPDATE)
     async def triage_feedback(
         report_id: str,
         status: str | None = None,
@@ -189,5 +208,7 @@ def build_feedback_mcp_server(base_url: str, api_key: str | None = None) -> Fast
         if (err := _error(r, report_id)) is not None:
             return err
         return r.json()
+
+    _reject_unknown_arguments(mcp)  # a misnamed argument must fail, not be silently dropped
 
     return mcp
