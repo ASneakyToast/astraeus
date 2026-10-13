@@ -147,7 +147,10 @@ export class ChangesetPanel {
   async toggle() {
     this.visible = !this.visible;
     if (this.el) {
-      this.el.style.display = this.visible ? 'block' : 'none';
+      // 'flex', not 'block': the panel is a flex column (PANEL_STYLES) and
+      // its scroll container relies on flex: 1 to stay inside the fixed
+      // height. 'block' dropped that, so content overflowed and was clipped.
+      this.el.style.display = this.visible ? 'flex' : 'none';
     }
     if (this.visible) {
       await this.refresh();
