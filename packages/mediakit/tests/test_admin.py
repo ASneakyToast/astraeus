@@ -379,3 +379,17 @@ def test_admin_js_sends_size_and_uses_base() -> None:
     assert js.count("size: file.size") == 2  # prepare and confirm
     assert "fetch('/" not in js and 'fetch("/' not in js
     assert "BASE" in js
+
+
+@pytest.mark.asyncio
+async def test_browser_requests_sized_squares_not_originals(admin_client: AsyncClient) -> None:
+    response = await admin_client.get("/admin")
+
+    assert "/iiif/originals/aaa/photo_a.webp/square/256,/0/default.webp" in response.text
+
+
+@pytest.mark.asyncio
+async def test_detail_shows_the_whole_image_not_a_square_crop(admin_client: AsyncClient) -> None:
+    response = await admin_client.get("/admin/assets/originals/aaa/photo_a.webp")
+
+    assert "/iiif/originals/aaa/photo_a.webp/full/800,/0/default.webp" in response.text

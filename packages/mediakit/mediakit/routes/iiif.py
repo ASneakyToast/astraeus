@@ -20,12 +20,17 @@ import io
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import obstore
+import structlog
+from PIL import Image
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 if TYPE_CHECKING:
     from mediakit.app import MediaKit
+
+logger = structlog.get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +248,82 @@ async def render_iiif(image_bytes: bytes, params: IIIFParams) -> tuple[bytes, st
 # ---------------------------------------------------------------------------
 
 
+# The renditions the admin pages ask for (mediakit/admin) and the preview it shows
+# straight after an upload (static/admin.js, 64px). Rendered when an upload is
+# confirmed so the first view is a cache hit instead of a render.
+ADMIN_THUMBNAIL = ("square", "256,")
+ADMIN_DETAIL = ("full", "800,")
+UPLOAD_PREVIEW = ("square", "64,")
+PRERENDERED_RENDITIONS = (ADMIN_THUMBNAIL, ADMIN_DETAIL, UPLOAD_PREVIEW)
+
+
+async def ensure_derivative(
+    mk: MediaKit, key: str, params: IIIFParams, original_bytes: bytes | None = None
+) -> str:
+    """
+    Make sure one rendition of *key* exists in storage and return its storage key.
+
+    A catalog row alone does not mean the file exists: the row is inserted before
+    rendering, so a request that arrives mid-render, or a render that failed, sees
+    a row with no dimensions. Dimensions are only written once the file is stored,
+    so ``width is None`` means "not ready" and the rendition is (re)made. Two
+    requests racing do the same work and write the same bytes, which is harmless.
+
+    :param original_bytes: The original, if the caller already has it, so several
+        renditions of one upload download it once.
+    """
+    iiif_key = params.canonical_key
+    derivative_key = f"derivatives/{key}/{iiif_key}"
+
+    row, _created = await mk.catalog.get_or_create_derivative(
+        key, iiif_key, derivative_key, format=params.format
+    )
+    if row.get("width") is not None:
+        return derivative_key
+
+    store = mk.storage._get_store()
+    if original_bytes is None:
+        result = await obstore.get_async(store, key)
+        original_bytes = bytes(await result.bytes_async())
+
+    output_bytes, _content_type = await render_iiif(original_bytes, params)
+    await obstore.put_async(store, derivative_key, output_bytes)
+
+    try:
+        with Image.open(io.BytesIO(output_bytes)) as out_img:
+            out_w, out_h = out_img.size
+    except Exception:
+        out_w, out_h = None, None
+
+    # Record the dimensions last: they are what marks the rendition as ready.
+    assert mk.catalog._db is not None
+    await mk.catalog._db.execute(
+        "UPDATE derivatives SET width = ?, height = ? WHERE original_key = ? AND iiif_params = ?",
+        (out_w, out_h, key, iiif_key),
+    )
+    await mk.catalog._db.commit()
+    return derivative_key
+
+
+async def prerender(mk: MediaKit, key: str) -> None:
+    """
+    Render the admin's renditions of *key* in the background after an upload.
+
+    Failures are logged and dropped: a rendition that is not ready is simply made
+    on first request, as before.
+    """
+    try:
+        store = mk.storage._get_store()
+        result = await obstore.get_async(store, key)
+        original_bytes = bytes(await result.bytes_async())
+
+        for region, size in PRERENDERED_RENDITIONS:
+            params = parse_iiif_params(region, size, "0", "default", "webp")
+            await ensure_derivative(mk, key, params, original_bytes)
+    except Exception:
+        logger.warning("mediakit.iiif.prerender_failed", key=key, exc_info=True)
+
+
 def make_iiif_routes(mk: MediaKit) -> list[Route]:
     """Return the IIIF Image API route list for *mk*."""
 
@@ -325,62 +406,7 @@ def make_iiif_routes(mk: MediaKit) -> list[Route]:
         if asset is None:
             return JSONResponse({"error": "Asset not found"}, status_code=404)
 
-        iiif_key = params.canonical_key
-        derivative_storage_key = f"derivatives/{key}/{iiif_key}"
-
-        # Check catalog for cached derivative
-        row, created = await mk.catalog.get_or_create_derivative(
-            key,
-            iiif_key,
-            derivative_storage_key,
-            format=params.format,
-        )
-
-        if not created:
-            # Derivative already recorded — redirect to it
-            url = await mk.storage.get_url(row["derivative_key"])
-            return RedirectResponse(url, status_code=302)
-
-        # --- Generate derivative ---
-        import obstore
-
-        store = mk.storage._get_store()
-
-        # Download original bytes
-        result = await obstore.get_async(store, key)
-        original_bytes = bytes(await result.bytes_async())
-
-        # Render
-        output_bytes, _content_type = await render_iiif(original_bytes, params)
-
-        # Upload derivative
-        await obstore.put_async(store, derivative_storage_key, output_bytes)
-
-        # Get output dimensions from the rendered bytes
-        import io as _io
-
-        from PIL import Image as _Image
-
-        try:
-            with _Image.open(_io.BytesIO(output_bytes)) as out_img:
-                out_w, out_h = out_img.size
-        except Exception:
-            out_w, out_h = None, None
-
-        # Update derivative record with dimensions (we inserted without them above)
-        # Re-fetch to get the freshly inserted row with the right derivative_key
-        # Note: get_or_create_derivative already inserted, but without width/height.
-        # Update the row directly.
-        assert mk.catalog._db is not None
-
-        await mk.catalog._db.execute(
-            "UPDATE derivatives SET width = ?, height = ?"
-            " WHERE original_key = ? AND iiif_params = ?",
-            (out_w, out_h, key, iiif_key),
-        )
-        await mk.catalog._db.commit()
-
-        # Redirect to new derivative
+        derivative_storage_key = await ensure_derivative(mk, key, params)
         url = await mk.storage.get_url(derivative_storage_key)
         return RedirectResponse(url, status_code=302)
 
