@@ -12,8 +12,9 @@ Usage::
         media=media,
         chat=chat,
         gateways=gateway_admin,
+        feedback=feedback_admin,
     )
-    # → Portal at / with cards for Editor, Media, Gateways, Chat
+    # → Portal at / with cards for Editor, Media, Gateways, Feedback, Chat
     #   CMS at /cms, Editor at /editor, Media at /media, etc.
 
 All arguments are optional — include only the components you use.
@@ -43,6 +44,7 @@ def compose_app(
     media: Any | None = None,
     chat: Any | None = None,
     gateways: Any | None = None,
+    feedback: Any | None = None,
     # Custom extra apps
     extra_apps: list | None = None,
     # Portal configuration
@@ -57,6 +59,7 @@ def compose_app(
     media_mount: str = "/media",
     chat_mount: str = "/chat",
     gateways_mount: str = "/gateways",
+    feedback_mount: str = "/feedback",
     portal_mount: str = "/",
     # Debug / verbose
     debug: bool = False,
@@ -84,12 +87,14 @@ def compose_app(
         media=media,
         chat=chat,
         gateways=gateways,
+        feedback=feedback,
         extra_apps=extra_apps,
         cms_mount=cms_mount,
         editor_mount=editor_mount,
         media_mount=media_mount,
         chat_mount=chat_mount,
         gateways_mount=gateways_mount,
+        feedback_mount=feedback_mount,
     )
 
     # 2. Create portal
@@ -112,11 +117,13 @@ def compose_app(
         media=media,
         chat=chat,
         gateways=gateways,
+        feedback=feedback,
         cms_mount=cms_mount,
         editor_mount=editor_mount,
         media_mount=media_mount,
         chat_mount=chat_mount,
         gateways_mount=gateways_mount,
+        feedback_mount=feedback_mount,
     )
     routes.extend(portal_routes)
 
@@ -147,12 +154,14 @@ def _build_portal_apps(
     media: Any = None,
     chat: Any = None,
     gateways: Any = None,
+    feedback: Any = None,
     extra_apps: list[PortalApp] | None = None,
     cms_mount: str = "/cms",
     editor_mount: str = "/editor",
     media_mount: str = "/media",
     chat_mount: str = "/chat",
     gateways_mount: str = "/gateways",
+    feedback_mount: str = "/feedback",
 ) -> list[PortalApp]:
     """Build the list of PortalApp entries from provided components."""
     apps: list[PortalApp] = []
@@ -201,6 +210,17 @@ def _build_portal_apps(
             )
         )
 
+    if feedback:
+        apps.append(
+            PortalApp(
+                name="Feedback",
+                path=f"{feedback_mount}/shell",
+                description="File and triage feedback and bug reports",
+                icon="🐛",
+                tags=["data"],
+            )
+        )
+
     if chat:
         apps.append(
             PortalApp(
@@ -225,11 +245,13 @@ def _component_mounts(
     media: Any = None,
     chat: Any = None,
     gateways: Any = None,
+    feedback: Any = None,
     cms_mount: str = "/cms",
     editor_mount: str = "/editor",
     media_mount: str = "/media",
     chat_mount: str = "/chat",
     gateways_mount: str = "/gateways",
+    feedback_mount: str = "/feedback",
 ) -> list:
     """Build Starlette Mount routes for each provided component."""
     routes: list = []
@@ -248,6 +270,9 @@ def _component_mounts(
 
     if gateways:
         routes.append(Mount(gateways_mount, app=_get_app(gateways)))
+
+    if feedback:
+        routes.append(Mount(feedback_mount, app=_get_app(feedback)))
 
     return routes
 

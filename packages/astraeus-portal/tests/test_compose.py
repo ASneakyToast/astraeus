@@ -82,6 +82,7 @@ class TestComposeApp:
             media=FakeComp(),
             chat=FakeComp(),
             gateways=FakeComp(),
+            feedback=FakeComp(),
             portal_title="Full Stack",
             docs_url="https://docs.example.com",
         )
@@ -92,10 +93,11 @@ class TestComposeApp:
             assert "Editor" in resp.text
             assert "Media" in resp.text
             assert "Gateways" in resp.text
+            assert "Feedback" in resp.text
             assert "Chat" in resp.text
             assert "docs.example.com" in resp.text
             # All mounts work
-            for path in ["/cms/", "/editor/", "/media/", "/chat/", "/gateways/"]:
+            for path in ["/cms/", "/editor/", "/media/", "/chat/", "/gateways/", "/feedback/"]:
                 r = client.get(path)
                 assert r.status_code == 200, f"Mount {path} failed"
 
