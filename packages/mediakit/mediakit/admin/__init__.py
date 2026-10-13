@@ -25,6 +25,8 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from mediakit.routes.iiif import ADMIN_DETAIL, ADMIN_THUMBNAIL
+
 if TYPE_CHECKING:
     from mediakit.app import MediaKit
 
@@ -51,10 +53,6 @@ def make_admin_routes(mk: MediaKit) -> list[Route | Mount]:
     # Available to every template without threading it through each render().
     env.globals["tokens_url"] = mk.config.tokens_url
 
-    # ------------------------------------------------------------------
-    # Helper: build a 256px square IIIF thumbnail URL for a given key
-    # ------------------------------------------------------------------
-
     def base_of(request: Request) -> str:
         """Where mediakit is mounted (``""`` at the root, ``"/media"`` under a host).
 
@@ -63,9 +61,9 @@ def make_admin_routes(mk: MediaKit) -> list[Route | Mount]:
         """
         return request.scope.get("root_path", "").rstrip("/")
 
-    def iiif_thumb(base: str, key: str, size: str = "256,") -> str:
-        """Return the IIIF thumbnail URL for *key* at *size*."""
-        return f"{base}/iiif/{key}/square/{size}/0/default.webp"
+    def rendition_url(base: str, key: str, region: str, size: str) -> str:
+        """Return the IIIF URL for *key* at *region* and *size* (webp, unrotated)."""
+        return f"{base}/iiif/{key}/{region}/{size}/0/default.webp"
 
     async def guard(request: Request):
         """Admin pages list the whole library and expose upload and delete, so they
@@ -111,7 +109,8 @@ def make_admin_routes(mk: MediaKit) -> list[Route | Mount]:
             tags_filter=tags_param or "",
             picker=picker,
             base=base,
-            iiif_thumb=lambda key, size="256,": iiif_thumb(base, key, size),
+            thumbnail_url=lambda key: rendition_url(base, key, *ADMIN_THUMBNAIL),
+            detail_url=lambda key: rendition_url(base, key, *ADMIN_DETAIL),
             prev_offset=max(0, offset - limit),
             next_offset=offset + limit,
             has_prev=offset > 0,
@@ -154,7 +153,8 @@ def make_admin_routes(mk: MediaKit) -> list[Route | Mount]:
             asset=asset,
             picker=picker,
             base=base,
-            iiif_thumb=lambda key, size="256,": iiif_thumb(base, key, size),
+            thumbnail_url=lambda key: rendition_url(base, key, *ADMIN_THUMBNAIL),
+            detail_url=lambda key: rendition_url(base, key, *ADMIN_DETAIL),
         )
         return HTMLResponse(html)
 

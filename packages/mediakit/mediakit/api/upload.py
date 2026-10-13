@@ -24,11 +24,13 @@ import structlog
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 from PIL import Image
+from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from mediakit.processing import run_pipeline
+from mediakit.routes.iiif import prerender
 
 if TYPE_CHECKING:
     from mediakit.app import MediaKit
@@ -225,7 +227,10 @@ def make_upload_routes(mk: MediaKit) -> list[Route]:
                     width=final_width,
                     height=final_height,
                 )
-                return JSONResponse(asset, status_code=201)
+                # Render the admin's sizes after the response, so the first view is warm.
+                return JSONResponse(
+                    asset, status_code=201, background=BackgroundTask(prerender, mk, str(key))
+                )
             except Exception as exc:
                 span.set_status(StatusCode.ERROR, str(exc))
                 raise

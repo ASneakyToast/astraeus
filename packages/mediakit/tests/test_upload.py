@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 from mediakit.app import MediaKit
 from mediakit.catalog.catalog import Catalog
 from mediakit.config import MediakitConfig
+from mediakit.routes.iiif import PRERENDERED_RENDITIONS, ensure_derivative, parse_iiif_params
 from obstore.store import MemoryStore
 from PIL import Image
 
@@ -163,6 +164,7 @@ class MemoryStorage:
 
     def __init__(self, config: MediakitConfig) -> None:
         self.config = config
+        self.mk: MediaKit | None = None
         self.objects = MemoryStore()
 
     def _get_store(self) -> MemoryStore:
@@ -219,6 +221,7 @@ async def make_client(tmp_path):
         await instance._catalog.initialize()
         storage = MemoryStorage(config)
         instance._storage = storage  # type: ignore[assignment]
+        storage.mk = instance
         http = AsyncClient(
             transport=ASGITransport(app=instance._build_app()), base_url="http://testserver"
         )
@@ -292,3 +295,52 @@ async def test_confirm_can_still_normalise_when_originals_are_not_kept(make_clie
     assert (asset["width"], asset["height"]) == (100, 67)
     stored = await obstore.get_async(storage.objects, ORIGINAL_KEY)
     assert Image.open(io.BytesIO(bytes(await stored.bytes_async()))).format == "WEBP"
+
+
+def _derivative_key(key: str, region: str, size: str) -> str:
+    params = parse_iiif_params(region, size, "0", "default", "webp")
+    return f"derivatives/{key}/{params.canonical_key}"
+
+
+@pytest.mark.asyncio
+async def test_confirm_prerenders_the_admin_renditions(make_client) -> None:
+    client, storage = await make_client()
+    await obstore.put_async(storage.objects, ORIGINAL_KEY, _image_bytes("TIFF", (900, 600)))
+
+    await _confirm(client, ORIGINAL_KEY, "artwork.tif", "image/tiff")
+
+    for region, size in PRERENDERED_RENDITIONS:
+        key = _derivative_key(ORIGINAL_KEY, region, size)
+        stored = await obstore.get_async(storage.objects, key)
+        assert Image.open(io.BytesIO(bytes(await stored.bytes_async()))).format == "WEBP"
+
+
+@pytest.mark.asyncio
+async def test_a_prerender_failure_does_not_fail_the_upload(make_client) -> None:
+    client, storage = await make_client()
+    await obstore.put_async(storage.objects, ORIGINAL_KEY, b"%PDF-1.7 not an image")
+
+    resp = await _confirm(client, ORIGINAL_KEY, "doc.pdf", "application/pdf")
+
+    assert resp.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_a_rendition_row_without_a_file_is_rendered_when_asked_for(make_client) -> None:
+    """A request that lost a race, or a failed render, leaves a row with no file."""
+    client, storage = await make_client()
+    await obstore.put_async(storage.objects, ORIGINAL_KEY, _image_bytes("TIFF", (900, 600)))
+    await _confirm(client, ORIGINAL_KEY, "artwork.tif", "image/tiff")
+
+    params = parse_iiif_params("full", "300,", "0", "default", "webp")
+    derivative_key = _derivative_key(ORIGINAL_KEY, "full", "300,")
+    # The state a lost race leaves behind: a row, no dimensions, no object.
+    await storage.mk.catalog.get_or_create_derivative(
+        ORIGINAL_KEY, params.canonical_key, derivative_key, format="webp"
+    )
+
+    returned = await ensure_derivative(storage.mk, ORIGINAL_KEY, params)
+
+    assert returned == derivative_key
+    stored = await obstore.get_async(storage.objects, derivative_key)
+    assert Image.open(io.BytesIO(bytes(await stored.bytes_async()))).size == (300, 200)

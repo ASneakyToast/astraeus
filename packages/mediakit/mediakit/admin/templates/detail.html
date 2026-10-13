@@ -11,7 +11,7 @@
 <div class="detail-layout">
     <div class="detail-preview">
         <img
-            src="{{ iiif_thumb(asset.key, '800,') }}"
+            src="{{ detail_url(asset.key) }}"
             alt="{{ asset.alt_text or asset.filename }}"
             class="preview-image"
             onerror="this.classList.add('img-error')"

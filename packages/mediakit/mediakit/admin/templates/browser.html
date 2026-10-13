@@ -52,7 +52,7 @@
         {% endif %}
             <div class="card-thumb">
                 <img
-                    src="{{ iiif_thumb(asset.key) }}"
+                    src="{{ thumbnail_url(asset.key) }}"
                     alt="{{ asset.alt_text or asset.filename }}"
                     loading="lazy"
                     onerror="this.parentElement.classList.add('thumb-error')"
