@@ -277,3 +277,27 @@ describe('changeset actions', () => {
     expect(mocks.addDocToChangeset).toHaveBeenCalledWith('cs-2', 'doc-1')
   })
 })
+
+describe('toggle', () => {
+  it('shows the panel as a flex column so its content scrolls', async () => {
+    const panel = new ChangesetPanel()
+    panel.mount()
+
+    await panel.toggle()
+
+    // A 'block' display drops flex: 1 on the scroll container, which then
+    // grows past the panel's fixed height and is clipped instead of scrolling.
+    expect(panel.el.style.display).toBe('flex')
+    expect(panel.el.style.flexDirection).toBe('column')
+  })
+
+  it('hides the panel on the second toggle', async () => {
+    const panel = new ChangesetPanel()
+    panel.mount()
+
+    await panel.toggle()
+    await panel.toggle()
+
+    expect(panel.el.style.display).toBe('none')
+  })
+})
