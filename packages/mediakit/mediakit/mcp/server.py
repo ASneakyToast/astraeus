@@ -181,6 +181,11 @@ def build_mcp_server(
             )
         return _client
 
+    def _with_iiif_url(asset: dict[str, Any]) -> dict[str, Any]:
+        """Add a ready-to-embed 1200px-wide WebP URL to an asset."""
+        iiif = f"{public_base}/iiif/{asset['key']}/full/1200,/0/default.webp"
+        return {**asset, "iiif_url": iiif}
+
     def _read_headers() -> dict[str, str]:
         if api_key:
             return {"Authorization": f"Bearer {api_key}"}
@@ -198,7 +203,10 @@ def build_mcp_server(
             "it makes no network call.\n"
             "4. upload_asset(source_url) to add an image from a public https URL; it "
             "returns the new asset, its `key` and an embeddable `iiif_url`.\n"
-            "5. update_asset to set alt_text or tags. delete_asset permanently removes "
+            "5. To add a file you hold yourself (not on a public URL): prepare_upload "
+            "returns a presigned `upload_url`; HTTP PUT the raw bytes there with the same "
+            "Content-Type; then confirm_upload. Needs a shell or HTTP client.\n"
+            "6. update_asset to set alt_text or tags. delete_asset permanently removes "
             "the file and its catalog entry; only call it when asked.\n"
             "Parameter names are exact: an unknown parameter is rejected with a "
             "suggestion, not ignored."
@@ -321,8 +329,7 @@ def build_mcp_server(
 
         Not idempotent: every call creates a new asset, even for the same URL.
         Returns the asset (including its `key`) plus `iiif_url`, a ready-to-embed
-        1200px-wide WebP URL; use get_iiif_url for other sizes. Originals are
-        stripped of EXIF and converted to WebP by the server.
+        1200px-wide WebP URL; use get_iiif_url for other sizes.
         """
         try:
             data, content_type = await fetch_image(source_url)
@@ -367,10 +374,85 @@ def build_mcp_server(
         if alt_text is not None or tags is not None:
             asset = await update_asset(key=asset["key"], alt_text=alt_text, tags=tags)
 
+        return _with_iiif_url(asset)
+
+    @mcp.tool(annotations=UPLOAD)
+    async def prepare_upload(
+        filename: Annotated[
+            str, Field(description='Name to store the file under, e.g. "harbour.tif".')
+        ],
+        content_type: Annotated[
+            str, Field(description='MIME type of the file, e.g. "image/tiff".')
+        ],
+        size: Annotated[int, Field(ge=1, description="File size in bytes.")],
+    ) -> dict[str, Any]:
+        """
+        Step 1 of 2 for adding a file you already hold: get a presigned upload URL.
+
+        Use this when the file is not on a public URL (otherwise use upload_asset).
+        You must then HTTP PUT the raw file bytes to `upload_url` with the header
+        `Content-Type` set to the same `content_type`, before `expires_at`, and call
+        confirm_upload. The bytes go straight to storage, not through this server,
+        so the file size is not limited by the tool call.
+        """
+        client = _get_client()
+        r = await client.post(
+            "/upload/prepare",
+            json={"filename": filename, "content_type": content_type, "size": size},
+        )
+        r.raise_for_status()
+        prepared = r.json()
         return {
-            **asset,
-            "iiif_url": f"{public_base}/iiif/{asset['key']}/full/1200,/0/default.webp",
+            **prepared,
+            "content_type": content_type,
+            "next": (
+                f"PUT the raw bytes to upload_url with header Content-Type: {content_type}, "
+                "then call confirm_upload with this key, filename, content_type and size."
+            ),
         }
+
+    @mcp.tool(annotations=UPLOAD)
+    async def confirm_upload(
+        key: Annotated[str, Field(description="The `key` returned by prepare_upload.")],
+        filename: Annotated[str, Field(description="The filename given to prepare_upload.")],
+        content_type: Annotated[
+            str, Field(description="The content_type given to prepare_upload.")
+        ],
+        size: Annotated[int, Field(ge=1, description="The size given to prepare_upload.")],
+        alt_text: Annotated[
+            str | None, Field(description="Alt text to set on the new asset.")
+        ] = None,
+        tags: Annotated[
+            list[str] | None, Field(description="Tags to set on the new asset.")
+        ] = None,
+    ) -> dict[str, Any]:
+        """
+        Step 2 of 2: catalog a file you PUT to the URL from prepare_upload.
+
+        Call it only after the PUT succeeded. Returns the asset (including its
+        `key`) plus `iiif_url`, a ready-to-embed 1200px-wide WebP URL; use
+        get_iiif_url for other sizes.
+        """
+        client = _get_client()
+        r = await client.post(
+            "/upload/confirm",
+            json={"key": key, "filename": filename, "content_type": content_type, "size": size},
+        )
+        if r.status_code == 404:
+            return _error(
+                f"No uploaded file found for {key!r}",
+                hint=(
+                    "The PUT did not complete or the URL expired. Call prepare_upload "
+                    "again and PUT the bytes before confirming."
+                ),
+            )
+        r.raise_for_status()
+        asset = r.json()
+
+        if alt_text is not None or tags is not None:
+            asset = await update_asset(key=asset["key"], alt_text=alt_text, tags=tags)
+
+        return _with_iiif_url(asset)
 
     @mcp.tool(annotations=UPDATE)
     async def update_asset(
