@@ -177,6 +177,18 @@ class MemoryStorage:
             return False
         return True
 
+    async def get_url(self, key: str, expires_in: int = 3600) -> str:
+        return f"https://signed.example/{self.config.bucket}/{key}"
+
+    async def delete(self, key: str) -> None:
+        await obstore.delete_async(self.objects, [key])
+
+    async def list_objects(self, prefix: str = "", max_keys: int = 1000) -> list[dict]:
+        found: list[dict] = []
+        async for batch in obstore.list(self.objects, prefix=prefix or None):
+            found.extend({"key": obj["path"]} for obj in batch)
+        return found
+
 
 def _image_bytes(
     fmt: str, size: tuple[int, int] = (300, 200), mode: str = "RGB", **save_kwargs
@@ -222,6 +234,10 @@ async def make_client(tmp_path):
         storage = MemoryStorage(config)
         instance._storage = storage  # type: ignore[assignment]
         storage.mk = instance
+        if config.derivatives_bucket:
+            instance._derivative_storage = MemoryStorage(
+                config.model_copy(update={"bucket": config.derivatives_bucket})
+            )  # type: ignore[assignment]
         http = AsyncClient(
             transport=ASGITransport(app=instance._build_app()), base_url="http://testserver"
         )
@@ -344,3 +360,81 @@ async def test_a_rendition_row_without_a_file_is_rendered_when_asked_for(make_cl
     assert returned == derivative_key
     stored = await obstore.get_async(storage.objects, derivative_key)
     assert Image.open(io.BytesIO(bytes(await stored.bytes_async()))).size == (300, 200)
+
+
+async def _exists(store: MemoryStore, key: str) -> bool:
+    try:
+        await obstore.head_async(store, key)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+@pytest.mark.asyncio
+async def test_renditions_go_to_the_derivatives_bucket_with_serving_headers(make_client) -> None:
+    client, storage = await make_client(derivatives_bucket="media-public")
+    derivatives = storage.mk.derivative_storage
+    await obstore.put_async(storage.objects, ORIGINAL_KEY, _image_bytes("TIFF", (900, 600)))
+
+    await _confirm(client, ORIGINAL_KEY, "artwork.tif", "image/tiff")
+
+    key = _derivative_key(ORIGINAL_KEY, "square", "256,")
+    assert await _exists(derivatives.objects, key)
+    assert not await _exists(storage.objects, key)
+    rendition = await obstore.get_async(derivatives.objects, key)
+    assert rendition.attributes["Content-Type"] == "image/webp"
+    assert rendition.attributes["Cache-Control"] == "public, max-age=2592000"
+
+
+@pytest.mark.asyncio
+async def test_renditions_stay_beside_the_originals_by_default(make_client) -> None:
+    client, storage = await make_client()
+    await obstore.put_async(storage.objects, ORIGINAL_KEY, _image_bytes("TIFF", (900, 600)))
+
+    await _confirm(client, ORIGINAL_KEY, "artwork.tif", "image/tiff")
+
+    assert storage.mk.derivative_storage is storage
+    assert await _exists(storage.objects, _derivative_key(ORIGINAL_KEY, "square", "256,"))
+
+
+@pytest.mark.asyncio
+async def test_iiif_redirects_to_the_public_url_without_signing(make_client) -> None:
+    client, storage = await make_client(
+        derivatives_bucket="media-public", derivatives_public_url="https://media.example.com/"
+    )
+    await obstore.put_async(storage.objects, ORIGINAL_KEY, _image_bytes("TIFF", (900, 600)))
+    await _confirm(client, ORIGINAL_KEY, "artwork.tif", "image/tiff")
+
+    resp = await client.get(f"/iiif/{ORIGINAL_KEY}/square/256,/0/default.webp")
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == (
+        f"https://media.example.com/{_derivative_key(ORIGINAL_KEY, 'square', '256,')}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_iiif_presigns_from_the_derivatives_bucket_without_a_public_url(make_client) -> None:
+    client, storage = await make_client(derivatives_bucket="media-public")
+    await obstore.put_async(storage.objects, ORIGINAL_KEY, _image_bytes("TIFF", (900, 600)))
+    await _confirm(client, ORIGINAL_KEY, "artwork.tif", "image/tiff")
+
+    resp = await client.get(f"/iiif/{ORIGINAL_KEY}/square/256,/0/default.webp")
+
+    assert resp.headers["location"].startswith("https://signed.example/media-public/derivatives/")
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_asset_deletes_its_renditions(make_client) -> None:
+    client, storage = await make_client(derivatives_bucket="media-public")
+    derivatives = storage.mk.derivative_storage
+    await obstore.put_async(storage.objects, ORIGINAL_KEY, _image_bytes("TIFF", (900, 600)))
+    await _confirm(client, ORIGINAL_KEY, "artwork.tif", "image/tiff")
+    rendition = _derivative_key(ORIGINAL_KEY, "full", "800,")
+    assert await _exists(derivatives.objects, rendition)
+
+    resp = await client.delete(f"/assets/{ORIGINAL_KEY}", headers=AUTH)
+
+    assert resp.status_code == 204
+    assert not await _exists(derivatives.objects, rendition)
+    assert not await _exists(storage.objects, ORIGINAL_KEY)

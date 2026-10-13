@@ -92,6 +92,9 @@ def make_asset_routes(mk: MediaKit) -> list[Route]:
         if asset is None:
             return JSONResponse({"error": "Asset not found"}, status_code=404)
 
+        # Renditions are separate objects (possibly public): remove them with the original.
+        for rendition in await mk.derivative_storage.list_objects(prefix=f"derivatives/{key}/"):
+            await mk.derivative_storage.delete(rendition["key"])
         await mk.storage.delete(key)
         await mk.catalog.delete_asset(key)
         return Response(status_code=204)

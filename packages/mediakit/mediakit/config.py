@@ -40,6 +40,18 @@ class MediakitConfig(BaseModel):
     # default for a standalone mediakit deployment.
     tokens_url: str | None = None
 
+    # Renditions
+    # Where IIIF renditions are stored. Unset: beside the originals, in `bucket`.
+    # Set: a separate bucket (same endpoint and credentials), which is how
+    # originals stay private while renditions are served publicly.
+    derivatives_bucket: str | None = None
+    # Public base URL of derivatives_bucket, e.g. "https://media.example.com".
+    # Set: IIIF redirects straight there, unsigned, so the CDN in front can cache
+    # them. Unset: redirects are presigned URLs for derivatives_bucket (or bucket).
+    derivatives_public_url: str | None = None
+    # Sent with each stored rendition, so a CDN and browsers know how long to keep it.
+    derivatives_cache_control: str = "public, max-age=2592000"
+
     # Serving
     public_read: bool = False
     presign_expires: int = 3600  # 1 hour
