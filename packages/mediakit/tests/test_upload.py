@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
+import io
+
+import obstore
 import pytest
-from httpx import AsyncClient
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from mediakit.app import MediaKit
+from mediakit.catalog.catalog import Catalog
+from mediakit.config import MediakitConfig
+from obstore.store import MemoryStore
+from PIL import Image
 
 AUTH = {"Authorization": "Bearer test-secret"}
 
@@ -140,3 +149,146 @@ async def test_confirm_upload_missing_fields(client: AsyncClient) -> None:
         headers=AUTH,
     )
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# POST /upload/confirm — what happens to the uploaded object
+# ---------------------------------------------------------------------------
+
+ORIGINAL_KEY = "originals/abc12345/artwork.tif"
+
+
+class MemoryStorage:
+    """The storage calls confirm makes, backed by a real in-memory object store."""
+
+    def __init__(self, config: MediakitConfig) -> None:
+        self.config = config
+        self.objects = MemoryStore()
+
+    def _get_store(self) -> MemoryStore:
+        return self.objects
+
+    async def confirm_exists(self, key: str) -> bool:
+        try:
+            await obstore.head_async(self.objects, key)
+        except FileNotFoundError:
+            return False
+        return True
+
+
+def _image_bytes(
+    fmt: str, size: tuple[int, int] = (300, 200), mode: str = "RGB", **save_kwargs
+) -> bytes:
+    buf = io.BytesIO()
+    Image.new(mode, size, (200, 60, 60) if mode == "RGB" else None).save(
+        buf, format=fmt, **save_kwargs
+    )
+    return buf.getvalue()
+
+
+def _jpeg_rotated_a_quarter_turn(size: tuple[int, int] = (300, 200)) -> bytes:
+    """A JPEG whose pixels are `size` but whose EXIF orientation says "rotate 90"."""
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    return _image_bytes("JPEG", size, exif=exif.tobytes())
+
+
+async def _confirm(client: AsyncClient, key: str, filename: str, content_type: str):
+    return await client.post(
+        "/upload/confirm",
+        json={"key": key, "filename": filename, "content_type": content_type, "size": 1},
+        headers=AUTH,
+    )
+
+
+@pytest_asyncio.fixture
+async def make_client(tmp_path):
+    """Factory: ``(client, storage)`` for a MediaKit with the given settings."""
+    opened: list[tuple[MediaKit, AsyncClient]] = []
+
+    async def build(**config_overrides) -> tuple[AsyncClient, MemoryStorage]:
+        config = MediakitConfig(
+            bucket="test-bucket",
+            catalog_path=str(tmp_path / f"media-{len(opened)}.db"),
+            api_key="test-secret",
+            auth="apikey",
+            **config_overrides,
+        )
+        instance = MediaKit(config=config)
+        instance._catalog = Catalog(config.catalog_path)
+        await instance._catalog.initialize()
+        storage = MemoryStorage(config)
+        instance._storage = storage  # type: ignore[assignment]
+        http = AsyncClient(
+            transport=ASGITransport(app=instance._build_app()), base_url="http://testserver"
+        )
+        opened.append((instance, http))
+        return http, storage
+
+    yield build
+
+    for instance, http in opened:
+        await http.aclose()
+        await instance._catalog.close()
+
+
+@pytest.mark.asyncio
+async def test_confirm_keeps_the_original_untouched_by_default(make_client) -> None:
+    client, storage = await make_client()
+    original = _image_bytes("TIFF", (300, 200))
+    await obstore.put_async(storage.objects, ORIGINAL_KEY, original)
+
+    resp = await _confirm(client, ORIGINAL_KEY, "artwork.tif", "image/tiff")
+
+    assert resp.status_code == 201
+    asset = resp.json()
+    assert (asset["content_type"], asset["width"], asset["height"]) == ("image/tiff", 300, 200)
+    assert asset["size"] == len(original)
+    stored = await obstore.get_async(storage.objects, ORIGINAL_KEY)
+    assert bytes(await stored.bytes_async()) == original
+
+
+@pytest.mark.asyncio
+async def test_confirm_does_not_cap_large_originals(make_client) -> None:
+    client, storage = await make_client()
+    await obstore.put_async(storage.objects, ORIGINAL_KEY, _image_bytes("TIFF", (5000, 100)))
+
+    asset = (await _confirm(client, ORIGINAL_KEY, "wide.tif", "image/tiff")).json()
+
+    assert (asset["width"], asset["height"]) == (5000, 100)
+
+
+@pytest.mark.asyncio
+async def test_confirm_records_the_displayed_size_of_a_rotated_photo(make_client) -> None:
+    client, storage = await make_client()
+    key = "originals/abc12345/phone.jpg"
+    await obstore.put_async(storage.objects, key, _jpeg_rotated_a_quarter_turn((300, 200)))
+
+    asset = (await _confirm(client, key, "phone.jpg", "image/jpeg")).json()
+
+    assert (asset["width"], asset["height"]) == (200, 300)
+
+
+@pytest.mark.asyncio
+async def test_confirm_falls_back_to_client_metadata_for_a_non_image(make_client) -> None:
+    client, storage = await make_client()
+    key = "originals/abc12345/notes.pdf"
+    await obstore.put_async(storage.objects, key, b"%PDF-1.7 not an image")
+
+    resp = await _confirm(client, key, "notes.pdf", "application/pdf")
+
+    assert resp.status_code == 201
+    assert resp.json()["content_type"] == "application/pdf"
+
+
+@pytest.mark.asyncio
+async def test_confirm_can_still_normalise_when_originals_are_not_kept(make_client) -> None:
+    client, storage = await make_client(keep_originals=False, max_dimension=100)
+    await obstore.put_async(storage.objects, ORIGINAL_KEY, _image_bytes("TIFF", (300, 200)))
+
+    asset = (await _confirm(client, ORIGINAL_KEY, "artwork.tif", "image/tiff")).json()
+
+    assert asset["content_type"] == "image/webp"
+    assert (asset["width"], asset["height"]) == (100, 67)
+    stored = await obstore.get_async(storage.objects, ORIGINAL_KEY)
+    assert Image.open(io.BytesIO(bytes(await stored.bytes_async()))).format == "WEBP"

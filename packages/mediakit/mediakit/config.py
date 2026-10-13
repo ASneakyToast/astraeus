@@ -20,6 +20,10 @@ class MediakitConfig(BaseModel):
     catalog_path: str = "./media_catalog.db"
 
     # Processing
+    # True (default): the uploaded file is stored untouched and every rendition
+    # is cut from it by IIIF. False: normalise on upload, replacing the original
+    # with a stripped, capped, converted copy (the three settings below).
+    keep_originals: bool = True
     max_dimension: int = 4096
     upload_format: str = "webp"
     upload_quality: int = 85

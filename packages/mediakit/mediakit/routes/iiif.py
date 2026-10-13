@@ -137,9 +137,16 @@ def parse_iiif_params(
 
 def _sync_render_iiif(image_bytes: bytes, params: IIIFParams) -> tuple[bytes, str]:
     """Synchronous Pillow rendering — called via :func:`asyncio.to_thread`."""
-    from PIL import Image
+    from PIL import Image, ImageOps
 
     img = Image.open(io.BytesIO(image_bytes))
+
+    # 0. Orient and normalise. Originals are stored untouched, so EXIF rotation is
+    # applied here (region and size then refer to the displayed image), and modes
+    # the web encoders can't write (CMYK, 16-bit) become RGB.
+    img = ImageOps.exif_transpose(img) or img
+    if img.mode not in ("RGB", "RGBA", "L", "LA"):
+        img = img.convert("RGB")
 
     # 1. Region
     if params.region == "full":
