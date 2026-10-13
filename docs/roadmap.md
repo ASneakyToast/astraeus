@@ -224,7 +224,7 @@ Together these establish Astraeus as a **governed data platform** — not just a
 ### 6b — Upload flow ✅
 - [x] `POST /upload/prepare` — validates request, generates presigned PUT URL, returns `{ upload_url, key, expires_at }`
 - [x] `POST /upload/confirm` — verifies object exists, runs processing pipeline, inserts into catalog
-- [x] Processing pipeline: EXIF strip, WebP conversion, max dimension cap (Pillow) — `mediakit/processing/pipeline.py`
+- [x] Processing pipeline: EXIF strip, WebP conversion, max dimension cap (Pillow) — `mediakit/processing/pipeline.py` (opt-in: `keep_originals=False`; by default uploads are kept untouched)
 - [x] Content-addressed key generation: `originals/{sha256_prefix}/{filename}`
 
 ### 6c — Catalog ✅

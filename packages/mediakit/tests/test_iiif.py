@@ -528,3 +528,38 @@ async def test_iiif_image_different_params_separate_derivatives(iiif_client_with
     assert r2.status_code == 302
     # Different params → different derivative keys
     assert r1.headers["location"] != r2.headers["location"]
+
+
+# ---------------------------------------------------------------------------
+# render_iiif — originals are stored untouched, so render copes with them
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_render_applies_exif_orientation() -> None:
+    """A 300x200 photo flagged "rotate 90" renders as 200x300, as it displays."""
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    buf = io.BytesIO()
+    Image.new("RGB", (300, 200), (200, 60, 60)).save(buf, format="JPEG", exif=exif.tobytes())
+
+    out, _ = await render_iiif(
+        buf.getvalue(), parse_iiif_params("full", "max", "0", "default", "webp")
+    )
+
+    assert _img_size(out) == (200, 300)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["CMYK", "I;16", "P"])
+async def test_render_handles_modes_the_web_encoders_cannot_write(mode: str) -> None:
+    """TIFF originals are often CMYK or 16-bit; they still render to WebP."""
+    buf = io.BytesIO()
+    Image.new(mode, (64, 48)).save(buf, format="TIFF")
+
+    out, content_type = await render_iiif(
+        buf.getvalue(), parse_iiif_params("full", "32,", "0", "default", "webp")
+    )
+
+    assert content_type == "image/webp"
+    assert _img_size(out) == (32, 24)
