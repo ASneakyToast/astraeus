@@ -281,13 +281,20 @@ async def ensure_derivative(
     if row.get("width") is not None:
         return derivative_key
 
-    store = mk.storage._get_store()
     if original_bytes is None:
-        result = await obstore.get_async(store, key)
+        result = await obstore.get_async(mk.storage._get_store(), key)
         original_bytes = bytes(await result.bytes_async())
 
-    output_bytes, _content_type = await render_iiif(original_bytes, params)
-    await obstore.put_async(store, derivative_key, output_bytes)
+    output_bytes, content_type = await render_iiif(original_bytes, params)
+    await obstore.put_async(
+        mk.derivative_storage._get_store(),
+        derivative_key,
+        output_bytes,
+        attributes={
+            "Content-Type": content_type,
+            "Cache-Control": mk.config.derivatives_cache_control,
+        },
+    )
 
     try:
         with Image.open(io.BytesIO(output_bytes)) as out_img:
@@ -407,7 +414,7 @@ def make_iiif_routes(mk: MediaKit) -> list[Route]:
             return JSONResponse({"error": "Asset not found"}, status_code=404)
 
         derivative_storage_key = await ensure_derivative(mk, key, params)
-        url = await mk.storage.get_url(derivative_storage_key)
+        url = await mk.derivative_url(derivative_storage_key)
         return RedirectResponse(url, status_code=302)
 
     return [

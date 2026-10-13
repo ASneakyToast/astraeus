@@ -50,6 +50,7 @@ class MediaKit:
         self._app: Starlette | None = None
         self._catalog: Catalog | None = None
         self._storage: S3CompatibleBackend | None = None
+        self._derivative_storage: S3CompatibleBackend | None = None
 
     # ------------------------------------------------------------------
     # ASGI app
@@ -63,12 +64,12 @@ class MediaKit:
         return self._app
 
     def _build_app(self) -> Starlette:
+        from starlette.routing import BaseRoute
+
         from mediakit.api.assets import make_asset_routes
         from mediakit.api.references import make_reference_routes
         from mediakit.api.upload import make_upload_routes
         from mediakit.routes.iiif import make_iiif_routes
-
-        from starlette.routing import BaseRoute
 
         routes: list[BaseRoute] = [
             *make_upload_routes(self),
@@ -141,3 +142,19 @@ class MediaKit:
         if self._storage is None:
             raise RuntimeError("MediaKit storage is not initialised — lifespan not started?")
         return self._storage
+
+    @property
+    def derivative_storage(self) -> S3CompatibleBackend:
+        """Where IIIF renditions live: ``derivatives_bucket`` if set, else :attr:`storage`."""
+        if not self.config.derivatives_bucket:
+            return self.storage
+        if self._derivative_storage is None:
+            config = self.config.model_copy(update={"bucket": self.config.derivatives_bucket})
+            self._derivative_storage = S3CompatibleBackend(config)
+        return self._derivative_storage
+
+    async def derivative_url(self, key: str) -> str:
+        """URL a reader is redirected to for the rendition stored at *key*."""
+        if self.config.derivatives_public_url:
+            return f"{self.config.derivatives_public_url.rstrip('/')}/{key}"
+        return await self.derivative_storage.get_url(key, self.config.presign_expires)
