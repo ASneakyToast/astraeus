@@ -507,3 +507,82 @@ def _build_server_with(**kwargs):
     from mediakit.mcp.server import build_mcp_server
 
     return build_mcp_server(base_url="http://astraeus-cms:8000/media", **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# prepare_upload / confirm_upload
+# ---------------------------------------------------------------------------
+
+PREPARED = {
+    "upload_url": "https://bucket.r2.example/originals/ab12cd34/harbour.tif?X-Amz-Signature=sig",
+    "key": "originals/ab12cd34/harbour.tif",
+    "expires_at": "2026-10-12T21:00:00+00:00",
+}
+CONFIRM_BODY = {
+    "key": PREPARED["key"],
+    "filename": "harbour.tif",
+    "content_type": "image/tiff",
+    "size": 1048576,
+}
+
+
+@pytest.mark.anyio
+async def test_prepare_upload_returns_url_and_put_instructions():
+    post = AsyncMock(return_value=_mock_response(200, PREPARED))
+
+    with patch("httpx.AsyncClient.post", post):
+        result = await _call_tool(
+            _build_server(),
+            "prepare_upload",
+            filename="harbour.tif",
+            content_type="image/tiff",
+            size=1048576,
+        )
+
+    assert post.call_args.args[0] == "/upload/prepare"
+    assert post.call_args.kwargs["json"] == {
+        "filename": "harbour.tif",
+        "content_type": "image/tiff",
+        "size": 1048576,
+    }
+    assert result["upload_url"] == PREPARED["upload_url"]
+    assert result["key"] == PREPARED["key"]
+    assert "Content-Type: image/tiff" in result["next"]
+
+
+@pytest.mark.anyio
+async def test_confirm_upload_catalogs_the_file_and_returns_an_embed_url():
+    post = AsyncMock(return_value=_mock_response(201, {"key": PREPARED["key"]}))
+
+    with patch("httpx.AsyncClient.post", post):
+        result = await _call_tool(_build_server(), "confirm_upload", **CONFIRM_BODY)
+
+    assert post.call_args.args[0] == "/upload/confirm"
+    assert post.call_args.kwargs["json"] == CONFIRM_BODY
+    assert result["iiif_url"].endswith(f"/iiif/{PREPARED['key']}/full/1200,/0/default.webp")
+
+
+@pytest.mark.anyio
+async def test_confirm_upload_sets_alt_text_and_tags_when_given():
+    post = AsyncMock(return_value=_mock_response(201, {"key": PREPARED["key"]}))
+    patched = {"key": PREPARED["key"], "alt_text": "A harbour", "tags": ["boats"]}
+    patch_call = AsyncMock(return_value=_mock_response(200, patched))
+
+    with patch("httpx.AsyncClient.post", post), patch("httpx.AsyncClient.patch", patch_call):
+        result = await _call_tool(
+            _build_server(), "confirm_upload", alt_text="A harbour", tags=["boats"], **CONFIRM_BODY
+        )
+
+    assert patch_call.call_args.kwargs["json"] == {"alt_text": "A harbour", "tags": ["boats"]}
+    assert result["alt_text"] == "A harbour"
+
+
+@pytest.mark.anyio
+async def test_confirm_upload_without_a_put_tells_the_agent_what_to_do():
+    post = AsyncMock(return_value=_mock_response(404, {"error": "not found"}))
+
+    with patch("httpx.AsyncClient.post", post):
+        result = await _call_tool(_build_server(), "confirm_upload", **CONFIRM_BODY)
+
+    assert "No uploaded file" in result["error"]
+    assert "prepare_upload" in result["hint"]
