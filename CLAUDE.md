@@ -6,12 +6,13 @@ This is the Astraeus monorepo. Read this file before doing anything else.
 
 ## What this repo is
 
-**Astraeus** is a governed data platform for Python/Starlette developers. Seven packages:
+**Astraeus** is a governed data platform for Python/Starlette developers. Eight packages:
 
 - **`starlette-cms`** — headless CMS (block registry, document API, webhooks, schema versioning)
 - **`starlette-editor`** — visual editing UI (ProseMirror-based, auto-generated from block schema)
 - **`mediakit`** — media management (S3-compatible storage, IIIF Image API, presigned uploads)
 - **`starlette-cms-gateways`** — framework for pulling external service data into the CMS as documents
+- **`starlette-cms-feedback`** — feedback and bug reports: admin page, auth-gated HTTP API on the CMS, MCP tools
 - **`starlette-chat`** — governed AI chat collaborator with live ProseMirror collab
 - **`astraeus-otel`** — shared OpenTelemetry configuration and testing utilities
 - **`astraeus-portal`** — central navigation hub linking all admin interfaces
